@@ -18,4 +18,3 @@ config MMSP2_SHADOW_ENABLE
 	bool  "Enable Shadow Config Pin"
 	help
 	  Enable support for Shadow Config Pin of the CPU (Memory Configuration)
-
