@@ -298,6 +298,12 @@ config ARCH_OMAP
 	help
 	  Support for TI's OMAP platform (OMAP1 and OMAP2).
 
+config ARCH_MMSP2
+	bool "MagicEyes MMSP2"
+    help
+      Say Y here for systems based on the MagicEyes MMSP2 (MP2520F)
+      System on a Chip processors.
+	
 endchoice
 
 source "arch/arm/mach-clps711x/Kconfig"
@@ -343,6 +349,8 @@ source "arch/arm/mach-realview/Kconfig"
 source "arch/arm/mach-at91rm9200/Kconfig"
 
 source "arch/arm/mach-netx/Kconfig"
+
+source "arch/arm/mach-mmsp2/Kconfig"
 
 # Definitions to make life easier
 config ARCH_ACORN
