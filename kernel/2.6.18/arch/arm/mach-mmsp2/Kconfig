@@ -1,0 +1,13 @@
+menu "MagicEyes MMSP2 Implementations"
+depends on ARCH_MMSP2
+
+choice
+        prompt "Select target board"
+
+config MACH_GP2X
+        bool "GP2X Portable Console"
+        help
+          Say Y here if you intend to run this kernel on the GameparkHoldings GP2X portable console.
+endchoice
+
+endmenu
