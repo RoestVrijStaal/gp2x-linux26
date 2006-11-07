@@ -119,7 +119,7 @@ endif
  machine-$(CONFIG_ARCH_EP93XX)     := ep93xx
  machine-$(CONFIG_ARCH_PNX4008)    := pnx4008
  machine-$(CONFIG_ARCH_NETX)       := netx
- machine-$(CONFIG_ARCH_MMSP2)       := mmsp2 
+ machine-$(CONFIG_ARCH_MMSP2)      := mmsp2
 
 ifeq ($(CONFIG_ARCH_EBSA110),y)
 # This is what happens if you forget the IOCS16 line.
