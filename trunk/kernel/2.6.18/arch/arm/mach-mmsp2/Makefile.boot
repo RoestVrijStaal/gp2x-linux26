@@ -1,0 +1,1 @@
+zreladdr-$(CONFIG_MACH_GP2X)		:= 0x00008000
