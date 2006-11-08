@@ -6,8 +6,14 @@
 
 #include <linux/init.h>
 
+
 void __init
 mmsp2_init_irq(void)
 {
 	printascii("irqs\n");
+	/* disable all interrupts */
+	/* register main interrupts */
+	/* gpio interrupts */
+	/* timer interrupts */
+	/* uart interrupts */
 }
