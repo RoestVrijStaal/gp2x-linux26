@@ -140,6 +140,7 @@ void __devinit calibrate_delay(void)
 				/* nothing */;
 			/* Go .. */
 			ticks = jiffies;
+			printk("iter\n");
 			__delay(loops_per_jiffy);
 			ticks = jiffies - ticks;
 			if (ticks)
