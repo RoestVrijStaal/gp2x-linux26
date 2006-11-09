@@ -1,10 +1,15 @@
 #ifndef MMSP2REGS_H_
 #define MMSP2REGS_H_
 
+/* Interrupt */
+#define SRCPEND		__REG(0xc0000800)
+#define INTMOD		__REG(0xc0000804)
+#define INTMASK		__REG(0xc0000808)
+#define IPRIORITY	__REG(0xc000080c)
+#define INTPEND		__REG(0xc0000810)
+#define INTOFFSET	__REG(0xc0000814)
 
-/*
- * Timer / Watch-dog
- */
+/* Timer / Watch-dog */
 #define TCOUNT			__REG(0xc0000a00)
 #define TMATCH0			__REG(0xc0000a04)
 #define TMATCH1			__REG(0xc0000a08)

@@ -3,7 +3,8 @@
 
 /* main irqs */
 #define MAIN_IRQ_BASE	0
-#define IRQ_DISP		0  /* Display controller */#define IRQ_IMGH                        1               /* Image capture controller (HSYNC) */
+#define IRQ_DISP		0  /* Display controller */
+#define IRQ_IMGH		1  /* Image capture controller (HSYNC) */
 #define IRQ_IMGV		2  /* Image capture controller (VSYNC) */ 
 /* IRQ 3 reserved */ 
 /* IRQ 4 reserved */
@@ -43,6 +44,8 @@
 #define IRQ_TIMER2			(2 + MMSP2_IRQS)
 #define IRQ_TIMER3			(3 + MMSP2_IRQS)
 
+
 /* TODO: DMA GPIO UART */
+#define NR_IRQS	(1 + IRQ_TIMER3)
 
 #endif /*IRQS_H_*/
