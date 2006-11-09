@@ -28,10 +28,11 @@ static unsigned long mmsp2_gettimeoffset(void)
 static irqreturn_t
 mmsp2_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 {
+	printascii("timer interrupt\n");
 	write_seqlock(&xtime_lock);
 
-	/* TODO clear the interrupt */
-
+	TSTATUS = TCNT0;
+	
 	timer_tick(regs);
 	write_sequnlock(&xtime_lock);
 
@@ -49,12 +50,14 @@ static struct irqaction mmsp2_timer_irq = {
  */
 static void __init mmsp2_timer_init(void)
 {
+	int error;
 	printascii("timer init\n");
 	TMATCH0 = 0;            /* set initial match at 0 */
 	TSTATUS = 0xf;          /* clear status on all timers */
 	TCONTROL &= ~(TIMER_EN);        /* diable all timers */
 	/* Make irqs happen for the system timer */
-	setup_irq(IRQ_TIMER0, &mmsp2_timer_irq);
+	error = setup_irq(IRQ_TIMER0, &mmsp2_timer_irq);
+	printk("error %d\n", error);
 	TCOUNT = 0;
 	TCONTROL |= TIMER_EN;   /* enable all timers */
 }
