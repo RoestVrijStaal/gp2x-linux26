@@ -56,10 +56,11 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 {
 	unsigned short mask;
 	
-	DEBUG_IRQ("irq demux\n");
+	
 	mask = TSTATUS;
 	irq = IRQ_TIMER0;
 	desc = irq_desc + irq;
+	DEBUG_IRQ("irq demux 0x%hx\n", mask);
 	while (mask) {
 		if (mask & 1) {
 			DEBUG_IRQ("handling irq %d\n", irq);
