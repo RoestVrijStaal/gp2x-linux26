@@ -27,4 +27,7 @@
 #define TIMER_EN		(1 << 0)
 #define WDT_EN			(1 << 1)
 
+/* UART */
+#define UINTSTAT		__REGW(0xc0001280)
+
 #endif /*MMSP2REGS_H_*/

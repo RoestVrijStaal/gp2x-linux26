@@ -28,14 +28,17 @@ static unsigned long mmsp2_gettimeoffset(void)
 static irqreturn_t
 mmsp2_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 {
-	printascii("timer interrupt start\n");
+	int next_match;
+	
 	write_seqlock(&xtime_lock);
-	/* clear match on timer 0 */
-	TSTATUS = TCNT0;
-	timer_tick(regs);
+	do {
+		timer_tick(regs);
+		/* clear match on timer 0 */
+		TSTATUS = TCNT0;
+		next_match = (TMATCH0 += LATCH);
+	} while( (signed long)(next_match - TCOUNT) <= 8 );
+	
 	write_sequnlock(&xtime_lock);
-
-	printascii("timer interrupt exit\n");
 	return IRQ_HANDLED;
 }
 
@@ -50,16 +53,22 @@ static struct irqaction mmsp2_timer_irq = {
  */
 static void __init mmsp2_timer_init(void)
 {
-	printascii("timer init\n");
-	TMATCH0 = 0x0;            /* set initial match at 0 */
-	TSTATUS = 0xffff;          /* clear status on all timers */
-	TCONTROL &= ~(TIMER_EN);        /* diable all timers */
+	/* set initial match at 0 */
+	TMATCH0 = 0x0;            
+	/* clear status on all timers */
+	TSTATUS = 0xffff;          
+	/* diable all timers */
+	TCONTROL &= ~(TIMER_EN);        
 	/* Make irqs happen for the system timer */
 	setup_irq(IRQ_TIMER0, &mmsp2_timer_irq);
+	/* to reset the TCOUNT register we have to 
+	 * write anything wait a cycle and then write 0 
+	 */
 	TCOUNT = 1;
 	{ int i; for (i = 10; i > 0; i--) ; }
 	TCOUNT = 0;
-	TCONTROL |= TIMER_EN;   /* enable all timers */
+	/* enable all timers */
+	TCONTROL |= TIMER_EN;   
 }
 
 struct sys_timer mmsp2_timer = {

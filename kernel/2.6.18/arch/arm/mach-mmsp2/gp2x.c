@@ -27,7 +27,7 @@ gp2x_fixup(struct machine_desc *desc, struct tag *tags, char **cmdline, struct m
 {
 	/* MCU_A: 64 MB DRAM memory */
 	mi->bank[0].start = DRAM_START;
-	mi->bank[0].size =  DRAM_LENGTH; 
+	mi->bank[0].size =  (32 * 1024 * 1024); 
 	mi->bank[0].node =  0;
 	mi->nr_banks = 1;
 }
