@@ -1,32 +1,37 @@
-#include <linux/platform_device.h>
-#include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/module.h>
+#include <linux/platform_device.h>
+#include <linux/ioport.h>
 #include <linux/string.h>
 
 #include <asm/hardware.h>
 
 #include <asm/mach/map.h>
 
-/*
- * Note that 0xfffe0000-0xffffffff is reserved for the vector table and
- * cache flush area.
- */
+/* statically mapped devices */
 static struct map_desc mmsp2_io_desc[] __initdata = {
 	{	/* Normal IO */
 		.virtual	= NIO_BASE,
 		.pfn		= __phys_to_pfn(NIO_START),
 		.length		= NIO_SIZE,
 		.type		= MT_DEVICE
-	}
-#if 0
-	,
+	},
 	{	/* Fast IO */
 		.virtual	= FIO_BASE,
 		.pfn		= __phys_to_pfn(FIO_START),
 		.length		= FIO_SIZE,
 		.type		= MT_DEVICE
-	},
+	}
+#ifdef CONFIG_MTD_NAND_MMSP2
+	,{
+		.virtual	= NF_IO_BASE,
+		.pfn		= __phys_to_pfn(NF_IO_START),
+		.length		= NF_IO_SIZE,
+		.type		= MT_DEVICE	
+	}
+#endif
+	#if 0
 	{	/* IDE IO */
 		.virtual	= IDE_IO_BASE,
 		.pfn		= __phys_to_pfn(IDE_IO_START),
@@ -69,12 +74,11 @@ static struct map_desc mmsp2_io_desc[] __initdata = {
 		.length		= CF1_MEM_SIZE,
 		.type		= MT_DEVICE
 	}
-#endif
+	#endif
 };
 
 void __init
 mmsp2_map_io(void)
 {
-	printascii("mmsp2_map_io\n");
 	iotable_init(mmsp2_io_desc, ARRAY_SIZE(mmsp2_io_desc));
 }

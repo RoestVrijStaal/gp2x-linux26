@@ -1,8 +1,9 @@
+#include "hardware.h"                
                 .macro  addruart,rx
                 mrc     p15, 0, \rx, c1, c0
                 tst     \rx, #1                 @ MMU enabled?
-                moveq   \rx, #0xc0000000        @ physical
-                movne   \rx, #0xf0000000        @ virtual
+                moveq   \rx, #NIO_START        @ physical
+                movne   \rx, #NIO_BASE        @ virtual
                 orr     \rx, \rx, #0x00001200
                 .endm
 
