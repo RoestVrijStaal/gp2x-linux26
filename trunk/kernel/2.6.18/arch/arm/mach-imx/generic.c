@@ -169,11 +169,6 @@ static struct resource imx_mmc_resources[] = {
 		.end	= 0x002140FF,
 		.flags	= IORESOURCE_MEM,
 	},
-	[1] = {
-		.start	= (SDHC_INT),
-		.end	= (SDHC_INT),
-		.flags	= IORESOURCE_IRQ,
-	},
 };
 
 static u64 imxmmmc_dmamask = 0xffffffffUL;

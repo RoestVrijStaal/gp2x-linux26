@@ -239,4 +239,7 @@ config MTD_NAND_NANDSIM
 	  The simulator may simulate various NAND flash chips for the
 	  MTD nand layer.
 
+config MTD_NAND_MMSP2
+	tristate "Support for NAND Flash on MMSP2"
+	depends on MTD_NAND && ARCH_MMSP2
 endmenu

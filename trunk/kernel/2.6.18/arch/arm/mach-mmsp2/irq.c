@@ -109,8 +109,8 @@ static struct irq_chip mmsp2_timer_chip = {
 	.unmask = mmsp2_timer_unmask_irq,
 };
 
-#define GPIO_EVT(i)             (*(volatile unsigned short *)IO_ADDRESS(0xc0001100 + 2*(i)))
-#define GPIO_INTENB(i)  (*(volatile unsigned short *)IO_ADDRESS(0xc00010e0 + 2*(i)))
+#define GPIO_EVT(i)             (*(volatile unsigned short *)io_p2v(0xc0001100 + 2*(i)))
+#define GPIO_INTENB(i)  (*(volatile unsigned short *)io_p2v(0xc00010e0 + 2*(i)))
 
 void __init
 mmsp2_init_irq(void)
