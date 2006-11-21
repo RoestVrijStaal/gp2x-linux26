@@ -18,8 +18,16 @@
  */
 static unsigned long mmsp2_gettimeoffset(void)
 {
-	printascii("gettimeoffset\n");
-	return 1000000;
+	unsigned long ticks_to_match, elapsed, usec;
+	/* Get ticks before next timer match */
+	ticks_to_match = TMATCH0 - TCOUNT;
+
+	/* We need elapsed ticks since last match */
+	elapsed = LATCH - ticks_to_match;
+
+	/* Now convert them to usec */
+	usec = (unsigned long)(elapsed * tick_nsec / 1000)/LATCH;
+	return usec;
 }
 
 /*

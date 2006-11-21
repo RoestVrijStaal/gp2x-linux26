@@ -25,7 +25,9 @@ gp2x_map_io(void)
 static void __init
 gp2x_fixup(struct machine_desc *desc, struct tag *tags, char **cmdline, struct meminfo *mi)
 {
-	/* MCU_A: 64 MB DRAM memory */
+	/* MCU_A: 64 MB DRAM memory but we only allocate 32MB 
+	 * the rest is for other devices (fb,...)
+	 */
 	mi->bank[0].start = DRAM_START;
 	mi->bank[0].size =  (32 * 1024 * 1024); 
 	mi->bank[0].node =  0;
