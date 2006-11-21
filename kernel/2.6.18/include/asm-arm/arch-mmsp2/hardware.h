@@ -64,11 +64,35 @@
 #define IDE_IO_START    MMSP2_IO(0x3c000000)
 #define IDE_IO_SIZE     0x00010000
 #define IDE_IO_BASE     io_p2v(IDE_IO_START)
-/* the NIO and the FIO aren't modified by the SHADOW pin */
+/* the NIO and the FIO aren't modified by the SHADOW pin
+ * here instead of mapping statically all the io space 
+ * (check generic.c at arch/arm/mach-mmsp2) we split it
+ * by functionality, It is usefull to allow us to separate
+ * the drivers from the device using the platform_device 
+ * functions. For some drivers (mmc for example) it is 
+ * necessary to have a device to actually register the 
+ * driver.
+ */
+
 /* Normal IO space */
+/*******************/
 #define NIO_START	0xc0000000
 #define NIO_SIZE	0x00010000
 #define NIO_BASE	io_p2v(NIO_START)
+
+/* MMC/SD, start: C000 1500 end: C000 153C */
+#define MMC_START	0xc0001500
+#define MMC_END		0xc000153c
+#define MMC_BASE	io_p2v(MMC_START)
+/* Clock and Power, start: C000 0900 end: C000 092C */
+#define CPW_START	0xc0000900
+#define CPW_END		0xc000092c
+#define CPW_BASE	io_p2v(CPW_START)
+/* GPIO */
+#define GPIO_START	0xc0001020
+#define GPIO_END	0xc00011bc
+#define GPIO_BASE	io_p2v(GPIO_START)
+
 /* Fast IO space */
 #define FIO_START	0xe0000000
 #define FIO_SIZE 	0x00010000
