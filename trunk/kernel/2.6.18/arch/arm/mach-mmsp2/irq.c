@@ -72,7 +72,7 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 		desc++;
 		mask >>= 1;
 	}
-	/* do an aknownledge of the interrupt */
+	/* FIXME why this? do an aknownledge of the interrupt */
 	/* source pending flag clear */
 	SRCPEND = (1 << IRQ_TIMER);          
 	/* interrupt pending flag clear */
@@ -130,11 +130,10 @@ mmsp2_init_irq(void)
 	UINTSTAT = 0xffff;
 	
 	for(irq=0; irq<15; irq++)
-        {
+	{
                 GPIO_INTENB(irq) = 0;             /* disable all GPIO interrupts */
                 GPIO_EVT(irq)     = 0xffff;       /* clear all GPIO pending registers */
-        }
-	
+	}
 	
 	SRCPEND = 0xffffffff;
 	INTPEND = 0xffffffff;

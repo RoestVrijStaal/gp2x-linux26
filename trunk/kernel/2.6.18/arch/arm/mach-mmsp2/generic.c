@@ -14,12 +14,12 @@ void mmsp2_gpio_mode(unsigned short group, unsigned short pin, unsigned short mo
 {
 	if(group > GPIOO)
 	{
-		printk(KERN_ERR, "[mmsp2] group out of range %u %s\n", group, __FUNCTION__);
+		printk(KERN_ERR "[mmsp2] group out of range %u (%s)\n", group, __FUNCTION__);
 		return;	
 	}
 	if(pin > 16)
 	{
-		printk(KERN_ERR, "[mmsp2] pin out of range %u %s\n", pin, __FUNCTION__);
+		printk(KERN_ERR "[mmsp2] pin out of range %u (%s)\n", pin, __FUNCTION__);
 		return;
 	}
 	/* the mode (input, output, alt1, alt2) */
@@ -54,6 +54,37 @@ static inline unsigned long calc_clk(unsigned short v)
         return ( ((m + 8) * CLOCK_TICK_RATE) / ((p + 2) * (1 << s)) );
 }
 
+unsigned long mmsp2_get_fclk(void)
+{
+        return calc_clk(FPLLVSETREG);      //return 199065600;
+}
+
+unsigned long mmsp2_get_uclk(void)
+{
+        return calc_clk(UPLLVSETREG);      //return 95000000;
+}
+
+unsigned long mmsp2_get_aclk(void)
+{
+        return calc_clk(APLLVSETREG);      //return 95000000;
+}
+
+unsigned long mmsp2_get_pclk(void)
+{
+        unsigned long c, d, b, p;
+
+        c = calc_clk(FPLLVSETREG);
+        d = c / (GET_DDIV - 1); // DCLK
+        b = c / 2; // BCLK
+        p = b / 2; // PCLK
+        return p;
+}
+
+EXPORT_SYMBOL(mmsp2_get_fclk);
+EXPORT_SYMBOL(mmsp2_get_uclk);
+EXPORT_SYMBOL(mmsp2_get_aclk);
+EXPORT_SYMBOL(mmsp2_get_pclk);
+
 static void __init mmsp2_show_clk(void)
 {
         unsigned long v, c, m, p, s;
@@ -73,24 +104,9 @@ static void __init mmsp2_show_clk(void)
         c = ( ((m + 8) * CLOCK_TICK_RATE) / ((p + 2) * (1 << s)) );
         printk(KERN_INFO "[mmsp2] ACLK: %9lu Hz, M = 0x%lx P = %lu S = %lu (%lx)\n", c, m, p, s, v);
 
-        /*c = mmsp2_get_pclk();
-        printk(KERN_INFO "MP2520F PCLK: %9lu Hz\n", c);*/
+        c = mmsp2_get_pclk();
+        printk(KERN_INFO "[mmspw] PCLK: %9lu Hz\n", c);
 }
-
-unsigned long mmsp2_get_fclk(void)
-{
-        return calc_clk(FPLLVSETREG);      //return 199065600;
-}
-unsigned long mmsp2_get_uclk(void)
-{
-        return calc_clk(UPLLVSETREG);      //return 95000000;
-}
-unsigned long mmsp2_get_aclk(void)
-{
-        return calc_clk(APLLVSETREG);      //return 95000000;
-}
-
-
 /* dynamically mapped devices */
 static struct resource mmsp2_mmcsd_resources[] = 
 {

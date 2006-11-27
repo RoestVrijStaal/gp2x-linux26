@@ -1085,7 +1085,7 @@ static void mmc_setup(struct mmc_host *host)
 		mmc_idle_cards(host);
 
 		err = mmc_send_app_op_cond(host, 0, &ocr);
-
+		printk("err = %d\n", err);
 		/*
 		 * If we fail to detect any SD cards then try
 		 * searching for MMC cards.
@@ -1097,7 +1097,7 @@ static void mmc_setup(struct mmc_host *host)
 			if (err != MMC_ERR_NONE)
 				return;
 		}
-
+		printk("ocr %x\n", ocr);
 		host->ocr = mmc_select_voltage(host, ocr);
 
 		/*
