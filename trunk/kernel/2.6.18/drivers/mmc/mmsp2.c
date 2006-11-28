@@ -422,6 +422,7 @@ static struct platform_driver mmsp2_mmc_driver = {
 	.resume		= mmsp2_mmc_resume,
 };
 
+/* module API */
 static int __init mmsp2_mmc_init(void)
 {
 	return platform_driver_register(&mmsp2_mmc_driver);

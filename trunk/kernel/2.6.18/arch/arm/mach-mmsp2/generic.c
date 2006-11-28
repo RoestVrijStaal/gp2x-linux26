@@ -125,16 +125,29 @@ static struct resource mmsp2_mmcsd_resources[] =
 static struct platform_device mmsp2_mmcsd_device = {
 	.name		= "mmsp2_mmcsd",
 	.id		= -1,
-	/*.dev		= {
-		.dma_mask = &pxamci_dmamask,
-		.coherent_dma_mask = 0xffffffff,
-	},*/
 	.num_resources	= ARRAY_SIZE(mmsp2_mmcsd_resources),
 	.resource	= mmsp2_mmcsd_resources,
 };
 
+static struct resource mmsp2_dma_resources[] = 
+{
+	[0] = {
+		.start	= IRQ_DMA,
+		.end	= IRQ_DMA,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device mmsp2_dma_device = {
+	.name		= "mmsp2_dma",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(mmsp2_dma_resources),
+	.resource	= mmsp2_dma_resources,
+};
+
 static struct platform_device *mmsp2_devices[] __initdata = {
 	&mmsp2_mmcsd_device,
+	&mmsp2_dma_device,
 };
 
 /* statically mapped devices */
@@ -220,5 +233,3 @@ static int __init mmsp2_init(void)
 }
 
 subsys_initcall(mmsp2_init);
-
-

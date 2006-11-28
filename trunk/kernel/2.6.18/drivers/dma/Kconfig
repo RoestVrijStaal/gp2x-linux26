@@ -31,4 +31,11 @@ config INTEL_IOATDMA
 	---help---
 	  Enable support for the Intel(R) I/OAT DMA engine.
 
+config DMA_MMSP2
+	tristate "MMSP2 DMA engine"
+	depends on DMA_ENGINE && ARCH_MMSP2
+	default m
+	---help---
+	  Enable support for the MagicEyes MMSP2 DMA Engine.
+
 endmenu
