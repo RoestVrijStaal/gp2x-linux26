@@ -80,6 +80,7 @@
 #define NIO_SIZE	0x00010000
 #define NIO_BASE	io_p2v(NIO_START)
 
+/* DMA controller, start: end: */
 /* MMC/SD, start: C000 1500 end: C000 153C */
 #define MMC_START	0xc0001500
 #define MMC_END		0xc000153c
