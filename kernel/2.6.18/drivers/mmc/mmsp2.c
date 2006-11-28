@@ -20,8 +20,8 @@
 
 struct mmsp2_mmc_host {
 	struct mmc_host 	*mmc;
-	struct resource		*res;
-	int					irq;
+	struct resource		*res; /* FIXME do we need it for something? */
+	
 	/* we duplicate this to be able to have it on the irq handler */
 	unsigned char		bus_width;
 	unsigned int		power_mode;
@@ -30,48 +30,16 @@ struct mmsp2_mmc_host {
 	struct mmc_command	*cmd;
 	struct mmc_data		*data;
 	/* irq handling */
+	int						irq;
 	struct tasklet_struct	tasklet;
+	/* register status */
 	unsigned short int		data_status;
 	unsigned short int		cmd_status;
 	unsigned short int		fifo_status;
 };
 
-/* MMC API
- *  SET IOS
-     This configures the device to put it into the correct mode and clock speed
-     required.
 
-   MCI REQUEST
-     MCI request processes the commands sent in the mmc_request structure. This
-     can consist of a processing command and a stop command in the case of
-     multiple block transfers.
-
-     There are three main types of request, commands, reads and writes.
-
-     Commands are straight forward. The command is submitted to the controller and
-     the request function returns. When the controller generates an interrupt to indicate
-     the command is finished, the response to the command are read and the mmc_request_done
-     function called to end the request.
-
-     Reads and writes work in a similar manner to normal commands but involve the PDC (DMA)
-     controller to manage the transfers.
-
-     A read is done from the controller directly to the scatterlist passed in from the request.
-     Due to a bug in the controller, when a read is completed, all the words are byte
-     swapped in the scatterlist buffers.
-
-     The sequence of read interrupts is: ENDRX, RXBUFF, CMDRDY
-
-     A write is slightly different in that the bytes to write are read from the scatterlist
-     into a dma memory buffer (this is in case the source buffer should be read only). The
-     entire write buffer is then done from this single dma memory buffer.
-
-     The sequence of write interrupts is: ENDTX, TXBUFE, NOTBUSY, CMDRDY
-
-   GET RO
-     Gets the status of the write protect pin, if available.
- */
-
+/* MMC API */
 static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 {
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);
@@ -219,7 +187,7 @@ static void mmsp2_mmc_startup(void)
 	mmsp2_gpio_mode(GPIOL, 5, GPIO_FN_ALT1);
 }
 
-/* irq handling */
+/* ==== IRQ handling ==== */
 /* just clear the interrupt let the tasklet handle the rest */
 static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
 {
@@ -328,7 +296,7 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 	}
 }
 
-/* platform device API */
+/* ==== platform device API ==== */
 static int mmsp2_mmc_probe(struct platform_device *pdev)
 {
 	struct mmc_host *mmc;
@@ -368,12 +336,16 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	tasklet_init(&host->tasklet, mmsp2_mmc_tasklet_fnc, (unsigned long)host);
 	ret = request_irq(host->irq, mmsp2_mmc_irq, 0, DRIVER_NAME, host);
 	if (ret)
-		goto out;
+		goto err_irq;
+	
+	platform_set_drvdata(pdev, mmc);
 	
 	mmsp2_mmc_startup();
 	mmc_add_host(mmc);
 	return 0;
 
+err_irq:
+	free_irq(host->irq, host);
 out:
 	if(mmc)
 		mmc_free_host(mmc);
@@ -422,7 +394,7 @@ static struct platform_driver mmsp2_mmc_driver = {
 	.resume		= mmsp2_mmc_resume,
 };
 
-/* module API */
+/* ==== module API ==== */
 static int __init mmsp2_mmc_init(void)
 {
 	return platform_driver_register(&mmsp2_mmc_driver);

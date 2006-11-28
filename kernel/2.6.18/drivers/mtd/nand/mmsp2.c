@@ -116,10 +116,6 @@ mmsp2_nand_init(void)
 		chip.ecc.mode = NAND_ECC_HW;
 	else
 		chip.ecc.mode = NAND_ECC_SOFT;
-		
-	/* Set command delay time, see datasheet for correct value */
-	//this->chip_delay = CHIP_DEPENDEND_COMMAND_DELAY;
-
 	/* Scan to find existance of the device */
 	if (nand_scan (&mtd, 1)) 
 		return -ENXIO;
