@@ -156,11 +156,11 @@
 #define SDIFSTA_RFLAST			(1 << 9)
 #define SDIFSTA_RFFULL			(1 << 8)
 #define SDIFSTA_RFHALF			(1 << 7) 
-#define SDIDAT		__REG(MMC_START + 0x2C)	/* SDI Data Register */
-#define SDIINTENB1		__REGW(MMC_START + 0x30)	/* SDI Interrupt Mask Register 1 */
-#define SDIINTENB0		__REGW(MMC_START + 0x32)	/* SDI Interrupt Mask Register 0 */
-#define SDIINTENB0_CMDSNTMSK	(1 << 0)	/* BUG, there's a bug on the datasheet, the bit is 8 here instead of 0 */
-#define SDIINTENB0_RESCRCMSK	(1 << 1)	/* BUG, there's a bug on the datasheet, the bit is 9 here instead of 1 */
+#define SDIDAT 					__REG(MMC_START + 0x2C)	/* SDI Data Register */
+#define SDIINTENB1 				__REGW(MMC_START + 0x30)	/* SDI Interrupt Mask Register 1 */
+#define SDIINTENB0 				__REGW(MMC_START + 0x32)	/* SDI Interrupt Mask Register 0 */
+#define SDIINTENB0_CMDSNTMSK 	(1 << 0)	/* Command Sent */
+#define SDIINTENB0_RESCRCMSK 	(1 << 1)	/* Response CRC check */
 
 #define SDIDTIMERL	__REGW(MMC_START + 0x36)	/* SDI Data Timer Register */
 #define SDIDTIMERH	__REGW(MMC_START + 0x38)	/* SDI Data Timer Register */

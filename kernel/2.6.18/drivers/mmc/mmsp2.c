@@ -9,6 +9,7 @@
 #include <linux/mmc/card.h>
 #include <linux/mmc/protocol.h>
 #include <linux/delay.h>
+#include <linux/dmaengine.h>
 
 #include <asm/arch/hardware.h>
 
@@ -32,6 +33,8 @@ struct mmsp2_mmc_host {
 	/* irq handling */
 	int						irq;
 	struct tasklet_struct	tasklet;
+	/* dma handling */
+	struct dma_client		*dma_client;
 	/* register status */
 	unsigned short int		data_status;
 	unsigned short int		cmd_status;
@@ -39,7 +42,7 @@ struct mmsp2_mmc_host {
 };
 
 
-/* MMC API */
+/* ==== MMC/SD API ==== */
 static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 {
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);
@@ -295,6 +298,12 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 		mmsp2_mmc_request_end(host, host->req);	
 	}
 }
+/* ==== DMA handling */
+static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
+{
+	
+	
+}
 
 /* ==== platform device API ==== */
 static int mmsp2_mmc_probe(struct platform_device *pdev)
@@ -304,7 +313,7 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	struct resource *r;
 	int ret = 0, irq;
 
-	printk(KERN_INFO "[MMSP2] mmc/sd driver\n");
+	printk(KERN_INFO "[MMSP2] MMC/SD driver\n");
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	irq = platform_get_irq(pdev, 0);
@@ -325,18 +334,28 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	mmc->ops = &mmsp2_mmc_ops;
 	mmc->f_min = CLOCK_MMC; /* 400 Khz */
 	mmc->f_max = CLOCK_SD; /* 25Mhz in SD mode, 10 Mhz in MMC mode */
-	mmc->caps = 0; //MMC_CAP_4_BIT_DATA; 
+	mmc->caps = MMC_CAP_4_BIT_DATA; 
 	mmc->ocr_avail = MMC_VDD_27_28 | MMC_VDD_29_30 | MMC_VDD_31_32 | MMC_VDD_32_33 | MMC_VDD_33_34 | MMC_VDD_34_35 | MMC_VDD_35_36; /* 26_36 mmc, 27_36 sd */
 	
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
 	host->res = r;
 	host->irq = irq;
-	
+
+	/* irq initialization */	
 	tasklet_init(&host->tasklet, mmsp2_mmc_tasklet_fnc, (unsigned long)host);
 	ret = request_irq(host->irq, mmsp2_mmc_irq, 0, DRIVER_NAME, host);
 	if (ret)
 		goto err_irq;
+	/* dma initialization */
+	host->dma_client = dma_async_client_register(mmsp2_mmc_dma_handler);
+	if(!host->dma_client)
+	{
+		ret = -ENOMEM;
+		goto err_dma;
+	}
+	/* FIXME what channel number? */
+	dma_async_client_chan_request(host->dma_client, 1);
 	
 	platform_set_drvdata(pdev, mmc);
 	
@@ -344,6 +363,8 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	mmc_add_host(mmc);
 	return 0;
 
+/* TODO */
+err_dma:
 err_irq:
 	free_irq(host->irq, host);
 out:
@@ -361,6 +382,12 @@ static int mmsp2_mmc_remove(struct platform_device *pdev)
 
 	if (mmc) 
 	{
+		struct mmsp2_mmc_host *host = mmc_priv(mmc);
+		/* irq shutdown */
+		free_irq(host->irq, host);
+		/* dma shutdown */
+		dma_async_client_unregister(host->dma_client);
+		/* mmc shutdown */
 		mmc_remove_host(mmc);
 		mmc_free_host(mmc);
 	}

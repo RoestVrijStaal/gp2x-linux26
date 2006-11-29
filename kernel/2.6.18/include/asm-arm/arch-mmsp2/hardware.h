@@ -21,8 +21,6 @@
 
 #define io_p2v(x) (((((x) & 0xff000000) >> 4) | 0xf0000000) | ((x) & 0x000ffff))
 #define io_v2p(x) ((((x) & 0x0ff00000) << 4) | ((x) & 0x000fffff)) 
-/* macro to get at IO space when running virtually  3 | c = f */
-/*#define IO_ADDRESS(x) ((x) | 0x30000000)*/
 
 #ifndef __ASSEMBLY__
 	#define __REG(x)	(*((volatile u32 *)io_p2v(x)))

@@ -25,7 +25,7 @@ static int hardware_ecc = 1;
 static int hardware_ecc = 0;
 #endif 
 
-/* nand info */
+/* ==== nand api ==== */
 static struct mtd_info mtd;
 static struct nand_chip chip;
 
@@ -61,7 +61,6 @@ static const struct mtd_partition partition_info[] =
 };
 #endif
  
-/* nand api */
 static void mmsp2_nand_hwcontrol(struct mtd_info *mtd, int cmd,
 				   unsigned int ctrl)
 {
@@ -92,7 +91,7 @@ static int mmsp2_nand_dev_ready(struct mtd_info *mtd)
 }
 
 
-/* driver device registration */
+/* ==== module API ==== */
 static int __init 
 mmsp2_nand_init(void)
 {
