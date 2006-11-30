@@ -39,6 +39,8 @@ struct mmsp2_mmc_host {
 	unsigned short int		data_status;
 	unsigned short int		cmd_status;
 	unsigned short int		fifo_status;
+	/* cpu driven data */
+	u8						*data_ptr;
 };
 
 
@@ -259,13 +261,15 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 	printk("TSK mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
 	/* printk("int1: %x  int0: %x\n", SDIINTENB1, SDIINTENB0); */
 
-	host->cmd->error = MMC_ERR_NONE;
 	if(host->data)
 	{
+		/* TODO put the above in one function */
+		host->data->error = MMC_ERR_NONE;
 		/* data errors */
 		if(host->data_status & SDIDATSTA_DATTOUT)
-			host->cmd->error |= MMC_ERR_TIMEOUT;
-			
+			host->data->error |= MMC_ERR_TIMEOUT;
+		
+		host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
 		if(host->data->flags & MMC_DATA_WRITE)
 		{
 			printk("write data\n");
@@ -279,18 +283,26 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 			
 			/* TODO parse data errors */
 			printk("read data\n");
+			
 			while(host->data->blocks > cnt)
 			{
 				unsigned short int sdifsta = SDIFSTA;
 				if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
 				{
 					/* TODO needs dma first */
+					*(host->data_ptr + cnt++) = SDIDAT;
+				}
+				else
+				{
+					printk("quiting\n");
+					break;
 				}
 			}
 		}
 	}
 	if(host->cmd)
 	{
+		host->cmd->error = MMC_ERR_NONE;
 		mmsp2_mmc_cmd_end(host);	
 	}
 	if(host->req)

@@ -31,6 +31,7 @@ struct mmsp2_dma_chan
 	struct mmsp2_dma_device 	*device;
 	void 						*reg_base; /* control registers */
 	void 						*io_base;  /* io request registers */
+	unsigned int				peripheric; /* which internal device, 0 in case of memory */
 };
 
 /* ==== local functions ==== */
