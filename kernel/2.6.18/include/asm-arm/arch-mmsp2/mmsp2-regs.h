@@ -146,8 +146,6 @@
 #define SDIDATCON_WIDE 			(1 << 16)			/* SD 4 wide SDIDAT[0:3], MMC 1 wide SDIDAT[0:1] */
 #define SDIDATCON_DATMODE_RS	(2 << 12)			/* Data Mode Receive Start */
 #define SDIDATCON_DATMODE_TS	(3 << 12)			/* Data Mode Transmit Start */
-
-	
 #define SDIDCNT					__REG(MMC_START + 0x24)		/* Data Remain Counter Register */
 #define SDIDATSTA 				__REGW(MMC_START + 0x28)	/* Data Status Register */
 #define SDIDATSTA_DATTOUT		(1 << 5)					/* data time out */
@@ -158,10 +156,25 @@
 #define SDIFSTA_RFHALF			(1 << 7) 
 #define SDIDAT 					__REGB(MMC_START + 0x2C)	/* SDI Data Register */
 #define SDIINTENB1 				__REGW(MMC_START + 0x30)	/* SDI Interrupt Mask Register 1 */
+#define SDIINTENB1_TOUTMSK		(1 << 15)	/* Response timeout occur interrupt mask */
+#define SDIINTENB1_CMDRCVMSK	(1 << 14) 	/* Command response receive interrupt mask */
+#define SDIINTENB1_RWRMSK		(1 << 13) 	/* Read wait request occur interrupt mask */
+#define SDIINTENB1_SDIOIRQMSK	(1 << 12) 	/* SDIO interrupt from the card occur interrupt mask */
+#define SDIINTENB1_FFFAILMSK	(1 << 11) 	/* FIFO fail error occur interrupt mask */
+#define SDIINTENB1_SCRCERRMSK	(1 << 10) 	/* CRC status error occur interrupt mask */
+#define SDIINTENB1_DCRCERRMSK	(1 << 9) 	/* Data receive CRC error occur interrupt mask */
+#define SDIINTENB1_DTIMOUTMSK	(1 << 8) 	/* Data receive timeout occur interrupt mask */
+#define SDIINTENB1_DCNT0MSK		(1 << 7) 	/* Data counter zero interrupt mask */
+#define SDIINTENB1_BUSCHKMSK	(1 << 6) 	/* Busy check complete interrupt mask */
+#define SDIINTENB1_SB_ERRMSK	(1 << 5) 	/* Start bit error detect interrupt mask */
+#define SDIINTENB1_TXHFMSK 		(1 << 4) 	/* Tx FIFO half full interrupt mask */
+#define SDIINTENB1_TXEMTMSK 	(1 << 3) 	/* Tx FIFO empty interrupt mask */
+#define SDIINTENB1_RXLDMSK 		(1 << 2) 	/* Rx FIFO has last data interrupt mask */
+#define SDIINTENB1_RXFULMSK 	(1 << 1) 	/* Rx FIFO full interrupt mask */
+#define SDIINTENB1_RXHFMSK 		(1 << 0) 	/* Rx FIFO half full interrupt mask */
 #define SDIINTENB0 				__REGW(MMC_START + 0x32)	/* SDI Interrupt Mask Register 0 */
 #define SDIINTENB0_CMDSNTMSK 	(1 << 0)	/* Command Sent */
 #define SDIINTENB0_RESCRCMSK 	(1 << 1)	/* Response CRC check */
-
 #define SDIDTIMERL	__REGW(MMC_START + 0x36)	/* SDI Data Timer Register */
 #define SDIDTIMERH	__REGW(MMC_START + 0x38)	/* SDI Data Timer Register */
 #define SDISFTL		__REGW(MMC_START + 0x3A)	/* SDI Shift Regisrt Low */
