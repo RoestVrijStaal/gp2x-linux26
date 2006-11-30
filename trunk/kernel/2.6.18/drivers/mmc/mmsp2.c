@@ -178,6 +178,7 @@ static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_reques
 	/* clear previous status */
 	host->cmd_status = 0;
 	host->data_status = 0;
+	host->fifo_status = 0;
 	mmc_request_done(host->mmc, req);
 }
 
@@ -265,6 +266,7 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 	{
 		/* TODO put the above in one function */
 		host->data->error = MMC_ERR_NONE;
+		/* TODO parse data errors */
 		/* data errors */
 		if(host->data_status & SDIDATSTA_DATTOUT)
 			host->data->error |= MMC_ERR_TIMEOUT;
@@ -280,8 +282,6 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 			
 			if(!host->fifo_status & SDIFSTA_RFDET)
 				return;
-			
-			/* TODO parse data errors */
 			printk("read data\n");
 			
 			while(host->data->blocks > cnt)
@@ -290,6 +290,9 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 				if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
 				{
 					/* TODO needs dma first */
+					*(host->data_ptr + cnt++) = SDIDAT;
+					*(host->data_ptr + cnt++) = SDIDAT;
+					*(host->data_ptr + cnt++) = SDIDAT;
 					*(host->data_ptr + cnt++) = SDIDAT;
 				}
 				else
