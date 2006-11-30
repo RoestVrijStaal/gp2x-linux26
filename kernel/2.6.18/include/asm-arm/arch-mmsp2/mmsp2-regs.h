@@ -156,7 +156,7 @@
 #define SDIFSTA_RFLAST			(1 << 9)
 #define SDIFSTA_RFFULL			(1 << 8)
 #define SDIFSTA_RFHALF			(1 << 7) 
-#define SDIDAT 					__REG(MMC_START + 0x2C)	/* SDI Data Register */
+#define SDIDAT 					__REGB(MMC_START + 0x2C)	/* SDI Data Register */
 #define SDIINTENB1 				__REGW(MMC_START + 0x30)	/* SDI Interrupt Mask Register 1 */
 #define SDIINTENB0 				__REGW(MMC_START + 0x32)	/* SDI Interrupt Mask Register 0 */
 #define SDIINTENB0_CMDSNTMSK 	(1 << 0)	/* Command Sent */
