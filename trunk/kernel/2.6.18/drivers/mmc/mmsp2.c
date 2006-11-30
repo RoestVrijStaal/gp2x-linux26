@@ -64,7 +64,7 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	{
 		SDIBSIZE = req->data->blksz;
 		/* number of blocks, Rx/Tx data, */
-		printk("%x blocks\n", req->data->blocks);
+		printk("%x blocks of size %x\n", req->data->blocks, req->data->blksz);
 		sdidatcon |= (req->data->blocks & 0xff) | SDIDATCON_BLKMODE;
 		if (req->data->flags & MMC_DATA_WRITE)
 		{
@@ -143,9 +143,10 @@ static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
          	/* Set timeout count */
         	SDIDTIMERL = 0xffff;
         	SDIDTIMERH = 0x007f;
-        	/* receive all interrupts but fifo */
-        	SDIINTENB1 = 0xffe0;
-			SDIINTENB0 = 0x0003; //SDIINTENB0_CMDSNTMSK;
+        	/* receive response timeout, response receive,  */
+        	SDIINTENB1 = SDIINTENB1_TOUTMSK | SDIINTENB1_CMDRCVMSK;
+        	/* command sent interrupt */
+			SDIINTENB0 = SDIINTENB0_CMDSNTMSK;
         	printk("power up\n");
 			break;
 		
@@ -182,17 +183,6 @@ static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_reques
 	mmc_request_done(host->mmc, req);
 }
 
-static void mmsp2_mmc_startup(void)
-{
-	/* set GPIOL pin 0-5 to alt function 1 */
-	mmsp2_gpio_mode(GPIOL, 0, GPIO_FN_ALT1);
-	mmsp2_gpio_mode(GPIOL, 1, GPIO_FN_ALT1);
-	mmsp2_gpio_mode(GPIOL, 2, GPIO_FN_ALT1);
-	mmsp2_gpio_mode(GPIOL, 3, GPIO_FN_ALT1);
-	mmsp2_gpio_mode(GPIOL, 4, GPIO_FN_ALT1);
-	mmsp2_gpio_mode(GPIOL, 5, GPIO_FN_ALT1);
-}
-
 /* ==== IRQ handling ==== */
 /* just clear the interrupt let the tasklet handle the rest */
 static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
@@ -214,7 +204,6 @@ static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
 	SDICMDSTA &= SDICMDSTA;
 	SDIDATSTA &= SDIDATSTA; 
 	SDIFSTA &= SDIFSTA;
-	//SDIDATSTA = 0x7ff; 
 	
 	tasklet_schedule(&host->tasklet);
 	
@@ -279,12 +268,13 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 		else
 		{
 			int cnt = 0;
+			int bytes = host->data->blksz * host->data->blocks;
 			
 			if(!host->fifo_status & SDIFSTA_RFDET)
 				return;
 			printk("read data\n");
 			
-			while(host->data->blocks > cnt)
+			while(bytes > cnt)
 			{
 				unsigned short int sdifsta = SDIFSTA;
 				if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
@@ -297,7 +287,7 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 				}
 				else
 				{
-					printk("quiting\n");
+					printk("quiting %x\n", SDIFSTA);
 					break;
 				}
 			}
@@ -373,8 +363,14 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	dma_async_client_chan_request(host->dma_client, 1);
 	
 	platform_set_drvdata(pdev, mmc);
+	/* set GPIOL pin 0-5 to alt function 1 */
+	mmsp2_gpio_mode(GPIOL, 0, GPIO_FN_ALT1);
+	mmsp2_gpio_mode(GPIOL, 1, GPIO_FN_ALT1);
+	mmsp2_gpio_mode(GPIOL, 2, GPIO_FN_ALT1);
+	mmsp2_gpio_mode(GPIOL, 3, GPIO_FN_ALT1);
+	mmsp2_gpio_mode(GPIOL, 4, GPIO_FN_ALT1);
+	mmsp2_gpio_mode(GPIOL, 5, GPIO_FN_ALT1);
 	
-	mmsp2_mmc_startup();
 	mmc_add_host(mmc);
 	return 0;
 
