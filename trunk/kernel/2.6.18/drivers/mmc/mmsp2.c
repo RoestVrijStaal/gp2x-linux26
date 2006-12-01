@@ -222,17 +222,17 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
 	host->cmd_status = SDICMDSTA;
 	
-	/* error cheking */
-	 /*	
-	  * MMC_ERR_FIFO	3
-	  * MMC_ERR_FAILED	4
-	  * MMC_ERR_INVALID	5
-	  */
+	/* error cheking
+	 * MMC_ERR_FIFO	3
+	 * MMC_ERR_FAILED	4
+	 * MMC_ERR_INVALID	5
+	 */
+	
 	/* TODO wait for command to complete */
 	host->cmd->error = MMC_ERR_NONE;	
 	if(host->cmd_status & SDICMDSTA_CMDTOUT)
 		host->cmd->error |= MMC_ERR_TIMEOUT;
-	/* FIXME some cards give a CRC when reading the OCR
+	/* FIXME my card gives a CRC when reading the OCR
 	if(host->cmd_status & SDICMDSTA_RSPCRC)
 		host->cmd->error |= MMC_ERR_BADCRC; */
 	/* check for a response */
@@ -277,13 +277,7 @@ static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
 		int cnt = 0;
 		int bytes = host->data->blksz * host->data->blocks;
 		
-		/*if(!host->fifo_status & SDIFSTA_RFDET)
-		{
-			printk("read data\n");
-			return;
-		}*/
-		printk("read data\n");
-		
+		printk("read data\n");	
 		while(bytes > cnt)
 		{
 			unsigned short int sdifsta = SDIFSTA;
