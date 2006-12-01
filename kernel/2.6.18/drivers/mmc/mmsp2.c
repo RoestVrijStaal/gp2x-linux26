@@ -64,7 +64,7 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	{
 		SDIBSIZE = req->data->blksz;
 		/* number of blocks, Rx/Tx data, */
-		printk("%x blocks of size %x\n", req->data->blocks, req->data->blksz);
+		printk("%d blocks of size %d = %d\n", req->data->blocks, req->data->blksz, req->data->blocks * req->data->blksz);
 		sdidatcon |= (req->data->blocks & 0xff) | SDIDATCON_BLKMODE;
 		if (req->data->flags & MMC_DATA_WRITE)
 		{
@@ -144,7 +144,7 @@ static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
         	SDIDTIMERL = 0xffff;
         	SDIDTIMERH = 0x007f;
         	/* receive response timeout, response receive,  */
-        	SDIINTENB1 = SDIINTENB1_TOUTMSK | SDIINTENB1_CMDRCVMSK;
+        	/* SDIINTENB1 = SDIINTENB1_TOUTMSK | SDIINTENB1_CMDRCVMSK; */
         	/* command sent interrupt */
 			SDIINTENB0 = SDIINTENB0_CMDSNTMSK;
         	printk("power up\n");
@@ -238,14 +238,19 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 		else
 			host->cmd->resp[0] = SDIRSP0 | (SDIRSP1 << 16);	
 	}
+	if(host->cmd->error)
+		printk("ERROR %d\n", host->cmd->error);
 }
 
 static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 {
 	struct mmsp2_mmc_host *host = (struct mmsp2_mmc_host *)data;
-
+	int valid = 0;
 	/* TODO if we dont have a valid request how do we get here? */
-	
+	host->cmd_status |= SDICMDSTA;
+	host->data_status |= SDIDATSTA;
+	host->fifo_status |= SDIFSTA;
+		
 	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
 	printk("TSK mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
 	printk("TSK mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
@@ -253,6 +258,7 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 
 	if(host->data)
 	{
+		valid = 1;
 		/* TODO put the above in one function */
 		host->data->error = MMC_ERR_NONE;
 		/* TODO parse data errors */
@@ -270,8 +276,11 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 			int cnt = 0;
 			int bytes = host->data->blksz * host->data->blocks;
 			
-			if(!host->fifo_status & SDIFSTA_RFDET)
+			/*if(!host->fifo_status & SDIFSTA_RFDET)
+			{
+				printk("read data\n");
 				return;
+			}*/
 			printk("read data\n");
 			
 			while(bytes > cnt)
@@ -284,24 +293,43 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 					*(host->data_ptr + cnt++) = SDIDAT;
 					*(host->data_ptr + cnt++) = SDIDAT;
 					*(host->data_ptr + cnt++) = SDIDAT;
+					if(host->bus_width == MMC_BUS_WIDTH_4)
+					{
+						int i;
+						for(i=0; i<8; i++)
+						{
+							*(host->data_ptr + cnt++) = SDIDAT;
+							*(host->data_ptr + cnt++) = SDIDAT;
+							*(host->data_ptr + cnt++) = SDIDAT;
+							*(host->data_ptr + cnt++) = SDIDAT;
+						}						
+					}
 				}
-				else
+				/*else
 				{
 					printk("quiting %x\n", SDIFSTA);
 					break;
-				}
+				}*/
 			}
+			printk("read %d bytes\n", cnt);
+			/* reset fifo */
+			SDICON |= SDICON_FRESET;
 		}
 	}
 	if(host->cmd)
 	{
+		valid = 1;
 		host->cmd->error = MMC_ERR_NONE;
 		mmsp2_mmc_cmd_end(host);	
 	}
 	if(host->req)
 	{
-		mmsp2_mmc_request_end(host, host->req);	
+		valid = 1;
+		mmsp2_mmc_request_end(host, host->req);
 	}
+	printk("request end");
+	if(valid)	printk(" OK!!!\n");
+	else		printk(" NOOOO\n");
 }
 /* ==== DMA handling */
 static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
@@ -338,7 +366,7 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 
 	mmc->ops = &mmsp2_mmc_ops;
 	mmc->f_min = CLOCK_MMC; /* 400 Khz */
-	mmc->f_max = CLOCK_SD; /* 25Mhz in SD mode, 10 Mhz in MMC mode */
+	mmc->f_max = CLOCK_MMC; /* 25Mhz in SD mode, 10 Mhz in MMC mode */
 	mmc->caps = MMC_CAP_4_BIT_DATA; 
 	mmc->ocr_avail = MMC_VDD_27_28 | MMC_VDD_29_30 | MMC_VDD_31_32 | MMC_VDD_32_33 | MMC_VDD_33_34 | MMC_VDD_34_35 | MMC_VDD_35_36; /* 26_36 mmc, 27_36 sd */
 	
