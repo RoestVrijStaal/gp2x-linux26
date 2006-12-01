@@ -63,6 +63,8 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	if(req->data)
 	{
 		SDIBSIZE = req->data->blksz;
+		/* TODO use DMA */
+		//sdidatcon |= SDIDATCON_DMAMODE;
 		/* number of blocks, Rx/Tx data, */
 		printk("%d blocks of size %d = %d\n", req->data->blocks, req->data->blksz, req->data->blocks * req->data->blksz);
 		sdidatcon |= (req->data->blocks & 0xff) | SDIDATCON_BLKMODE;
@@ -87,6 +89,9 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 		SDICMDCON |= SDICMDCON_HOSTRCV;
 	/* set arguments */
 	SDICMDARG = req->cmd->arg;
+	/* abort command (CMD12,CMD52) */
+	if(req->cmd->opcode == MMC_STOP_TRANSMISSION)
+		SDICMDCON |= SDICMDCON_ABTCMD;
 	/* start sending the command */
 	SDICMDCON |= SDICMDCON_CMDOPST;
 	SDIDATCON = sdidatcon;
@@ -196,14 +201,16 @@ static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
 #endif
 	/* if we have some command status append 
 	 * it in case of many interrupts before the tasklet
-	 */
+	 *
 	host->cmd_status |= SDICMDSTA;
 	host->data_status |= SDIDATSTA;
-	host->fifo_status |= SDIFSTA;
-	/* clear status bits (to not generate more interrupts)*/
-	SDICMDSTA &= SDICMDSTA;
-	SDIDATSTA &= SDIDATSTA; 
-	SDIFSTA &= SDIFSTA;
+	host->fifo_status |= SDIFSTA; */
+	/* clear interrupt status bit (to not generate more interrupts) */
+	SDICMDSTA &= SDICMDSTA_CMDSENT;
+	/* we dont need to clear the data status, we aren't receiving any data interrupt
+	SDIDATSTA &= SDIDATSTA;*/
+	/* we dont need to clear the fifo status, we aren't receiving any fifo interrupt 
+	SDIFSTA &= SDIFSTA; */
 	
 	tasklet_schedule(&host->tasklet);
 	
@@ -212,6 +219,8 @@ static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
 
 static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 {
+	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
+	host->cmd_status = SDICMDSTA;
 	
 	/* error cheking */
 	 /*	
@@ -219,6 +228,8 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 	  * MMC_ERR_FAILED	4
 	  * MMC_ERR_INVALID	5
 	  */
+	/* TODO wait for command to complete */
+	host->cmd->error = MMC_ERR_NONE;	
 	if(host->cmd_status & SDICMDSTA_CMDTOUT)
 		host->cmd->error |= MMC_ERR_TIMEOUT;
 	/* FIXME some cards give a CRC when reading the OCR
@@ -242,84 +253,83 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 		printk("ERROR %d\n", host->cmd->error);
 }
 
+static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
+{
+	printk("TSK mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
+	printk("TSK mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
+	host->data_status = SDIDATSTA;
+	host->fifo_status = SDIFSTA;
+		
+	/* TODO put the above in one function */
+	host->data->error = MMC_ERR_NONE;
+	/* TODO parse data errors */
+	/* data errors */
+	if(host->data_status & SDIDATSTA_DATTOUT)
+		host->data->error |= MMC_ERR_TIMEOUT;
+		
+	host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
+	if(host->data->flags & MMC_DATA_WRITE)
+	{
+		printk("write data\n");
+	}
+	else
+	{
+		int cnt = 0;
+		int bytes = host->data->blksz * host->data->blocks;
+		
+		/*if(!host->fifo_status & SDIFSTA_RFDET)
+		{
+			printk("read data\n");
+			return;
+		}*/
+		printk("read data\n");
+		
+		while(bytes > cnt)
+		{
+			unsigned short int sdifsta = SDIFSTA;
+			if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
+			{
+				printk("remaining blocks %d\n", SDIDATCNT & SDIDATCNT_BLKNUMCNT);
+				/* TODO needs dma first */
+				*(host->data_ptr + cnt++) = SDIDAT;
+				*(host->data_ptr + cnt++) = SDIDAT;
+				*(host->data_ptr + cnt++) = SDIDAT;
+				*(host->data_ptr + cnt++) = SDIDAT;
+				if(host->bus_width == MMC_BUS_WIDTH_4)
+				{
+					int i;
+					for(i=0; i<8; i++)
+					{
+						*(host->data_ptr + cnt++) = SDIDAT;
+						*(host->data_ptr + cnt++) = SDIDAT;
+						*(host->data_ptr + cnt++) = SDIDAT;
+						*(host->data_ptr + cnt++) = SDIDAT;
+					}						
+				}
+			}
+		}
+		printk("read %d bytes %x\n", cnt, SDIFSTA);
+		/* reset fifo */
+		SDICON |= SDICON_FRESET;
+		/* clear data and fifo status */
+		SDIDATSTA &= SDIDATSTA;
+		SDIFSTA &= SDIFSTA;
+	}	
+}
+
 static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 {
 	struct mmsp2_mmc_host *host = (struct mmsp2_mmc_host *)data;
 	int valid = 0;
-	/* TODO if we dont have a valid request how do we get here? */
-	host->cmd_status |= SDICMDSTA;
-	host->data_status |= SDIDATSTA;
-	host->fifo_status |= SDIFSTA;
-		
-	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
-	printk("TSK mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
-	printk("TSK mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
-	/* printk("int1: %x  int0: %x\n", SDIINTENB1, SDIINTENB0); */
-
+	
 	if(host->data)
 	{
 		valid = 1;
-		/* TODO put the above in one function */
-		host->data->error = MMC_ERR_NONE;
-		/* TODO parse data errors */
-		/* data errors */
-		if(host->data_status & SDIDATSTA_DATTOUT)
-			host->data->error |= MMC_ERR_TIMEOUT;
-		
-		host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
-		if(host->data->flags & MMC_DATA_WRITE)
-		{
-			printk("write data\n");
-		}
-		else
-		{
-			int cnt = 0;
-			int bytes = host->data->blksz * host->data->blocks;
-			
-			/*if(!host->fifo_status & SDIFSTA_RFDET)
-			{
-				printk("read data\n");
-				return;
-			}*/
-			printk("read data\n");
-			
-			while(bytes > cnt)
-			{
-				unsigned short int sdifsta = SDIFSTA;
-				if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
-				{
-					/* TODO needs dma first */
-					*(host->data_ptr + cnt++) = SDIDAT;
-					*(host->data_ptr + cnt++) = SDIDAT;
-					*(host->data_ptr + cnt++) = SDIDAT;
-					*(host->data_ptr + cnt++) = SDIDAT;
-					if(host->bus_width == MMC_BUS_WIDTH_4)
-					{
-						int i;
-						for(i=0; i<8; i++)
-						{
-							*(host->data_ptr + cnt++) = SDIDAT;
-							*(host->data_ptr + cnt++) = SDIDAT;
-							*(host->data_ptr + cnt++) = SDIDAT;
-							*(host->data_ptr + cnt++) = SDIDAT;
-						}						
-					}
-				}
-				/*else
-				{
-					printk("quiting %x\n", SDIFSTA);
-					break;
-				}*/
-			}
-			printk("read %d bytes\n", cnt);
-			/* reset fifo */
-			SDICON |= SDICON_FRESET;
-		}
+		mmsp2_mmc_data_end(host);
 	}
 	if(host->cmd)
 	{
-		valid = 1;
-		host->cmd->error = MMC_ERR_NONE;
+		valid = 1;	
 		mmsp2_mmc_cmd_end(host);	
 	}
 	if(host->req)

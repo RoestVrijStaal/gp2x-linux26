@@ -7,6 +7,11 @@
 #include <asm/arch/hardware.h>
 #include <asm/arch/dma.h>
 
+/* The DMA engine API is being developed, there are new patches (2.6.19+) 
+ * that make the new API fit in our needs, but before that, we'll use
+ * our private method: arch/arm/mach-mmsp2/dma.c
+ */
+
 /* FIXME hardcoded */
 #define DMA_REG_BASE 	io_p2v(0xc0000200)
 #define DMA_IO_BASE 	io_p2v(0xc0000100)
@@ -226,6 +231,7 @@ static int mmsp2_dma_resume(struct platform_device *dev)
 {
 
 }
+
 #else
 #define mmsp2_dma_suspend  NULL
 #define mmsp2_dma_resume   NULL
