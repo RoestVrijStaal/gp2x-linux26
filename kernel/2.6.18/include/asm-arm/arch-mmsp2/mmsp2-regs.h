@@ -140,13 +140,18 @@
 #define SDIRSP7					__REGW(MMC_START + 0x1a)	/* SDI Response Register 7 */
 #define SDIBSIZE				__REGW(MMC_START + 0x1e)	/* SDI Block Size Register */
 #define SDIDATCON				__REG(MMC_START + 0x20)	/* SDI Data Control Register */
-#define SDIDATCON_TACMD 		(1 << 20)			/* Transmit after command */
+#define SDIDATCON_PRDTYPE 		(1 << 21)			/*  */
+#define SDIDATCON_TARSP 		(1 << 20)			/* Transmit after response */
 #define SDIDATCON_RACMD 		(1 << 19)			/* Receive after command */
 #define SDIDATCON_BLKMODE 		(1 << 17)			/* Rx or Tx mode */
 #define SDIDATCON_WIDE 			(1 << 16)			/* SD 4 wide SDIDAT[0:3], MMC 1 wide SDIDAT[0:1] */
 #define SDIDATCON_DATMODE_RS	(2 << 12)			/* Data Mode Receive Start */
 #define SDIDATCON_DATMODE_TS	(3 << 12)			/* Data Mode Transmit Start */
-#define SDIDCNT					__REG(MMC_START + 0x24)		/* Data Remain Counter Register */
+#define SDIDATCON_STOPMODE		(1 << 14)			/* Determines whether data transfer was stopped by force */
+#define SDIDATCON_DMAMODE		(1 << 15)			/* ERR: Use DMA Mode, this isnt documented */
+#define SDIDATCNT				__REG(MMC_START + 0x24)		/* Data Remain Counter Register */
+#define SDIDATCNT_BLKNUMCNT		(0x00fff800)		/* Remaining block number */
+#define SDIDATCNT_BLKCNT		(0x000007ff)		/* Remaining data of 1 block */
 #define SDIDATSTA 				__REGW(MMC_START + 0x28)	/* Data Status Register */
 #define SDIDATSTA_DATTOUT		(1 << 5)					/* data time out */
 #define SDIFSTA					__REGW(MMC_START + 0x2A)	/* FIFO Status Register */
