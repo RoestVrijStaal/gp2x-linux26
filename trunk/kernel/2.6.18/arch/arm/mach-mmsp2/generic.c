@@ -107,6 +107,7 @@ static void __init mmsp2_show_clk(void)
         c = mmsp2_get_pclk();
         printk(KERN_INFO "[mmspw] PCLK: %9lu Hz\n", c);
 }
+
 /* dynamically mapped devices */
 static struct resource mmsp2_mmcsd_resources[] = 
 {
