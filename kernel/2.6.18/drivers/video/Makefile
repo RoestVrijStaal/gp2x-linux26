@@ -98,6 +98,7 @@ obj-$(CONFIG_FB_IMX)              += imxfb.o
 obj-$(CONFIG_FB_S3C2410)	  += s3c2410fb.o
 obj-$(CONFIG_FB_PNX4008_DUM)	  += pnx4008/
 obj-$(CONFIG_FB_PNX4008_DUM_RGB)  += pnx4008/
+obj-$(CONFIG_FB_MMSP2)              += mmsp2fb.o
 
 # Platform or fallback drivers go here
 obj-$(CONFIG_FB_VESA)             += vesafb.o

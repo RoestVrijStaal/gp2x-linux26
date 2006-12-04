@@ -129,11 +129,13 @@ mmsp2_init_irq(void)
 	/* clear tx/rx on UART */
 	UINTSTAT = 0xffff;
 	
+	#if 0
 	for(irq=0; irq<15; irq++)
 	{
                 GPIO_INTENB(irq) = 0;             /* disable all GPIO interrupts */
                 GPIO_EVT(irq)     = 0xffff;       /* clear all GPIO pending registers */
 	}
+	#endif
 	
 	SRCPEND = 0xffffffff;
 	INTPEND = 0xffffffff;
