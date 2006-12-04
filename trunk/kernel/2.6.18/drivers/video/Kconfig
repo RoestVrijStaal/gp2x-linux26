@@ -1584,6 +1584,13 @@ config FB_PNX4008_DUM_RGB
 	---help---
 	  Say Y here to enable support for PNX4008 RGB Framebuffer
 
+config FB_MMSP2
+	tristate "MagicEyes MMSP2 LCD support"
+	depends on FB && ARM && ARCH_MMSP2
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	
 config FB_VIRTUAL
 	tristate "Virtual Frame Buffer support (ONLY FOR TESTING!)"
 	depends on FB
