@@ -3,6 +3,8 @@
 #include <linux/fb.h>
 #include <linux/platform_device.h>
 
+#include <asm/arch/lcd.h>
+
 #define DRIVER_NAME "mmsp2_fb"
 #define DRIVER_VERSION "0.1"
 
@@ -55,8 +57,25 @@ static irqreturn_t mmsp2_fb_irq(int irq, void *devid, struct pt_regs *regs)
 /* ==== platform device API ==== */
 static int mmsp2_fb_probe(struct platform_device *pdev)
 {
-
-	return 0;
+	struct mmsp2_lcd_platform_data *pdata;
+	int ret = 0;
+	
+	/* get the platform data */
+	pdata = pdev->dev.platform_data;
+	if(!pdata)
+	{
+		ret = -EINVAL;
+		goto pdata;	
+	}
+	/* request the irq */
+	/* request the memory region for video memory */
+	/* initialize the lcd */
+	/* setup the display controller */
+	/* setup the mixer layer controller */
+	/* register the fb */
+		
+pdata:
+	return ret;
 }
 
 static int mmsp2_fb_remove(struct platform_device *pdev)

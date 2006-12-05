@@ -219,18 +219,15 @@ static struct map_desc mmsp2_io_desc[] __initdata = {
 	#endif
 };
 
-void __init
-mmsp2_map_io(void)
+void __init mmsp2_map_io(void)
 {
 	/* static mapping */
 	iotable_init(mmsp2_io_desc, ARRAY_SIZE(mmsp2_io_desc));
 	mmsp2_show_clk();
 }
 
-static int __init mmsp2_init(void)
+int __init mmsp2_init(void)
 {
 	/* dynamic mapping */
 	return platform_add_devices(mmsp2_devices, ARRAY_SIZE(mmsp2_devices));
 }
-
-subsys_initcall(mmsp2_init);
