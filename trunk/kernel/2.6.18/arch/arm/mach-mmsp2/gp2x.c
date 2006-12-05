@@ -9,17 +9,32 @@
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 
+#include <asm/arch/lcd.h>
+
 #include "generic.h"
 
 /* ==== platform API ==== */
-static struct mmsp2_platform_lcd gp2x_lcd_device = 
+#ifdef CONFIG_FB_MMSP2
+
+/**
+ * gp2x_lcd_init Initialize the GP2X LCD
+ * 
+ * Setups the corresponding GPIO pins to initialize the LCD
+ */
+static int gp2x_lcd_init(void)
+{
+	printk("init lcd\n");
+	return 0;
+}
+
+static struct mmsp2_platform_lcd gp2x_platform_lcd = 
 {
 	.max_width 	= 320,
 	.max_height = 240,
-	.init 		= NULL,	
+	.init 		= gp2x_lcd_init,	
 };
 
-static struct resource mmsp2_lcd_resources[] = 
+static struct resource gp2x_lcd_resources[] = 
 {
 	[0] = {
 		.start	= IRQ_DISP,
@@ -28,23 +43,37 @@ static struct resource mmsp2_lcd_resources[] =
 	},
 };
 
-static struct platform_device mmsp2_lcd_device = {
+static struct platform_device gp2x_lcd_device = {
 	.name			= "mmsp2_lcd",
 	.id				= -1,
-	.num_resources	= ARRAY_SIZE(mmsp2_lcd_resources),
-	.resource		= mmsp2_lcd_resources,
+	.num_resources	= ARRAY_SIZE(gp2x_lcd_resources),
+	.resource		= gp2x_lcd_resources,
+	.dev 			= 
+	{
+		.platform_data = &gp2x_platform_lcd,
+	},
 };
+#endif
+
+static struct platform_device *gp2x_devices[] __initdata = {
+#ifdef CONFIG_FB_MMSP2
+	&gp2x_lcd_device,
+#endif
+};
+
 
 static void __init
 gp2x_init(void)
 {
-	printascii("gp2x_init\n");
+	/* common mapping */
+	mmsp2_init();
+	/* gp2x mapping */
+	platform_add_devices(gp2x_devices, ARRAY_SIZE(gp2x_devices));
 }
 
 static void __init
 gp2x_map_io(void)
 {
-	printascii("map_io\n");
 	mmsp2_map_io();
 }
 
