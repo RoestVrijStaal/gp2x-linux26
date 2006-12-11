@@ -9,7 +9,9 @@ extern struct sys_timer mmsp2_timer;
 /**
  * Gpio Functions
  */
-extern void mmsp2_gpio_mode(unsigned short group, unsigned short pin, unsigned short mode);
+extern void mmsp2_gpio_mode(unsigned short int group, unsigned short int pin, unsigned short int mode);
+extern void mmsp2_gpio_write(unsigned short int group, unsigned short int pin, unsigned short int data);
+
 /**
  * Clock Functions 
  */
