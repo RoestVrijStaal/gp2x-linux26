@@ -10,8 +10,12 @@
 #include <asm/mach/map.h>
 
 /* gpio functions */
-void mmsp2_gpio_mode(unsigned short group, unsigned short pin, unsigned short mode)
+void mmsp2_gpio_mode(unsigned short int group, unsigned short int pin, unsigned short int mode)
 {
+	unsigned short int value;
+	unsigned short int offset; 
+	
+	
 	if(group > GPIOO)
 	{
 		printk(KERN_ERR "[mmsp2] group out of range %u (%s)\n", group, __FUNCTION__);
@@ -23,16 +27,44 @@ void mmsp2_gpio_mode(unsigned short group, unsigned short pin, unsigned short mo
 		return;
 	}
 	/* the mode (input, output, alt1, alt2) */
+	/* FIXME there are register which have a different bit offset when reading */
 	if(pin > 8)
-		GPIOxALTFNHI(group) |= (mode << (1 << (pin - 8)));
+	{
+		offset = 2*(pin-8);
+		printk("gpio read %x %x\n", GPIOxALTFNHI(group), GPIOxALTFNLOW(group));
+		value = GPIOxALTFNHI(group) & ~(0x3 << offset);
+		value |= (mode & 0x3) << offset;
+		printk("gpio %x\n", value);
+		GPIOxALTFNHI(group) = value;
+	}
 	else
-		GPIOxALTFNLOW(group) |= (mode << (1 << pin));
+	{
+		offset = 2*pin;
+		printk("gpio read %x %x\n", GPIOxALTFNHI(group), GPIOxALTFNLOW(group));
+		value = GPIOxALTFNLOW(group) & ~(0x3 << offset);
+		value |= (mode & 0x3) << offset;
+		printk("gpio %x\n", value);
+		GPIOxALTFNLOW(group) = value;
+	}
 	/* event type (rising/falling edge, high/low level) */
 	/* pull up */
 	/* interrupt */
 }
 
 EXPORT_SYMBOL(mmsp2_gpio_mode);
+
+void mmsp2_gpio_write(unsigned short int group, unsigned short int pin, unsigned short int data)
+{
+	unsigned short int value;
+
+	printk("GPIO%d %x\n", group, GPIOxOUT(group));
+	value = GPIOxOUT(group) & ~(1 << pin);
+	value |= (data << pin); 
+	GPIOxOUT(group) = value;
+	printk("GPIO%d %x\n", group, GPIOxOUT(group));
+}
+
+EXPORT_SYMBOL(mmsp2_gpio_write);
 
 /* clock functions
  * clock = (m * Fin) / (p * s)

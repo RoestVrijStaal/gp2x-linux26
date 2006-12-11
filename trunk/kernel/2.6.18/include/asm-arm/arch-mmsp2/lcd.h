@@ -3,8 +3,11 @@
 
 struct mmsp2_platform_lcd
 {
-	int max_width;
-	int max_height;
+	int width;
+	int height;
+	int bpp;
+	int hsync_len;
+	int vsync_len;
 	int (*init)(void);
 };
 

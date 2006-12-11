@@ -56,7 +56,7 @@
  * GPIOE	16
  * GPIOF	10
  * GPIOG	16
- * GPIOH	7		0xc000104e	-		0xc000104e	7:0	(W)
+ * GPIOH	7		0xc000104e	-		0xc000102e	7:0	(W)
  * 					0xc000104e	6:3		0xc000102e	3:0 (R)
  * GPIOI	16
  * GPIOJ	16
@@ -84,26 +84,28 @@
 #define GPIO_FN_ALT1	2	
 #define GPIO_FN_ALT2	3	
 
-#define GPIOA	1
-#define GPIOB	2	
-#define GPIOC	3
-#define GPIOD	4
-#define GPIOE	5
-#define GPIOF	6
-#define GPIOG	7
-#define GPIOH	8
-#define GPIOI	9
-#define GPIOJ	10
-#define GPIOK	11
-#define GPIOL	12
-#define GPIOM	13
-#define GPION	14
-#define GPIOO	15
-#define GPIO_GROUP_OFFSET(x)	(x << 2)
+#define GPIOA	0x0
+#define GPIOB	0x2	
+#define GPIOC	0x4
+#define GPIOD	0x6
+#define GPIOE	0x8
+#define GPIOF	0xa
+#define GPIOG	0xc
+#define GPIOH	0xe
+#define GPIOI	0x10
+#define GPIOJ	0x12
+#define GPIOK	0x14
+#define GPIOL	0x16
+#define GPIOM	0x18
+#define GPION	0x1a
+#define GPIOO	0x1c
 
-#define GPIOxALTFNHI(x)			__REGW(GPIO_START + 0x20 + GPIO_GROUP_OFFSET(x))
-#define GPIOxALTFNLOW(x) 		__REGW(GPIO_START + GPIO_GROUP_OFFSET(x))
+//#define GPIO_GROUP_OFFSET(x)	(x << 2)
 
+/* Note there are other addresses for reading the alternate registers */
+#define GPIOxALTFNHI(x)			__REGW(0xc0001020 + 0x20 + (x))
+#define GPIOxALTFNLOW(x) 		__REGW(0xc0001020 + (x))
+#define GPIOxOUT(x) 			__REGW(0xc0001060 + (x))  
 
 /** 
  * MMC/SD Registers 
@@ -238,8 +240,10 @@
 #define MLC_STL_HSC 		__REGW(0xc0002906) 	/* Horizontal Scale Factor */ 
 #define MLC_STL_ __REGW(0xc000) /* TODO Scale Factor */ 
 #define MLC_STL_HW 			__REGW(0xc000290c) 	/* Horizontal Width*/ 
-#define MLC_STL_OADRL 		__REGW(0xc000290e) 	/* Source Address Low */ 
-#define MLC_STL_OADRH 		__REGW(0xc0002910) 	/* Source Address High */ 
+#define MLC_STL_OADRL 		__REGW(0xc000290e) 	/* Source Odd Address Low */ 
+#define MLC_STL_OADRH 		__REGW(0xc0002910) 	/* Source Odd Address High */ 
+#define MLC_STL_EADRL 		__REGW(0xc0002912) 	/* Source Even Address Low */ 
+#define MLC_STL_EADRH 		__REGW(0xc0002914) 	/* Source Even Address High */ 
 #define MLC_STL_PALLTA 		__REGW(0xc0002958) 	/* Palette Table Index */ 
 #define MLC_STL_PALLTD 		__REGW(0xc000295a) 	/* Palette Table Data */ 
 

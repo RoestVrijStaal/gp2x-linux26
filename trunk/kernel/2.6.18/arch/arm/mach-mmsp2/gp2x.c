@@ -3,6 +3,7 @@
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/ioport.h>
+#include <linux/delay.h>
 
 #include <asm/setup.h>
 #include <asm/hardware.h>
@@ -24,18 +25,44 @@
 static int gp2x_lcd_init(void)
 {
 	printk("init lcd\n");
+	/* setup the gpio */
+	
+	mmsp2_gpio_mode(GPIOH, 1, GPIO_FN_OUTPUT); //GPIOMD_OUT, GPIOPU_NOSET); // LCD_VGH_ONOFF esto pone la pantalla en AZUL!
+	mmsp2_gpio_mode(GPIOH, 2, GPIO_FN_OUTPUT); //, GPIOPU_NOSET); // LCD_BACK_ONOFF
+	mmsp2_gpio_mode(GPIOB, 3, GPIO_FN_OUTPUT); // GPIOMD_OUT, GPIOPU_NOSET); // LCD_RST
+	mmsp2_gpio_write(GPIOH,1,1);              //LCD_VGH_ON
+	mmsp2_gpio_write(GPIOH,2,1);              //BACK_ON
+	mmsp2_gpio_write(GPIOB,3,1);              //LCD_RESET HIGH
+	
+	mmsp2_gpio_mode(GPIOB, 7, GPIO_FN_ALT1); // GPIOPU_NOSET); // CLKH
+	mmsp2_gpio_mode(GPIOB, 6, GPIO_FN_ALT1); //, GPIOPU_NOSET); // DE
+	mmsp2_gpio_mode(GPIOB, 5, GPIO_FN_ALT1); //, GPIOPU_NOSET); // HSYNC
+	mmsp2_gpio_mode(GPIOB, 4, GPIO_FN_ALT1); //, GPIOPU_NOSET); // VSYNC
+	
 	return 0;
 }
 
 static struct mmsp2_platform_lcd gp2x_platform_lcd = 
 {
-	.max_width 	= 320,
-	.max_height = 240,
-	.init 		= gp2x_lcd_init,	
+	.width 		= 320,
+	.height 	= 240,
+	.bpp 		= 24,
+	.hsync_len 	= 30,
+	.vsync_len 	= 4,
+	.init 		= gp2x_lcd_init,
 };
 
 static struct resource gp2x_lcd_resources[] = 
 {
+	#if 0
+	/* physical addres of the fb memory */
+	[0] = {
+		.start	= FB_MEM_START, 
+		.end	= FB_MEM_START + FB_MEM_LENGTH - 1,
+		.flags	= IORESOURCE_MEM,
+	},
+	#endif
+	/* irq for the vertical sync interrupt */
 	[0] = {
 		.start	= IRQ_DISP,
 		.end	= IRQ_DISP,
@@ -43,14 +70,18 @@ static struct resource gp2x_lcd_resources[] =
 	},
 };
 
+static u64 gp2x_lcd_dma_mask = 0xffffffffUL;
+
 static struct platform_device gp2x_lcd_device = {
-	.name			= "mmsp2_lcd",
+	.name			= "mmsp2_fb",
 	.id				= -1,
 	.num_resources	= ARRAY_SIZE(gp2x_lcd_resources),
 	.resource		= gp2x_lcd_resources,
 	.dev 			= 
 	{
 		.platform_data = &gp2x_platform_lcd,
+		.dma_mask	= &gp2x_lcd_dma_mask,
+		.coherent_dma_mask = 0xffffffff,
 	},
 };
 #endif
@@ -84,7 +115,7 @@ gp2x_fixup(struct machine_desc *desc, struct tag *tags, char **cmdline, struct m
 	 * the rest is for other devices (fb,v4l,...)
 	 */
 	mi->bank[0].start = DRAM_START;
-	mi->bank[0].size =  (32 * 1024 * 1024); 
+	mi->bank[0].size =  DRAM_LENGTH;
 	mi->bank[0].node =  0;
 	mi->nr_banks = 1;
 }
@@ -100,3 +131,4 @@ MACHINE_START(GP2X, "GameparkHoldings GP2X")
 	.init_machine	= gp2x_init,
 	.fixup			= gp2x_fixup,
 MACHINE_END
+
