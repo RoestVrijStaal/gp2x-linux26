@@ -17,12 +17,31 @@ struct mmsp2_port {
 	struct uart_port	port;
 	struct timer_list	timer;
 	unsigned int		old_status;
-	int			txirq,rxirq,rtsirq;
-	int			have_rtscts:1;
 };
+
+static struct mmsp2_port mmsp2_ports[] = 
+{
+	
+	
+};
+
+#if defined(CONFIG_SERIAL_IMX_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
 
 #define SERIAL_MMSP2_MAJOR	204
 #define MINOR_START		41
+
+/* ==== interrupts ==== */
+static irqreturn_t mmsp2_rx_int(int irq, void *dev_id, struct pt_regs *regs)
+{
+	return IRQ_HANDLED;
+}
+
+static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
+{
+	return IRQ_HANDLED;
+} 
 
 /* ==== console API ==== */
 #ifdef CONFIG_SERIAL_MMSP2_CONSOLE
