@@ -124,7 +124,7 @@ gp2x_fixup(struct machine_desc *desc, struct tag *tags, char **cmdline, struct m
 MACHINE_START(GP2X, "GameparkHoldings GP2X")
 	.phys_io		= NIO_START,
 	.io_pg_offst	= ((NIO_BASE) >> 18) & 0xfffc,
-	.boot_params	= 0x00000100,
+	.boot_params	= 0x00100100,
 	.map_io			= gp2x_map_io,
 	.init_irq		= mmsp2_init_irq,
 	.timer			= &mmsp2_timer,

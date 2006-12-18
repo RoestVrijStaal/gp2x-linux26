@@ -51,6 +51,7 @@ static struct irq_chip mmsp2_main_chip = {
 	.unmask = mmsp2_main_unmask_irq,
 };
 
+/* timer interrupts handling */
 static void
 mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 			struct pt_regs *regs)
@@ -58,7 +59,7 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 	unsigned short mask;
 	
 	mask = TSTATUS;
-	irq = IRQ_TIMER0;
+	irq = IRQ_TIMER_0;
 	desc = irq_desc + irq;
 	DEBUG_IRQ("TCOUNT %d INTPEND 0x%x SRCPEND 0x%x\n", TCOUNT, INTPEND, SRCPEND);
 	while (mask) 
@@ -84,22 +85,22 @@ static void
 mmsp2_timer_ack_irq(unsigned int irq)
 {
 	DEBUG_IRQ("timer ack\n");
-	TINTEN &= ~(1 << (irq - IRQ_TIMER0)); 	
-	TSTATUS = (1 << (irq - IRQ_TIMER0)); 
+	TINTEN &= ~(1 << (irq - IRQ_TIMER_0)); 	
+	TSTATUS = (1 << (irq - IRQ_TIMER_0)); 
 }
 
 static void
 mmsp2_timer_mask_irq(unsigned int irq)
 {
 	DEBUG_IRQ("timer mask\n");
-	TINTEN &= ~(1 << (irq - IRQ_TIMER0)); 	
+	TINTEN &= ~(1 << (irq - IRQ_TIMER_0)); 	
 }
 
 static void
 mmsp2_timer_unmask_irq(unsigned int irq)
 {
 	DEBUG_IRQ("timer unmask\n");
-	TINTEN |= (1 << (irq - IRQ_TIMER0)); 	
+	TINTEN |= (1 << (irq - IRQ_TIMER_0)); 	
 }
 
 static struct irq_chip mmsp2_timer_chip = {
@@ -109,8 +110,38 @@ static struct irq_chip mmsp2_timer_chip = {
 	.unmask = mmsp2_timer_unmask_irq,
 };
 
-#define GPIO_EVT(i)             (*(volatile unsigned short *)io_p2v(0xc0001100 + 2*(i)))
-#define GPIO_INTENB(i)  (*(volatile unsigned short *)io_p2v(0xc00010e0 + 2*(i)))
+/* uart interrupts handling */
+static void
+mmsp2_uart_demux_handler(unsigned int irq, struct irqdesc *desc,
+			struct pt_regs *regs)
+{
+	
+}
+
+static void
+mmsp2_uart_ack_irq(unsigned int irq)
+{
+	DEBUG_IRQ("uart ack\n");
+}
+
+static void
+mmsp2_uart_mask_irq(unsigned int irq)
+{
+	DEBUG_IRQ("uart mask\n");
+}
+
+static void
+mmsp2_uart_unmask_irq(unsigned int irq)
+{
+	DEBUG_IRQ("uart unmask\n");
+}
+
+static struct irq_chip mmsp2_uart_chip = {
+	.name = "UART",
+	.ack = mmsp2_uart_ack_irq,
+	.mask = mmsp2_uart_mask_irq,
+	.unmask = mmsp2_uart_unmask_irq,
+};
 
 void __init
 mmsp2_init_irq(void)
@@ -129,13 +160,7 @@ mmsp2_init_irq(void)
 	/* clear tx/rx on UART */
 	UINTSTAT = 0xffff;
 	
-	#if 0
-	for(irq=0; irq<15; irq++)
-	{
-                GPIO_INTENB(irq) = 0;             /* disable all GPIO interrupts */
-                GPIO_EVT(irq)     = 0xffff;       /* clear all GPIO pending registers */
-	}
-	#endif
+	/* TODO disable all gpio interrupts */
 	
 	SRCPEND = 0xffffffff;
 	INTPEND = 0xffffffff;
@@ -160,7 +185,7 @@ mmsp2_init_irq(void)
 	}
 	/* gpio interrupts */
 	/* timer interrupts */
-	for (irq = IRQ_TIMER0; irq <= IRQ_TIMER3; irq++) 
+	for (irq = IRQ_TIMER_START; irq <= IRQ_TIMER_END; irq++) 
 	{
 		set_irq_chip(irq, &mmsp2_timer_chip);
 		set_irq_handler(irq, do_level_IRQ);
@@ -168,4 +193,11 @@ mmsp2_init_irq(void)
 	}
 	set_irq_chained_handler(IRQ_TIMER, mmsp2_timer_demux_handler);
 	/* uart interrupts */
+	for (irq = IRQ_UART_START; irq <= IRQ_UART_END; irq++) 
+	{
+		set_irq_chip(irq, &mmsp2_uart_chip);
+		set_irq_handler(irq, do_level_IRQ);
+		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
+	}
+	set_irq_chained_handler(IRQ_UART, mmsp2_uart_demux_handler);
 }

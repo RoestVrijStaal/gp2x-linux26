@@ -13,13 +13,13 @@
 #define DRIVER_NAME "mmsp2_uart"
 #define DRIVER_VERSION "0.1"
 
-struct mmsp2_port {
+struct mmsp2_uart_port {
 	struct uart_port	port;
 	struct timer_list	timer;
 	unsigned int		old_status;
 };
 
-static struct mmsp2_port mmsp2_ports[] = 
+static struct mmsp2_uart_port mmsp2_uart_ports[] = 
 {
 	
 	
@@ -46,7 +46,7 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
 /* ==== console API ==== */
 #ifdef CONFIG_SERIAL_MMSP2_CONSOLE
 
-static struct uart_driver imx_reg;
+static struct uart_driver mmsp2_uart_drv;
 static struct console mmsp2_console = {
 	.name		= "ttyMMSP2",
 /*
@@ -55,7 +55,7 @@ static struct console mmsp2_console = {
 	.setup		= imx_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
-	.data		= &mmsp2_uart_drv,
+	.data		= mmsp2_uart_drv,
 */
 };
 
@@ -68,9 +68,9 @@ static struct uart_driver mmsp2_uart_drv = {
 	.owner          = THIS_MODULE,
 	.driver_name    = DRIVER_NAME,
 	.dev_name       = "ttyMMSP2",
-	.major          = SERIAL_IMX_MAJOR,
+	.major          = SERIAL_MMSP2_MAJOR,
 	.minor          = MINOR_START,
-	.nr             = ARRAY_SIZE(imx_ports),
+	.nr             = ARRAY_SIZE(mmsp2_uart_ports),
 	.cons           = MMSP2_CONSOLE,
 };
 
@@ -100,20 +100,25 @@ static struct uart_ops mmsp2_uart_ops = {
 /* ==== platform device API ==== */
 static int mmsp2_uart_probe(struct platform_device *pdev)
 {
-	uart_add_one_port(&imx_reg, &imx_ports[dev->id].port);
+	printk("uart probe\n");
+#if 0
+	uart_add_one_port(&mmsp2_reg, &mmsp2_ports[dev->id].port);
 	platform_set_drvdata(dev, &imx_ports[dev->id]);
+#endif
 	return 0;
 
 }
 
 static int mmsp2_uart_remove(struct platform_device *pdev)
 {
-	struct mmsp2_port *sport = platform_get_drvdata(dev);
+	struct mmsp2_uart_port *mport = platform_get_drvdata(pdev);
 
-	platform_set_drvdata(dev, NULL);
+	platform_set_drvdata(pdev, NULL);
 
-	if (sport)
+#if 0
+	if (mport)
 		uart_remove_one_port(&imx_reg, &sport->port);
+#endif
 	return 0;
 }
 

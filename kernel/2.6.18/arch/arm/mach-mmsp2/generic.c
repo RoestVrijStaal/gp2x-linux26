@@ -141,6 +141,8 @@ static void __init mmsp2_show_clk(void)
 }
 
 /* dynamically mapped devices */
+/* FIXME do we need the first resource? */
+#ifdef CONFIG_MMC_MMSP2
 static struct resource mmsp2_mmcsd_resources[] = 
 {
 	[0] = {
@@ -156,11 +158,140 @@ static struct resource mmsp2_mmcsd_resources[] =
 };
 
 static struct platform_device mmsp2_mmcsd_device = {
-	.name		= "mmsp2_mmcsd",
-	.id		= -1,
+	.name			= "mmsp2_mmcsd",
+	.id				= -1,
 	.num_resources	= ARRAY_SIZE(mmsp2_mmcsd_resources),
-	.resource	= mmsp2_mmcsd_resources,
+	.resource		= mmsp2_mmcsd_resources,
 };
+#endif
+
+#ifdef CONFIG_SERIAL_MMSP2
+static struct resource mmsp2_uart0_resources[] = 
+{
+	[0] = {
+		.start	= IRQ_UART_RXD0,
+		.end	= IRQ_UART_RXD0,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start	= IRQ_UART_TXD0,
+		.end	= IRQ_UART_TXD0,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[2] = {
+		.start	= IRQ_UART_ERROR0,
+		.end	= IRQ_UART_ERROR0,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[3] = {
+		.start	= IRQ_UART_MODEM0,
+		.end	= IRQ_UART_MODEM0,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device mmsp2_uart0_device = {
+	.name			= "mmsp2_uart",
+	.id				= 0,
+	.num_resources	= ARRAY_SIZE(mmsp2_uart0_resources),
+	.resource		= mmsp2_uart0_resources,
+};
+
+static struct resource mmsp2_uart1_resources[] = 
+{
+	[0] = {
+		.start	= IRQ_UART_RXD1,
+		.end	= IRQ_UART_RXD1,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start	= IRQ_UART_TXD1,
+		.end	= IRQ_UART_TXD1,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[2] = {
+		.start	= IRQ_UART_ERROR1,
+		.end	= IRQ_UART_ERROR1,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[3] = {
+		.start	= IRQ_UART_MODEM1,
+		.end	= IRQ_UART_MODEM1,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device mmsp2_uart1_device = {
+	.name			= "mmsp2_uart",
+	.id				= 1,
+	.num_resources	= ARRAY_SIZE(mmsp2_uart1_resources),
+	.resource		= mmsp2_uart1_resources,
+};
+
+static struct resource mmsp2_uart2_resources[] = 
+{
+	[0] = {
+		.start	= IRQ_UART_RXD2,
+		.end	= IRQ_UART_RXD2,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start	= IRQ_UART_TXD2,
+		.end	= IRQ_UART_TXD2,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[2] = {
+		.start	= IRQ_UART_ERROR2,
+		.end	= IRQ_UART_ERROR2,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[3] = {
+		.start	= IRQ_UART_MODEM2,
+		.end	= IRQ_UART_MODEM2,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device mmsp2_uart2_device = {
+	.name			= "mmsp2_uart",
+	.id				= 2,
+	.num_resources	= ARRAY_SIZE(mmsp2_uart2_resources),
+	.resource		= mmsp2_uart2_resources,
+};
+
+static struct resource mmsp2_uart3_resources[] = 
+{
+	[0] = {
+		.start	= IRQ_UART_RXD3,
+		.end	= IRQ_UART_RXD3,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[1] = {
+		.start	= IRQ_UART_TXD3,
+		.end	= IRQ_UART_TXD3,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[2] = {
+		.start	= IRQ_UART_ERROR3,
+		.end	= IRQ_UART_ERROR3,
+		.flags	= IORESOURCE_IRQ,
+	},
+	[3] = {
+		.start	= IRQ_UART_MODEM3,
+		.end	= IRQ_UART_MODEM3,
+		.flags	= IORESOURCE_IRQ,
+	},
+};
+
+static struct platform_device mmsp2_uart3_device = {
+	.name			= "mmsp2_uart",
+	.id				= 3,
+	.num_resources	= ARRAY_SIZE(mmsp2_uart3_resources),
+	.resource		= mmsp2_uart3_resources,
+};
+
+#endif
+
 
 static struct resource mmsp2_dma_resources[] = 
 {
@@ -179,7 +310,15 @@ static struct platform_device mmsp2_dma_device = {
 };
 
 static struct platform_device *mmsp2_devices[] __initdata = {
+#ifdef CONFIG_MMC_MMSP2
 	&mmsp2_mmcsd_device,
+#endif
+#ifdef CONFIG_SERIAL_MMSP2
+	&mmsp2_uart0_device,
+	&mmsp2_uart1_device,
+	&mmsp2_uart2_device,
+	&mmsp2_uart3_device,
+#endif
 	&mmsp2_dma_device,
 };
 
