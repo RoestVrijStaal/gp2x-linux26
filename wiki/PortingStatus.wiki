@@ -1,2 +1,3 @@
 #summary Describes the porting status of the console devices.
 
+|| Feature || Status
