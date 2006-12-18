@@ -68,7 +68,7 @@ static void __init mmsp2_timer_init(void)
 	/* diable all timers */
 	TCONTROL &= ~(TIMER_EN);        
 	/* Make irqs happen for the system timer */
-	setup_irq(IRQ_TIMER0, &mmsp2_timer_irq);
+	setup_irq(IRQ_TIMER_0, &mmsp2_timer_irq);
 	/* to reset the TCOUNT register we have to 
 	 * write anything wait a cycle and then write 0 
 	 */
