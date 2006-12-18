@@ -1,7 +1,7 @@
 #summary Describes the porting status of the console devices.
 
 || Feature || Status ||
-|| (ARM920T) ||	100% ||
+|| CPU (ARM920T) ||	100% ||
 || CPU (ARM940T) || 0% ||	
 || MMC/SD || 50% ||	
 || NAND Flash || 70% ||
