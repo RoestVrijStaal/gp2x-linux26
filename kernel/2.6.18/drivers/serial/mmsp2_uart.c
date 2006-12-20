@@ -17,13 +17,10 @@ struct mmsp2_uart_port {
 	struct uart_port	port;
 	struct timer_list	timer;
 	unsigned int		old_status;
+	int					txirq, rxirq, rtsirq;
 };
 
-static struct mmsp2_uart_port mmsp2_uart_ports[] = 
-{
-	
-	
-};
+
 
 #if defined(CONFIG_SERIAL_IMX_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
@@ -64,15 +61,7 @@ static struct console mmsp2_console = {
 #define MMSP2_CONSOLE	NULL
 #endif
 
-static struct uart_driver mmsp2_uart_drv = {
-	.owner          = THIS_MODULE,
-	.driver_name    = DRIVER_NAME,
-	.dev_name       = "ttyMMSP2",
-	.major          = SERIAL_MMSP2_MAJOR,
-	.minor          = MINOR_START,
-	.nr             = ARRAY_SIZE(mmsp2_uart_ports),
-	.cons           = MMSP2_CONSOLE,
-};
+
 
 static struct uart_ops mmsp2_uart_ops = {
 /*
@@ -96,17 +85,88 @@ static struct uart_ops mmsp2_uart_ops = {
 */
 };
 
+static struct mmsp2_uart_port mmsp2_uart_ports[] = 
+{
+	[0] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			/*.membase	= (void *)IMX_UART1_BASE,
+			.mapbase	= IMX_UART1_BASE, /* FIXME */
+			/*.irq		= UART1_MINT_RX, */
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+	},
+	[1] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			/*.membase	= (void *)IMX_UART1_BASE,
+			.mapbase	= IMX_UART1_BASE, /* FIXME */
+			/*.irq		= UART1_MINT_RX, */
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+	},	
+	[2] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			/*.membase	= (void *)IMX_UART1_BASE,
+			.mapbase	= IMX_UART1_BASE, /* FIXME */
+			/*.irq		= UART1_MINT_RX, */
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+	},
+	[3] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			/*.membase	= (void *)IMX_UART1_BASE,
+			.mapbase	= IMX_UART1_BASE, /* FIXME */
+			/*.irq		= UART1_MINT_RX, */
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+	},
+};
+
+static struct uart_driver mmsp2_uart_drv = {
+	.owner          = THIS_MODULE,
+	.driver_name    = DRIVER_NAME,
+	.dev_name       = "ttyMMSP2",
+	.major          = SERIAL_MMSP2_MAJOR,
+	.minor          = MINOR_START,
+	.nr             = ARRAY_SIZE(mmsp2_uart_ports),
+	.cons           = MMSP2_CONSOLE,
+};
 
 /* ==== platform device API ==== */
 static int mmsp2_uart_probe(struct platform_device *pdev)
 {
-	printk("uart probe\n");
-#if 0
-	uart_add_one_port(&mmsp2_reg, &mmsp2_ports[dev->id].port);
-	platform_set_drvdata(dev, &imx_ports[dev->id]);
-#endif
+	printk("uart probe with id %d\n", pdev->id);
+	uart_add_one_port(&mmsp2_uart_drv, &mmsp2_uart_ports[pdev->id].port);
+	platform_set_drvdata(pdev, &mmsp2_uart_ports[pdev->id]);
+	
 	return 0;
-
 }
 
 static int mmsp2_uart_remove(struct platform_device *pdev)
@@ -115,10 +175,8 @@ static int mmsp2_uart_remove(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, NULL);
 
-#if 0
 	if (mport)
-		uart_remove_one_port(&imx_reg, &sport->port);
-#endif
+		uart_remove_one_port(&mmsp2_uart_drv, &mport->port);
 	return 0;
 }
 
@@ -135,7 +193,17 @@ static struct platform_driver mmsp2_uart_driver = {
 /* ==== module API ==== */
 static int __init mmsp2_uart_init(void)
 {
-	return platform_driver_register(&mmsp2_uart_driver);
+	int ret = 0;
+	
+	printk(KERN_INFO "[MMSP2] Serial driver\n");
+	ret = uart_register_driver(&mmsp2_uart_drv);
+	if (ret)
+		return ret;
+	ret = platform_driver_register(&mmsp2_uart_driver);
+	if (ret)
+		uart_unregister_driver(&mmsp2_uart_drv);
+	
+	return ret;
 }
 
 static void __exit mmsp2_uart_exit(void)

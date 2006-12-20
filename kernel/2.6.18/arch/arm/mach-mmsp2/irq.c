@@ -84,23 +84,22 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 static void
 mmsp2_timer_ack_irq(unsigned int irq)
 {
-	DEBUG_IRQ("timer ack\n");
-	TINTEN &= ~(1 << (irq - IRQ_TIMER_0)); 	
-	TSTATUS = (1 << (irq - IRQ_TIMER_0)); 
+	DEBUG_IRQ("timer ack %d\n", irq);
+	TSTATUS = (1 << (irq - IRQ_TIMER_0));
 }
 
 static void
 mmsp2_timer_mask_irq(unsigned int irq)
 {
-	DEBUG_IRQ("timer mask\n");
-	TINTEN &= ~(1 << (irq - IRQ_TIMER_0)); 	
+	DEBUG_IRQ("timer mask %d\n", irq);
+	TINTEN &= ~(1 << (irq - IRQ_TIMER_0));
 }
 
 static void
 mmsp2_timer_unmask_irq(unsigned int irq)
 {
-	DEBUG_IRQ("timer unmask\n");
-	TINTEN |= (1 << (irq - IRQ_TIMER_0)); 	
+	DEBUG_IRQ("timer unmask %d\n", irq);
+	TINTEN |= (1 << (irq - IRQ_TIMER_0));
 }
 
 static struct irq_chip mmsp2_timer_chip = {
@@ -115,25 +114,94 @@ static void
 mmsp2_uart_demux_handler(unsigned int irq, struct irqdesc *desc,
 			struct pt_regs *regs)
 {
+	unsigned short mask;
 	
+	mask = INTSTATREG;
+	irq = IRQ_UART_TXD0;
+	desc = irq_desc + irq;
+	DEBUG_IRQ("INTSTAT 0x%x INTPEND 0x%x SRCPEND 0x%x\n", mask, INTPEND, SRCPEND);
+	
+	while (mask) 
+	{
+		if (mask & 1) 
+		{
+			DEBUG_IRQ("handling irq %d\n", irq);
+			desc_handle_irq(irq, desc, regs);
+		}
+		irq++;
+		desc++;
+		mask >>= 1;
+	}
+	/* do an aknownledge of the interrupt */
+	/* source pending flag clear */
+	SRCPEND = (1 << IRQ_UART);          
+	/* interrupt pending flag clear */
+	INTPEND = (1 << IRQ_UART);          
 }
 
 static void
 mmsp2_uart_ack_irq(unsigned int irq)
 {
-	DEBUG_IRQ("uart ack\n");
+	DEBUG_IRQ("uart ack %d\n", irq);
+	INTSTATREG = (1 << (irq - IRQ_UART_TXD0));
 }
 
 static void
 mmsp2_uart_mask_irq(unsigned int irq)
 {
-	DEBUG_IRQ("uart mask\n");
+	unsigned short int port, type;
+	
+	port = irq >> 2;
+	type = irq & 0x3;
+	DEBUG_IRQ("uart mask %d %d %d\n", irq, port, type);
+	switch(type)
+	{
+		/* tx interrupt */
+		case 0:
+		UCONx(port) &= ~0xC;
+		break;
+		/* rx interrupt */
+		case 1:
+		UCONx(port)&= ~0x3;
+		break;
+		/* error interrupt */
+		case 2:
+		UCONx(port) &= ~0x40;
+		break;
+		/* modem interrupt */
+		case 3:
+		UMODx(port) &= ~0x8; 
+		break;	
+	}
 }
 
 static void
 mmsp2_uart_unmask_irq(unsigned int irq)
 {
-	DEBUG_IRQ("uart unmask\n");
+	unsigned short int port, type;
+	
+	port = irq >> 2;
+	type = irq & 0x3;
+	DEBUG_IRQ("uart unmask %d %d %d\n", irq, port, type);
+	switch(type)
+	{
+		/* tx interrupt */
+		case 0:
+		UCONx(port) |= 0xC;
+		break;
+		/* rx interrupt */
+		case 1:
+		UCONx(port) |= 0x3;
+		break;
+		/* error interrupt */
+		case 2:
+		UCONx(port) |= 0x40;
+		break;
+		/* modem interrupt */
+		case 3:
+		UMODx(port) |= 0x8; 
+		break;	
+	}
 }
 
 static struct irq_chip mmsp2_uart_chip = {
@@ -152,13 +220,12 @@ mmsp2_init_irq(void)
 	INTMASK = 0xffffffff;
 	/* set IRQ mode to all interrupts */
 	INTMOD = 0x00000000;
-	
 	/* disable rotation */
 	IPRIORITY = 0x0;        
 	/* clear status on all timers */
 	TSTATUS = 0xffff;          
-	/* clear tx/rx on UART */
-	UINTSTAT = 0xffff;
+	/* clear status on UART */
+	INTSTATREG = 0xffff;
 	
 	/* TODO disable all gpio interrupts */
 	

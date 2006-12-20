@@ -44,7 +44,11 @@
 #define WDT_EN			(1 << 1)
 
 /* UART */
-#define UINTSTAT		__REGW(0xc0001280)
+#define INTSTATREG 		__REGW(0xc0001280)
+/* UART control Register (1202, 1222, 1242, 1262) */ 
+#define UCONx(x)		__REGW(0xc0001202 + (0x20 * x)) 
+/* Modem control Register (1206, 1226, 1246, 1266) */ 
+#define UMODx(x)		__REGW(0xc0001206 + (0x20 * x)) 
 
 /* GPIO
  * 189 pin for GPIO divided in 15 groups:

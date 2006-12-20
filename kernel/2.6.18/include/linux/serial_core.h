@@ -132,6 +132,9 @@
 
 #define PORT_S3C2412	73
 
+/* MagicEyes MMSP2 SoC */
+#define PORT_MMSP2	74
+
 
 #ifdef __KERNEL__
 
