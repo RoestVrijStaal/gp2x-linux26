@@ -1,4 +1,4 @@
-#summary Describes the porting status of the console devices.
+#summary Describes the porting status of the devices.
 
 || Feature || Status ||
 || CPU (ARM920T) ||	100% ||
