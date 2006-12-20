@@ -43,46 +43,100 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
 /* ==== console API ==== */
 #ifdef CONFIG_SERIAL_MMSP2_CONSOLE
 
+static void mmsp2_console_putchar(struct uart_port *port, int ch)
+{
+	
+}
+
+/*
+ * Interrupts are disabled on entering
+ */
+static void
+mmsp2_console_write(struct console *co, const char *s, unsigned int count)
+{
+
+}
+
+/*
+ * If the port was already initialised (eg, by a boot loader),
+ * try to determine the current setup.
+ */
+static void __init
+mmsp2_console_get_options(struct imx_port *sport, int *baud,
+			   int *parity, int *bits)
+{
+
+}
+
+static int __init
+mmsp2_console_setup(struct console *co, char *options)
+{
+	
+}
+
 static struct uart_driver mmsp2_uart_drv;
 static struct console mmsp2_console = {
 	.name		= "ttyMMSP2",
-/*
-	.write		= imx_console_write,
+
+	.write		= mmsp2_console_write,
 	.device		= uart_console_device,
-	.setup		= imx_console_setup,
+	.setup		= mmsp2_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
 	.data		= mmsp2_uart_drv,
-*/
 };
+
+static int __init mmsp2_console_init(void)
+{
+	/* imx_init_ports(); */
+	register_console(&mmsp2_console);
+	return 0;
+}
+
+console_initcall(mmsp2_console_init);
 
 #define MMSP2_CONSOLE	&mmsp2_console
 #else
 #define MMSP2_CONSOLE	NULL
 #endif
 
+/* ==== UART API ==== */
 
-
-static struct uart_ops mmsp2_uart_ops = {
 /*
-	.pm		= s3c24xx_serial_pm,
-	.tx_empty	= s3c24xx_serial_tx_empty,
-	.get_mctrl	= s3c24xx_serial_get_mctrl,
-	.set_mctrl	= s3c24xx_serial_set_mctrl,
-	.stop_tx	= s3c24xx_serial_stop_tx,
-	.start_tx	= s3c24xx_serial_start_tx,
-	.stop_rx	= s3c24xx_serial_stop_rx,
-	.enable_ms	= s3c24xx_serial_enable_ms,
-	.break_ctl	= s3c24xx_serial_break_ctl,
-	.startup	= s3c24xx_serial_startup,
-	.shutdown	= s3c24xx_serial_shutdown,
-	.set_termios	= s3c24xx_serial_set_termios,
-	.type		= s3c24xx_serial_type,
-	.release_port	= s3c24xx_serial_release_port,
-	.request_port	= s3c24xx_serial_request_port,
-	.config_port	= s3c24xx_serial_config_port,
-	.verify_port	= s3c24xx_serial_verify_port,
-*/
+ * power management
+ */
+static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
+			      unsigned int old)
+{
+	
+}
+
+
+
+static struct uart_ops mmsp2_uart_ops = 
+{
+#if 0
+	.tx_empty		= mmsp2_uart_tx_empty,
+	.set_mctrl		= mmsp2_uart_set_mctrl,
+	.get_mctrl		= mmsp2_uart_get_mctrl,
+	.stop_tx		= mmsp2_uart_stop_tx,
+	.start_tx		= mmsp2_uart_start_tx,
+	
+	.stop_rx		= mmsp2_uart_stop_rx,
+	.enable_ms		= mmsp2_uart_enable_ms,
+	.break_ctl		= mmsp2_uart_break_ctl,
+	.startup		= mmsp2_uart_startup,
+	.shutdown		= mmsp2_uart_shutdown,
+	.set_termios	= mmsp2_uart_set_termios,
+#endif
+	.pm				= mmsp2_uart_pm,
+#if 0
+	.type			= mmsp2_uart_type,
+	.release_port	= mmsp2_uart_release_port,
+	.request_port	= mmsp2_uart_request_port,
+	.config_port	= mmsp2_uart_config_port,
+	.verify_port	= mmsp2_uart_verify_port,
+#endif
 };
 
 static struct mmsp2_uart_port mmsp2_uart_ports[] = 
