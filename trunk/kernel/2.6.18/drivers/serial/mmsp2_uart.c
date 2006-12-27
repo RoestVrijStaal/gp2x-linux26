@@ -45,7 +45,7 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
 
 static void mmsp2_console_putchar(struct uart_port *port, int ch)
 {
-	
+
 }
 
 /*
@@ -103,6 +103,46 @@ console_initcall(mmsp2_console_init);
 /* ==== UART API ==== */
 
 /*
+ * check if the transfer buffer register is empty
+ */
+static unsigned int
+mmsp2_uart_tx_empty(struct uart_port *port)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	return (TRSTATUS(mport->port.membase) & TRSTATUS_TRANSMITTER_EMPTY ? TIOCSER_TEMT:0);
+}
+
+static void 
+mmsp2_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	unsigned short int	mcon = MCONx(mport->port.membase);
+
+	if(mctrl & TIOCM_RTS)
+		mcon |= MCON_RTS_ACTIVE; 
+	else
+		mcon &= ~MCON_RTS_ACTIVE; 
+        
+	if(mctrl & TIOCM_DTR)
+		mcon |= MCON_DTR_ACTIVE;
+	else
+		mcon &= ~MCON_DTR_ACTIVE;
+
+	MCONx(mport->port.membase) = mcon;
+}
+
+static unsigned int 
+mmsp2_uart_get_mctrl(struct uart_port *port)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	unsigned short int	mstatus = MSTATUSx(mport->port.membase);
+	unsigned int tmp = 0;
+	
+	/* TODO */
+	
+	return tmp;
+}
+/*
  * power management
  */
 static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
@@ -115,10 +155,10 @@ static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
 
 static struct uart_ops mmsp2_uart_ops = 
 {
-#if 0
 	.tx_empty		= mmsp2_uart_tx_empty,
 	.set_mctrl		= mmsp2_uart_set_mctrl,
 	.get_mctrl		= mmsp2_uart_get_mctrl,
+#if 0
 	.stop_tx		= mmsp2_uart_stop_tx,
 	.start_tx		= mmsp2_uart_start_tx,
 	
