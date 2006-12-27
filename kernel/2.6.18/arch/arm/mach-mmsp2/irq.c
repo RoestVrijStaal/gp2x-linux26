@@ -170,7 +170,7 @@ mmsp2_uart_mask_irq(unsigned int irq)
 		break;
 		/* modem interrupt */
 		case 3:
-		UMODx(port) &= ~0x8; 
+		UMODx(port) &= ~MCON_MODEM_INT; 
 		break;	
 	}
 }
@@ -199,7 +199,7 @@ mmsp2_uart_unmask_irq(unsigned int irq)
 		break;
 		/* modem interrupt */
 		case 3:
-		UMODx(port) |= 0x8; 
+		UMODx(port) |= MCON_MODEM_INT; 
 		break;	
 	}
 }
