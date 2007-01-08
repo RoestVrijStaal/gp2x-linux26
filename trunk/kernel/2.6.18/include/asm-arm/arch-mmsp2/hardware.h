@@ -74,9 +74,9 @@
 
 /* Normal IO space */
 /*******************/
-#define NIO_START	0xc0000000
-#define NIO_SIZE	0x00010000
-#define NIO_BASE	io_p2v(NIO_START)
+#define MMSP2_NIO_START	0xc0000000
+#define MMSP2_NIO_SIZE	0x00010000
+#define MMSP2_NIO_BASE	io_p2v(MMSP2_NIO_START)
 
 /* UART */
 /* DMA controller, start: end: */
