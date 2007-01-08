@@ -12,6 +12,7 @@
 #include <asm/arch/uart.h>
 
 #define DRIVER_NAME "mmsp2_uart"
+#define DEVICE_NAME "ttySM"
 #define DRIVER_VERSION "0.1"
 
 #define UDS printk("%s start\n", __FUNCTION__);
@@ -103,7 +104,7 @@ mmsp2_console_setup(struct console *co, char *options)
 
 static struct uart_driver mmsp2_uart_drv;
 static struct console mmsp2_console = {
-	.name		= "ttyMMSP2",
+	.name		= DEVICE_NAME,
 	.write		= mmsp2_console_write,
 	.device		= uart_console_device,
 	.setup		= mmsp2_console_setup,
@@ -269,7 +270,7 @@ static struct uart_ops mmsp2_uart_ops =
 static struct uart_driver mmsp2_uart_drv = {
 	.owner          = THIS_MODULE,
 	.driver_name    = DRIVER_NAME,
-	.dev_name       = "ttyMMSP2",
+	.dev_name       = DEVICE_NAME,
 	.major          = SERIAL_MMSP2_MAJOR,
 	.minor          = MINOR_START,
 	.nr             = NR_PORTS,
