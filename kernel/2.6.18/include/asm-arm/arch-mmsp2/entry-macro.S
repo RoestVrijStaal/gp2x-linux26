@@ -4,7 +4,7 @@
 .endm
 
 .macro  get_irqnr_and_base, irqnr, irqstat, base, tmp
-		mov     r4, #NIO_BASE	@ virtual address of IRQ registers
+		mov     r4, #MMSP2_NIO_BASE	@ virtual address of IRQ registers
 		orr     r4, r4, #0x00000800
 		ldr     \irqnr, [r4, #0x8]      @ read INTMSK
 		ldr     \irqstat, [r4, #0x10]   @ read INTPND

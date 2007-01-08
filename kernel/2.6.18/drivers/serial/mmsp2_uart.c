@@ -9,9 +9,14 @@
 #include <linux/serial.h>
 
 #include <asm/arch/hardware.h>
+#include <asm/arch/uart.h>
 
 #define DRIVER_NAME "mmsp2_uart"
 #define DRIVER_VERSION "0.1"
+
+#define UDS printk("%s start\n", __FUNCTION__);
+#define UDE printk("%s end\n", __FUNCTION__);
+
 
 struct mmsp2_uart_port {
 	struct uart_port	port;
@@ -20,9 +25,9 @@ struct mmsp2_uart_port {
 	int					txirq, rxirq, rtsirq;
 };
 
+static struct mmsp2_uart_port mmsp2_uart_ports[NR_PORTS];
 
-
-#if defined(CONFIG_SERIAL_IMX_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#if defined(CONFIG_SERIAL_MMSP2_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
 #endif
 
@@ -45,7 +50,11 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
 
 static void mmsp2_console_putchar(struct uart_port *port, int ch)
 {
-
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	
+	while((FSTATUSx(mport->port.mapbase) & FSTATUS_TX_FIFO_FULL))
+		barrier();
+	THBx(mport->port.mapbase) = ch;
 }
 
 /*
@@ -54,7 +63,8 @@ static void mmsp2_console_putchar(struct uart_port *port, int ch)
 static void
 mmsp2_console_write(struct console *co, const char *s, unsigned int count)
 {
-
+	struct mmsp2_uart_port *mport = &mmsp2_uart_ports[co->index];
+	uart_console_write(&mport->port, s, count, mmsp2_console_putchar);
 }
 
 /*
@@ -62,7 +72,7 @@ mmsp2_console_write(struct console *co, const char *s, unsigned int count)
  * try to determine the current setup.
  */
 static void __init
-mmsp2_console_get_options(struct imx_port *sport, int *baud,
+mmsp2_console_get_options(struct mmsp2_uart_port *sport, int *baud,
 			   int *parity, int *bits)
 {
 
@@ -71,24 +81,41 @@ mmsp2_console_get_options(struct imx_port *sport, int *baud,
 static int __init
 mmsp2_console_setup(struct console *co, char *options)
 {
+	struct mmsp2_uart_port *mport;
+	int baud = 115200;
+	int bits = 8;
+	int parity = 'n';
+	int flow = 'n';
+
+	printk("console setup!!!\n");
+	if (co->index == -1 || co->index >= NR_PORTS)
+		co->index = 0;
 	
+	mport = &mmsp2_uart_ports[co->index];
+	if (options)
+		uart_parse_options(options, &baud, &parity, &bits, &flow);
+#if 0	
+	else
+		mmsp2_console_get_options(port, &baud, &parity, &bits);
+#endif
+	return uart_set_options(&mport->port, co, baud, parity, bits, flow);
 }
 
 static struct uart_driver mmsp2_uart_drv;
 static struct console mmsp2_console = {
 	.name		= "ttyMMSP2",
-
 	.write		= mmsp2_console_write,
 	.device		= uart_console_device,
 	.setup		= mmsp2_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
-	.data		= mmsp2_uart_drv,
+	.data		= &mmsp2_uart_drv,
 };
 
 static int __init mmsp2_console_init(void)
 {
 	/* imx_init_ports(); */
+	printk("console init!!!\n");
 	register_console(&mmsp2_console);
 	return 0;
 }
@@ -98,7 +125,7 @@ console_initcall(mmsp2_console_init);
 #define MMSP2_CONSOLE	&mmsp2_console
 #else
 #define MMSP2_CONSOLE	NULL
-#endif
+#endif /* CONFIG_SERIAL_MMSP2_CONSOLE
 
 /* ==== UART API ==== */
 
@@ -109,15 +136,21 @@ static unsigned int
 mmsp2_uart_tx_empty(struct uart_port *port)
 {
 	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
-	return (TRSTATUS(mport->port.membase) & TRSTATUS_TRANSMITTER_EMPTY ? TIOCSER_TEMT:0);
+	
+	UDS
+	return (TRSTATUSx(mport->port.mapbase) & TRSTATUS_TRANSMITTER_EMPTY ? TIOCSER_TEMT:0);
 }
 
 static void 
 mmsp2_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
 	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
-	unsigned short int	mcon = MCONx(mport->port.membase);
+	unsigned short int	mcon;
+	
+	UDS
+	mcon = MCONx(mport->port.mapbase);
 
+	
 	if(mctrl & TIOCM_RTS)
 		mcon |= MCON_RTS_ACTIVE; 
 	else
@@ -128,18 +161,28 @@ mmsp2_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 	else
 		mcon &= ~MCON_DTR_ACTIVE;
 
-	MCONx(mport->port.membase) = mcon;
+	MCONx(mport->port.mapbase) = mcon;
+	UDE
 }
 
 static unsigned int 
 mmsp2_uart_get_mctrl(struct uart_port *port)
 {
 	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
-	unsigned short int	mstatus = MSTATUSx(mport->port.membase);
+	unsigned short int	mstatus;
 	unsigned int tmp = 0;
-	
-	/* TODO */
-	
+
+	UDS
+	mstatus = MSTATUSx(mport->port.mapbase);
+	if(mstatus & MSTATUS_DSR)
+		tmp |= TIOCM_DSR;
+	if(mstatus & MSTATUS_CTS)
+		tmp |= TIOCM_CTS;
+	if(mstatus & MSTATUS_RI)
+		tmp |= TIOCM_RI;
+	if(mstatus & MSTATUS_DCD)
+		tmp |= TIOCM_CAR;
+	UDE
 	return tmp;
 }
 /*
@@ -151,7 +194,50 @@ static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
 	
 }
 
+static int mmsp2_uart_startup(struct uart_port *port)
+{
+	
+}
 
+static const char *mmsp2_uart_type(struct uart_port *port)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+
+	return mport->port.type == PORT_MMSP2 ? "MMSP2" : NULL;
+}
+
+/*
+ * Release the memory region(s) being used by 'port'.
+ */
+static void mmsp2_uart_release_port(struct uart_port *port)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+
+	release_mem_region(mport->port.mapbase, MMSP2_UART_SIZE);
+}
+
+/*
+ * Request the memory region(s) being used by 'port'.
+ */
+static int mmsp2_uart_request_port(struct uart_port *port)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+
+	return request_mem_region(mport->port.mapbase, MMSP2_UART_SIZE,
+			"mmsp2-uart") != NULL ? 0 : -EBUSY;
+}
+
+/*
+ * Configure/autoconfigure the port.
+ */
+static void mmsp2_uart_config_port(struct uart_port *port, int flags)
+{
+	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+
+	if (flags & UART_CONFIG_TYPE &&
+	    mmsp2_uart_request_port(&mport->port) == 0)
+		mport->port.type = PORT_MMSP2;
+}
 
 static struct uart_ops mmsp2_uart_ops = 
 {
@@ -170,78 +256,15 @@ static struct uart_ops mmsp2_uart_ops =
 	.set_termios	= mmsp2_uart_set_termios,
 #endif
 	.pm				= mmsp2_uart_pm,
-#if 0
 	.type			= mmsp2_uart_type,
 	.release_port	= mmsp2_uart_release_port,
 	.request_port	= mmsp2_uart_request_port,
 	.config_port	= mmsp2_uart_config_port,
+#if 0
 	.verify_port	= mmsp2_uart_verify_port,
 #endif
 };
 
-static struct mmsp2_uart_port mmsp2_uart_ports[] = 
-{
-	[0] =  
-	{
-		.port	= {
-			.type		= PORT_MMSP2,
-			.iotype		= UPIO_MEM,
-			/*.membase	= (void *)IMX_UART1_BASE,
-			.mapbase	= IMX_UART1_BASE, /* FIXME */
-			/*.irq		= UART1_MINT_RX, */
-			.uartclk	= 16000000,
-			.fifosize	= 16,
-			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
-			.line		= 0,
-		},
-	},
-	[1] =  
-	{
-		.port	= {
-			.type		= PORT_MMSP2,
-			.iotype		= UPIO_MEM,
-			/*.membase	= (void *)IMX_UART1_BASE,
-			.mapbase	= IMX_UART1_BASE, /* FIXME */
-			/*.irq		= UART1_MINT_RX, */
-			.uartclk	= 16000000,
-			.fifosize	= 16,
-			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
-			.line		= 0,
-		},
-	},	
-	[2] =  
-	{
-		.port	= {
-			.type		= PORT_MMSP2,
-			.iotype		= UPIO_MEM,
-			/*.membase	= (void *)IMX_UART1_BASE,
-			.mapbase	= IMX_UART1_BASE, /* FIXME */
-			/*.irq		= UART1_MINT_RX, */
-			.uartclk	= 16000000,
-			.fifosize	= 16,
-			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
-			.line		= 0,
-		},
-	},
-	[3] =  
-	{
-		.port	= {
-			.type		= PORT_MMSP2,
-			.iotype		= UPIO_MEM,
-			/*.membase	= (void *)IMX_UART1_BASE,
-			.mapbase	= IMX_UART1_BASE, /* FIXME */
-			/*.irq		= UART1_MINT_RX, */
-			.uartclk	= 16000000,
-			.fifosize	= 16,
-			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
-			.line		= 0,
-		},
-	},
-};
 
 static struct uart_driver mmsp2_uart_drv = {
 	.owner          = THIS_MODULE,
@@ -249,17 +272,44 @@ static struct uart_driver mmsp2_uart_drv = {
 	.dev_name       = "ttyMMSP2",
 	.major          = SERIAL_MMSP2_MAJOR,
 	.minor          = MINOR_START,
-	.nr             = ARRAY_SIZE(mmsp2_uart_ports),
+	.nr             = NR_PORTS,
 	.cons           = MMSP2_CONSOLE,
 };
 
 /* ==== platform device API ==== */
 static int mmsp2_uart_probe(struct platform_device *pdev)
 {
-	printk("uart probe with id %d\n", pdev->id);
-	uart_add_one_port(&mmsp2_uart_drv, &mmsp2_uart_ports[pdev->id].port);
-	platform_set_drvdata(pdev, &mmsp2_uart_ports[pdev->id]);
+	struct resource *res;
+	struct mmsp2_uart_port *mport;
 	
+	printk("uart probe with id %d\n", pdev->id);
+	 
+	mport = &mmsp2_uart_ports[pdev->id];
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (res == NULL) {
+		printk(KERN_ERR "failed to find memory resource for uart\n");
+		return -EINVAL;
+	}
+	/* mport->port.membase = (void *)res->start;  FIXME */
+	mport->port.mapbase = res->start;
+	
+	mport->port.irq = mport->rxirq = platform_get_irq(pdev, 0);
+	mport->txirq = platform_get_irq(pdev, 1);
+	/* TODO move the below to startup function */
+	/* common values */
+	mport->port.type = PORT_MMSP2;
+	mport->port.iotype = UPIO_MEM;
+	mport->port.uartclk	= 16000000;
+	mport->port.fifosize = 16;
+	mport->port.flags = UPF_BOOT_AUTOCONF;
+	mport->port.ops = &mmsp2_uart_ops;
+	mport->port.line = pdev->id;
+	
+	/* register the interrupt hanlders */
+	uart_add_one_port(&mmsp2_uart_drv, &mport->port);
+	platform_set_drvdata(pdev, mport);
+	
+	printk("exit\n");
 	return 0;
 }
 

@@ -188,6 +188,11 @@ static struct resource mmsp2_uart0_resources[] =
 		.end	= IRQ_UART_MODEM0,
 		.flags	= IORESOURCE_IRQ,
 	},
+	[4] = {
+		.start	= MMSP2_UART_STARTx(0),
+		.end	= MMSP2_UART_ENDx(0),
+		.flags	= IORESOURCE_MEM,
+	},
 };
 
 static struct platform_device mmsp2_uart0_device = {
@@ -218,6 +223,11 @@ static struct resource mmsp2_uart1_resources[] =
 		.start	= IRQ_UART_MODEM1,
 		.end	= IRQ_UART_MODEM1,
 		.flags	= IORESOURCE_IRQ,
+	},
+	[4] = {
+		.start	= MMSP2_UART_STARTx(1),
+		.end	= MMSP2_UART_ENDx(1),
+		.flags	= IORESOURCE_MEM,
 	},
 };
 
@@ -250,6 +260,11 @@ static struct resource mmsp2_uart2_resources[] =
 		.end	= IRQ_UART_MODEM2,
 		.flags	= IORESOURCE_IRQ,
 	},
+	[4] = {
+		.start	= MMSP2_UART_STARTx(2),
+		.end	= MMSP2_UART_ENDx(2),
+		.flags	= IORESOURCE_MEM,
+	},
 };
 
 static struct platform_device mmsp2_uart2_device = {
@@ -280,6 +295,11 @@ static struct resource mmsp2_uart3_resources[] =
 		.start	= IRQ_UART_MODEM3,
 		.end	= IRQ_UART_MODEM3,
 		.flags	= IORESOURCE_IRQ,
+	},
+	[4] = {
+		.start	= MMSP2_UART_STARTx(3),
+		.end	= MMSP2_UART_ENDx(3),
+		.flags	= IORESOURCE_MEM,
 	},
 };
 
@@ -325,9 +345,9 @@ static struct platform_device *mmsp2_devices[] __initdata = {
 /* statically mapped devices */
 static struct map_desc mmsp2_io_desc[] __initdata = {
 	{	/* Normal IO */
-		.virtual	= NIO_BASE,
-		.pfn		= __phys_to_pfn(NIO_START),
-		.length		= NIO_SIZE,
+		.virtual	= MMSP2_NIO_BASE,
+		.pfn		= __phys_to_pfn(MMSP2_NIO_START),
+		.length		= MMSP2_NIO_SIZE,
 		.type		= MT_DEVICE
 	},
 	{	/* Fast IO */
