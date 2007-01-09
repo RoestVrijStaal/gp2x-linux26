@@ -1,3 +1,12 @@
+/*
+ * 
+ * TODO:
+ * - If we have support for the serial console, the initialization is done
+ * before the data from the platform devices is obtained, how to solve this?
+ * declare the ports with static data and don't use the platform device resources?
+ * 
+ */
+
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
@@ -26,8 +35,6 @@ struct mmsp2_uart_port {
 	int					txirq, rxirq, rtsirq;
 };
 
-static struct mmsp2_uart_port mmsp2_uart_ports[NR_PORTS];
-
 #if defined(CONFIG_SERIAL_MMSP2_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
 #define SUPPORT_SYSRQ
 #endif
@@ -48,6 +55,9 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id, struct pt_regs *regs)
 
 /* ==== console API ==== */
 #ifdef CONFIG_SERIAL_MMSP2_CONSOLE
+
+static struct uart_driver mmsp2_uart_drv;
+static struct mmsp2_uart_port mmsp2_uart_ports[NR_PORTS];
 
 static void mmsp2_console_putchar(struct uart_port *port, int ch)
 {
@@ -88,7 +98,7 @@ mmsp2_console_setup(struct console *co, char *options)
 	int parity = 'n';
 	int flow = 'n';
 
-	printk("console setup!!!\n");
+	printk("console setup %d!!!\n", co->index);
 	if (co->index == -1 || co->index >= NR_PORTS)
 		co->index = 0;
 	
@@ -102,7 +112,7 @@ mmsp2_console_setup(struct console *co, char *options)
 	return uart_set_options(&mport->port, co, baud, parity, bits, flow);
 }
 
-static struct uart_driver mmsp2_uart_drv;
+
 static struct console mmsp2_console = {
 	.name		= DEVICE_NAME,
 	.write		= mmsp2_console_write,
@@ -192,13 +202,31 @@ mmsp2_uart_get_mctrl(struct uart_port *port)
 static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
 			      unsigned int old)
 {
-	
+	UDS
+	UDE
 }
 
 static int mmsp2_uart_startup(struct uart_port *port)
 {
-	
+	UDS
+	UDE
 }
+
+static void mmsp2_uart_shutdown(struct uart_port *port)
+{
+	UDS
+	UDE
+}
+
+static void
+mmsp2_uart_set_termios(struct uart_port *port, struct termios *termios,
+		   struct termios *old)
+{
+	UDS
+	UDE
+}
+
+
 
 static const char *mmsp2_uart_type(struct uart_port *port)
 {
@@ -252,10 +280,10 @@ static struct uart_ops mmsp2_uart_ops =
 	.stop_rx		= mmsp2_uart_stop_rx,
 	.enable_ms		= mmsp2_uart_enable_ms,
 	.break_ctl		= mmsp2_uart_break_ctl,
+#endif
 	.startup		= mmsp2_uart_startup,
 	.shutdown		= mmsp2_uart_shutdown,
 	.set_termios	= mmsp2_uart_set_termios,
-#endif
 	.pm				= mmsp2_uart_pm,
 	.type			= mmsp2_uart_type,
 	.release_port	= mmsp2_uart_release_port,
@@ -266,6 +294,77 @@ static struct uart_ops mmsp2_uart_ops =
 #endif
 };
 
+static struct mmsp2_uart_port mmsp2_uart_ports[] = 
+{
+	[0] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			.membase	= (void *)MMSP2_UART_STARTx(0),
+			.mapbase	= MMSP2_UART_STARTx(0),
+			.irq		= IRQ_UART_RXD0,
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+		.txirq = IRQ_UART_RXD0, 
+		.rxirq = IRQ_UART_TXD0,
+	},
+	[1] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			.membase	= (void *)MMSP2_UART_STARTx(1),
+			.mapbase	= MMSP2_UART_STARTx(1),
+			.irq		= IRQ_UART_RXD1,
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+		.txirq = IRQ_UART_RXD1, 
+		.rxirq = IRQ_UART_TXD1,
+	},
+	[2] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			.membase	= (void *)MMSP2_UART_STARTx(2),
+			.mapbase	= MMSP2_UART_STARTx(2),
+			.irq		= IRQ_UART_RXD2,
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+		.txirq = IRQ_UART_RXD2, 
+		.rxirq = IRQ_UART_TXD2,
+	},
+	[3] =  
+	{
+		.port	= {
+			.type		= PORT_MMSP2,
+			.iotype		= UPIO_MEM,
+			.membase	= (void *)MMSP2_UART_STARTx(3),
+			.mapbase	= MMSP2_UART_STARTx(3),
+			.irq		= IRQ_UART_RXD3,
+			.uartclk	= 16000000,
+			.fifosize	= 16,
+			.flags		= UPF_BOOT_AUTOCONF,
+			.ops		= &mmsp2_uart_ops,
+			.line		= 0,
+		},
+		.txirq = IRQ_UART_RXD3, 
+		.rxirq = IRQ_UART_TXD3,
+	},
+};
 
 static struct uart_driver mmsp2_uart_drv = {
 	.owner          = THIS_MODULE,
