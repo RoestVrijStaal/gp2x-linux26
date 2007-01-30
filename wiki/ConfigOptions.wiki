@@ -1,4 +1,4 @@
-#summary A brief description to the gp2x kernel options
+#summary A brief description of the gp2x kernel options
 
 = Options =
 
