@@ -3,11 +3,17 @@
 = Options =
 
 || Option || Location || Description ||
+
 || ARCH_MMSP2 || System Type -> ARM System Type || MMSP2 Arch ||
+
 || MACH_GP2X || System Type -> MagicEyes Implementations  || GP2X Portable Console ||
-|| MTD_NAND_MMSP2 || Device Drivers -> MTD -> NAND Flash Device Drivers || Support for NAND 
-Flash on MMSP2 ||
+
+|| MTD_NAND_MMSP2 || Device Drivers -> MTD -> NAND Flash Device Drivers || Support for NAND Flash on MMSP2 ||
+
 || FB_MMSP2 || Device Drivers -> Graphics Support || MagicEyes MMSP2 LCD support ||
+
 || MMC_MMSP2 || Device Drivers -> MMC/SD Card Support || MMSP2 Multimedia Card Interface Support ||
+
 || SERIAL_MMSP2 || Device Drivers -> Character Devices -> Serial Drivers || MMSP2 serial port support ||
+
 || SERIAL_MMSP2_CONSOLE || Device Drivers -> Character Devices -> Serial Drivers || Console on MMSP2 serial port ||
