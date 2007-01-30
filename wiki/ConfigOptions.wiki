@@ -1,3 +1,8 @@
 #summary A brief description to the gp2x kernel options
 
 = Options =
+
+|| Option || Location || Description ||
+|| ARCH_MMSP2 || System Type -> ARM System Type || MMSP2 Arch ||
+|| MTD_NAND_MMSP2 || Device Drivers -> MTD -> NAND Flash Device Drivers || Support for NAND Flash on MMSP2 ||
+|| FB_MMSP2 || Device Drivers -> Graphics Support || MagicEyes MMSP2 LCD support ||
