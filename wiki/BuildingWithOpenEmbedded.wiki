@@ -1,0 +1,12 @@
+#summary Building the kernel with an OpenEmbedded toolchain
+
+= Introduction =
+
+This page describes how you can use the popular [http://www.openembedded.org OpenEmbedded] meta-distribution to build your toolchain and kernel.
+
+== OE Documentation at GP2X Wiki ==
+A while back I wrote a similar OpenEmbedded introduction in the [http://wiki.gp2x.org GP2X Wiki] which you can find [http://wiki.gp2x.org/wiki/OpenEmbedded_GP2X_development_environment here]. The difference to this guide is that it focusses on kernel or toolchain creation. OpenEmbedded is just great in that respect because it allows developers with whatever development machine setup (architecture, operating system, GNU/Linux distribution, ...) share a common build environment. This leads to predictable and equal results on every participants systems.
+
+*Note* however that the gp2x-linux26 project does not mandate the use of OpenEmbedded. You are free to create your toolchain with whatever you like.
+
+
