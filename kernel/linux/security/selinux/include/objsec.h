@@ -23,6 +23,7 @@
 #include <linux/fs.h>
 #include <linux/binfmts.h>
 #include <linux/in.h>
+#include <linux/spinlock.h>
 #include "flask.h"
 #include "avc.h"
 
@@ -44,7 +45,7 @@ struct inode_security_struct {
 	u32 sid;             /* SID of this object */
 	u16 sclass;       /* security class of this object */
 	unsigned char initialized;     /* initialization flag */
-	struct semaphore sem;
+	struct mutex lock;
 	unsigned char inherit;         /* inherit SID from parent entry */
 };
 
@@ -52,6 +53,8 @@ struct file_security_struct {
 	struct file *file;              /* back pointer to file object */
 	u32 sid;              /* SID of open file description */
 	u32 fown_sid;         /* SID of file owner (for SIGIO) */
+	u32 isid;             /* SID of inode at the time of file open */
+	u32 pseqno;           /* Policy seqno at the time of file open */
 };
 
 struct superblock_security_struct {
@@ -63,7 +66,7 @@ struct superblock_security_struct {
 	unsigned int behavior;          /* labeling behavior */
 	unsigned char initialized;      /* initialization flag */
 	unsigned char proc;             /* proc fs */
-	struct semaphore sem;
+	struct mutex lock;
 	struct list_head isec_head;
 	spinlock_t isec_lock;
 };
@@ -99,7 +102,17 @@ struct netif_security_struct {
 
 struct sk_security_struct {
 	struct sock *sk;		/* back pointer to sk object */
+	u32 sid;			/* SID of this object */
 	u32 peer_sid;			/* SID of peer */
+#ifdef CONFIG_NETLABEL
+	u16 sclass;			/* sock security class */
+	enum {				/* NetLabel state */
+		NLBL_UNSET = 0,
+		NLBL_REQUIRE,
+		NLBL_LABELED,
+	} nlbl_state;
+	spinlock_t nlbl_lock;		/* protects nlbl_state */
+#endif
 };
 
 struct key_security_struct {

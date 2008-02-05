@@ -1,6 +1,6 @@
-/* key.c: basic authentication token and access key management
+/* Basic authentication token and access key management
  *
- * Copyright (C) 2004-6 Red Hat, Inc. All Rights Reserved.
+ * Copyright (C) 2004-2007 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
  *
  * This program is free software; you can redistribute it and/or
@@ -20,7 +20,7 @@
 #include <linux/err.h>
 #include "internal.h"
 
-static kmem_cache_t	*key_jar;
+static struct kmem_cache	*key_jar;
 struct rb_root		key_serial_tree; /* tree of keys indexed by serial */
 DEFINE_SPINLOCK(key_serial_lock);
 
@@ -30,11 +30,11 @@ DEFINE_SPINLOCK(key_user_lock);
 static LIST_HEAD(key_types_list);
 static DECLARE_RWSEM(key_types_sem);
 
-static void key_cleanup(void *data);
-static DECLARE_WORK(key_cleanup_task, key_cleanup, NULL);
+static void key_cleanup(struct work_struct *work);
+static DECLARE_WORK(key_cleanup_task, key_cleanup);
 
 /* we serialise key instantiation and link */
-DECLARE_RWSEM(key_construction_sem);
+DEFINE_MUTEX(key_construction_mutex);
 
 /* any key who's type gets unegistered will be re-typed to this */
 static struct key_type key_type_dead = {
@@ -104,7 +104,7 @@ struct key_user *key_user_lookup(uid_t uid)
 	candidate->qnkeys = 0;
 	candidate->qnbytes = 0;
 	spin_lock_init(&candidate->lock);
-	INIT_LIST_HEAD(&candidate->consq);
+	mutex_init(&candidate->cons_lock);
 
 	rb_link_node(&candidate->node, parent, p);
 	rb_insert_color(&candidate->node, &key_user_tree);
@@ -188,6 +188,7 @@ static inline void key_alloc_serial(struct key *key)
 
 	spin_lock(&key_serial_lock);
 
+attempt_insertion:
 	parent = NULL;
 	p = &key_serial_tree.rb_node;
 
@@ -202,38 +203,32 @@ static inline void key_alloc_serial(struct key *key)
 		else
 			goto serial_exists;
 	}
-	goto insert_here;
+
+	/* we've found a suitable hole - arrange for this key to occupy it */
+	rb_link_node(&key->serial_node, parent, p);
+	rb_insert_color(&key->serial_node, &key_serial_tree);
+
+	spin_unlock(&key_serial_lock);
+	return;
 
 	/* we found a key with the proposed serial number - walk the tree from
 	 * that point looking for the next unused serial number */
 serial_exists:
 	for (;;) {
 		key->serial++;
-		if (key->serial < 2)
-			key->serial = 2;
-
-		if (!rb_parent(parent))
-			p = &key_serial_tree.rb_node;
-		else if (rb_parent(parent)->rb_left == parent)
-			p = &(rb_parent(parent)->rb_left);
-		else
-			p = &(rb_parent(parent)->rb_right);
+		if (key->serial < 3) {
+			key->serial = 3;
+			goto attempt_insertion;
+		}
 
 		parent = rb_next(parent);
 		if (!parent)
-			break;
+			goto attempt_insertion;
 
 		xkey = rb_entry(parent, struct key, serial_node);
 		if (key->serial < xkey->serial)
-			goto insert_here;
+			goto attempt_insertion;
 	}
-
-	/* we've found a suitable hole - arrange for this key to occupy it */
-insert_here:
-	rb_link_node(&key->serial_node, parent, p);
-	rb_insert_color(&key->serial_node, &key_serial_tree);
-
-	spin_unlock(&key_serial_lock);
 
 } /* end key_alloc_serial() */
 
@@ -285,16 +280,14 @@ struct key *key_alloc(struct key_type *type, const char *desc,
 	}
 
 	/* allocate and initialise the key and its description */
-	key = kmem_cache_alloc(key_jar, SLAB_KERNEL);
+	key = kmem_cache_alloc(key_jar, GFP_KERNEL);
 	if (!key)
 		goto no_memory_2;
 
 	if (desc) {
-		key->description = kmalloc(desclen, GFP_KERNEL);
+		key->description = kmemdup(desc, desclen, GFP_KERNEL);
 		if (!key->description)
 			goto no_memory_3;
-
-		memcpy(key->description, desc, desclen);
 	}
 
 	atomic_set(&key->usage, 1);
@@ -425,7 +418,7 @@ static int __key_instantiate_and_link(struct key *key,
 	awaken = 0;
 	ret = -EBUSY;
 
-	down_write(&key_construction_sem);
+	mutex_lock(&key_construction_mutex);
 
 	/* can't instantiate twice */
 	if (!test_bit(KEY_FLAG_INSTANTIATED, &key->flags)) {
@@ -450,11 +443,11 @@ static int __key_instantiate_and_link(struct key *key,
 		}
 	}
 
-	up_write(&key_construction_sem);
+	mutex_unlock(&key_construction_mutex);
 
 	/* wake up anyone waiting for a key to be constructed */
 	if (awaken)
-		wake_up_all(&request_key_conswq);
+		wake_up_bit(&key->flags, KEY_FLAG_USER_CONSTRUCT);
 
 	return ret;
 
@@ -507,7 +500,7 @@ int key_negate_and_link(struct key *key,
 	if (keyring)
 		down_write(&keyring->sem);
 
-	down_write(&key_construction_sem);
+	mutex_lock(&key_construction_mutex);
 
 	/* can't instantiate twice */
 	if (!test_bit(KEY_FLAG_INSTANTIATED, &key->flags)) {
@@ -532,14 +525,14 @@ int key_negate_and_link(struct key *key,
 			key_revoke(instkey);
 	}
 
-	up_write(&key_construction_sem);
+	mutex_unlock(&key_construction_mutex);
 
 	if (keyring)
 		up_write(&keyring->sem);
 
 	/* wake up anyone waiting for a key to be constructed */
 	if (awaken)
-		wake_up_all(&request_key_conswq);
+		wake_up_bit(&key->flags, KEY_FLAG_USER_CONSTRUCT);
 
 	return ret;
 
@@ -552,7 +545,7 @@ EXPORT_SYMBOL(key_negate_and_link);
  * do cleaning up in process context so that we don't have to disable
  * interrupts all over the place
  */
-static void key_cleanup(void *data)
+static void key_cleanup(struct work_struct *work)
 {
 	struct rb_node *_n;
 	struct key *key;
@@ -906,12 +899,14 @@ void key_revoke(struct key *key)
 {
 	key_check(key);
 
-	/* make sure no one's trying to change or use the key when we mark
-	 * it */
-	down_write(&key->sem);
-	set_bit(KEY_FLAG_REVOKED, &key->flags);
-
-	if (key->type->revoke)
+	/* make sure no one's trying to change or use the key when we mark it
+	 * - we tell lockdep that we might nest because we might be revoking an
+	 *   authorisation key whilst holding the sem on a key we've just
+	 *   instantiated
+	 */
+	down_write_nested(&key->sem, 1);
+	if (!test_and_set_bit(KEY_FLAG_REVOKED, &key->flags) &&
+	    key->type->revoke)
 		key->type->revoke(key);
 
 	up_write(&key->sem);
@@ -1008,7 +1003,7 @@ void __init key_init(void)
 {
 	/* allocate a slab in which we can store keys */
 	key_jar = kmem_cache_create("key_jar", sizeof(struct key),
-			0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL, NULL);
+			0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
 
 	/* add the special key types */
 	list_add_tail(&key_type_keyring.link, &key_types_list);

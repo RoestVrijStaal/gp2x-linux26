@@ -21,6 +21,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/errno.h>
@@ -93,6 +94,11 @@ static struct policydb_compat_info policydb_compat[] = {
 	},
 	{
 		.version        = POLICYDB_VERSION_AVTAB,
+		.sym_num        = SYM_NUM,
+		.ocon_num       = OCON_NUM,
+	},
+	{
+		.version        = POLICYDB_VERSION_RANGETRANS,
 		.sym_num        = SYM_NUM,
 		.ocon_num       = OCON_NUM,
 	},
@@ -171,17 +177,14 @@ static int policydb_init(struct policydb *p)
 
 	rc = roles_init(p);
 	if (rc)
-		goto out_free_avtab;
+		goto out_free_symtab;
 
 	rc = cond_policydb_init(p);
 	if (rc)
-		goto out_free_avtab;
+		goto out_free_symtab;
 
 out:
 	return rc;
-
-out_free_avtab:
-	avtab_destroy(&p->te_avtab);
 
 out_free_symtab:
 	for (i = 0; i < SYM_NUM; i++)
@@ -369,7 +372,7 @@ static void symtab_hash_eval(struct symtab *s)
 		struct hashtab_info info;
 
 		hashtab_stat(h, &info);
-		printk(KERN_INFO "%s:  %d entries and %d/%d buckets used, "
+		printk(KERN_DEBUG "%s:  %d entries and %d/%d buckets used, "
 		       "longest chain length %d\n", symtab_name[i], h->nel,
 		       info.slots_used, h->size, info.max_chain_len);
 	}
@@ -386,14 +389,14 @@ static int policydb_index_others(struct policydb *p)
 {
 	int i, rc = 0;
 
-	printk(KERN_INFO "security:  %d users, %d roles, %d types, %d bools",
+	printk(KERN_DEBUG "security:  %d users, %d roles, %d types, %d bools",
 	       p->p_users.nprim, p->p_roles.nprim, p->p_types.nprim, p->p_bools.nprim);
 	if (selinux_mls_enabled)
 		printk(", %d sens, %d cats", p->p_levels.nprim,
 		       p->p_cats.nprim);
 	printk("\n");
 
-	printk(KERN_INFO "security:  %d classes, %d rules\n",
+	printk(KERN_DEBUG "security:  %d classes, %d rules\n",
 	       p->p_classes.nprim, p->te_avtab.nel);
 
 #ifdef DEBUG_HASHES
@@ -463,7 +466,7 @@ static int common_destroy(void *key, void *datum, void *p)
 	return 0;
 }
 
-static int class_destroy(void *key, void *datum, void *p)
+static int cls_destroy(void *key, void *datum, void *p)
 {
 	struct class_datum *cladatum;
 	struct constraint_node *constraint, *ctemp;
@@ -561,7 +564,7 @@ static int cat_destroy(void *key, void *datum, void *p)
 static int (*destroy_f[SYM_NUM]) (void *key, void *datum, void *datap) =
 {
 	common_destroy,
-	class_destroy,
+	cls_destroy,
 	role_destroy,
 	type_destroy,
 	user_destroy,
@@ -593,6 +596,7 @@ void policydb_destroy(struct policydb *p)
 	struct range_trans *rt, *lrt = NULL;
 
 	for (i = 0; i < SYM_NUM; i++) {
+		cond_resched();
 		hashtab_map(p->symtab[i].table, destroy_f[i], NULL);
 		hashtab_destroy(p->symtab[i].table);
 	}
@@ -607,16 +611,19 @@ void policydb_destroy(struct policydb *p)
 	avtab_destroy(&p->te_avtab);
 
 	for (i = 0; i < OCON_NUM; i++) {
+		cond_resched();
 		c = p->ocontexts[i];
 		while (c) {
 			ctmp = c;
 			c = c->next;
 			ocontext_destroy(ctmp,i);
 		}
+		p->ocontexts[i] = NULL;
 	}
 
 	g = p->genfs;
 	while (g) {
+		cond_resched();
 		kfree(g->fstype);
 		c = g->head;
 		while (c) {
@@ -628,32 +635,36 @@ void policydb_destroy(struct policydb *p)
 		g = g->next;
 		kfree(gtmp);
 	}
+	p->genfs = NULL;
 
 	cond_policydb_destroy(p);
 
 	for (tr = p->role_tr; tr; tr = tr->next) {
+		cond_resched();
 		kfree(ltr);
 		ltr = tr;
 	}
 	kfree(ltr);
 
 	for (ra = p->role_allow; ra; ra = ra -> next) {
+		cond_resched();
 		kfree(lra);
 		lra = ra;
 	}
 	kfree(lra);
 
 	for (rt = p->range_tr; rt; rt = rt -> next) {
+		cond_resched();
 		if (lrt) {
-			ebitmap_destroy(&lrt->range.level[0].cat);
-			ebitmap_destroy(&lrt->range.level[1].cat);
+			ebitmap_destroy(&lrt->target_range.level[0].cat);
+			ebitmap_destroy(&lrt->target_range.level[1].cat);
 			kfree(lrt);
 		}
 		lrt = rt;
 	}
 	if (lrt) {
-		ebitmap_destroy(&lrt->range.level[0].cat);
-		ebitmap_destroy(&lrt->range.level[1].cat);
+		ebitmap_destroy(&lrt->target_range.level[0].cat);
+		ebitmap_destroy(&lrt->target_range.level[1].cat);
 		kfree(lrt);
 	}
 
@@ -662,6 +673,8 @@ void policydb_destroy(struct policydb *p)
 			ebitmap_destroy(&p->type_attr_map[i]);
 	}
 	kfree(p->type_attr_map);
+
+	kfree(p->undefined_perms);
 
 	return;
 }
@@ -698,6 +711,27 @@ int policydb_load_isids(struct policydb *p, struct sidtab *s)
 	}
 out:
 	return rc;
+}
+
+int policydb_class_isvalid(struct policydb *p, unsigned int class)
+{
+	if (!class || class > p->p_classes.nprim)
+		return 0;
+	return 1;
+}
+
+int policydb_role_isvalid(struct policydb *p, unsigned int role)
+{
+	if (!role || role > p->p_roles.nprim)
+		return 0;
+	return 1;
+}
+
+int policydb_type_isvalid(struct policydb *p, unsigned int type)
+{
+	if (!type || type > p->p_types.nprim)
+		return 0;
+	return 1;
 }
 
 /*
@@ -1117,7 +1151,7 @@ static int class_read(struct policydb *p, struct hashtab *h, void *fp)
 out:
 	return rc;
 bad:
-	class_destroy(key, cladatum, NULL);
+	cls_destroy(key, cladatum, NULL);
 	goto out;
 }
 
@@ -1247,6 +1281,7 @@ static int mls_read_level(struct mls_level *lp, void *fp)
 		       "categories\n");
 		goto bad;
 	}
+
 	return 0;
 
 bad:
@@ -1516,6 +1551,8 @@ int policydb_read(struct policydb *p, void *fp)
 			goto bad;
 		}
 	}
+	p->reject_unknown = !!(le32_to_cpu(buf[1]) & REJECT_UNKNOWN);
+	p->allow_unknown = !!(le32_to_cpu(buf[1]) & ALLOW_UNKNOWN);
 
 	info = policydb_lookup_compat(p->policyvers);
 	if (!info) {
@@ -1548,7 +1585,7 @@ int policydb_read(struct policydb *p, void *fp)
 		p->symtab[i].nprim = nprim;
 	}
 
-	rc = avtab_read(&p->te_avtab, fp, p->policyvers);
+	rc = avtab_read(&p->te_avtab, fp, p);
 	if (rc)
 		goto bad;
 
@@ -1580,6 +1617,12 @@ int policydb_read(struct policydb *p, void *fp)
 		tr->role = le32_to_cpu(buf[0]);
 		tr->type = le32_to_cpu(buf[1]);
 		tr->new_role = le32_to_cpu(buf[2]);
+		if (!policydb_role_isvalid(p, tr->role) ||
+		    !policydb_type_isvalid(p, tr->type) ||
+		    !policydb_role_isvalid(p, tr->new_role)) {
+			rc = -EINVAL;
+			goto bad;
+		}
 		ltr = tr;
 	}
 
@@ -1604,6 +1647,11 @@ int policydb_read(struct policydb *p, void *fp)
 			goto bad;
 		ra->role = le32_to_cpu(buf[0]);
 		ra->new_role = le32_to_cpu(buf[1]);
+		if (!policydb_role_isvalid(p, ra->role) ||
+		    !policydb_role_isvalid(p, ra->new_role)) {
+			rc = -EINVAL;
+			goto bad;
+		}
 		lra = ra;
 	}
 
@@ -1829,6 +1877,7 @@ int policydb_read(struct policydb *p, void *fp)
 	}
 
 	if (p->policyvers >= POLICYDB_VERSION_MLS) {
+		int new_rangetr = p->policyvers >= POLICYDB_VERSION_RANGETRANS;
 		rc = next_entry(buf, fp, sizeof(u32));
 		if (rc < 0)
 			goto bad;
@@ -1847,11 +1896,28 @@ int policydb_read(struct policydb *p, void *fp)
 			rc = next_entry(buf, fp, (sizeof(u32) * 2));
 			if (rc < 0)
 				goto bad;
-			rt->dom = le32_to_cpu(buf[0]);
-			rt->type = le32_to_cpu(buf[1]);
-			rc = mls_read_range_helper(&rt->range, fp);
+			rt->source_type = le32_to_cpu(buf[0]);
+			rt->target_type = le32_to_cpu(buf[1]);
+			if (new_rangetr) {
+				rc = next_entry(buf, fp, sizeof(u32));
+				if (rc < 0)
+					goto bad;
+				rt->target_class = le32_to_cpu(buf[0]);
+			} else
+				rt->target_class = SECCLASS_PROCESS;
+			if (!policydb_type_isvalid(p, rt->source_type) ||
+			    !policydb_type_isvalid(p, rt->target_type) ||
+			    !policydb_class_isvalid(p, rt->target_class)) {
+				rc = -EINVAL;
+				goto bad;
+			}
+			rc = mls_read_range_helper(&rt->target_range, fp);
 			if (rc)
 				goto bad;
+			if (!mls_range_isvalid(p, &rt->target_range)) {
+				printk(KERN_WARNING "security:  rangetrans:  invalid range\n");
+				goto bad;
+			}
 			lrt = rt;
 		}
 	}
