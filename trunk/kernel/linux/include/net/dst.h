@@ -37,9 +37,7 @@ struct sk_buff;
 
 struct dst_entry
 {
-	struct dst_entry        *next;
-	atomic_t		__refcnt;	/* client references	*/
-	int			__use;
+	struct rcu_head		rcu_head;
 	struct dst_entry	*child;
 	struct net_device       *dev;
 	short			error;
@@ -49,11 +47,10 @@ struct dst_entry
 #define DST_NOXFRM		2
 #define DST_NOPOLICY		4
 #define DST_NOHASH		8
-#define DST_BALANCED            0x10
-	unsigned long		lastuse;
 	unsigned long		expires;
 
 	unsigned short		header_len;	/* more space at head required */
+	unsigned short		nfheader_len;	/* more non-fragment space at head required */
 	unsigned short		trailer_len;	/* space to reserve at tail */
 
 	u32			metrics[RTAX_MAX];
@@ -74,8 +71,16 @@ struct dst_entry
 #endif
 
 	struct  dst_ops	        *ops;
-	struct rcu_head		rcu_head;
 		
+	unsigned long		lastuse;
+	atomic_t		__refcnt;	/* client references	*/
+	int			__use;
+	union {
+		struct dst_entry *next;
+		struct rtable    *rt_next;
+		struct rt6_info   *rt6_next;
+		struct dn_route  *dn_next;
+	};
 	char			info[0];
 };
 
@@ -83,7 +88,7 @@ struct dst_entry
 struct dst_ops
 {
 	unsigned short		family;
-	unsigned short		protocol;
+	__be16			protocol;
 	unsigned		gc_thresh;
 
 	int			(*gc)(void);
@@ -97,7 +102,7 @@ struct dst_ops
 	int			entry_size;
 
 	atomic_t		entries;
-	kmem_cache_t 		*kmem_cachep;
+	struct kmem_cache 		*kmem_cachep;
 };
 
 #ifdef __KERNEL__
@@ -136,6 +141,13 @@ dst_metric_locked(struct dst_entry *dst, int metric)
 static inline void dst_hold(struct dst_entry * dst)
 {
 	atomic_inc(&dst->__refcnt);
+}
+
+static inline void dst_use(struct dst_entry *dst, unsigned long time)
+{
+	dst_hold(dst);
+	dst->__use++;
+	dst->lastuse = time;
 }
 
 static inline
@@ -259,9 +271,16 @@ static inline int xfrm_lookup(struct dst_entry **dst_p, struct flowi *fl,
 {
 	return 0;
 } 
+static inline int __xfrm_lookup(struct dst_entry **dst_p, struct flowi *fl,
+				struct sock *sk, int flags)
+{
+	return 0;
+}
 #else
 extern int xfrm_lookup(struct dst_entry **dst_p, struct flowi *fl,
 		       struct sock *sk, int flags);
+extern int __xfrm_lookup(struct dst_entry **dst_p, struct flowi *fl,
+			 struct sock *sk, int flags);
 #endif
 #endif
 

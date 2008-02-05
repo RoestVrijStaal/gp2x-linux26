@@ -3,7 +3,6 @@
 
 #include <linux/dn.h>
 #include <net/sock.h>
-#include <net/tcp.h>
 #include <asm/byteorder.h>
 
 #define dn_ntohs(x) le16_to_cpu(x)
@@ -199,11 +198,6 @@ static inline void dn_sk_ports_copy(struct flowi *fl, struct dn_scp *scp)
 {
 	fl->uli_u.dnports.sport = scp->addrloc;
 	fl->uli_u.dnports.dport = scp->addrrem;
-	fl->uli_u.dnports.objnum = scp->addr.sdn_objnum;
-	if (fl->uli_u.dnports.objnum == 0) {
-		fl->uli_u.dnports.objnamel = (__u8)dn_ntohs(scp->addr.sdn_objnamel);
-		memcpy(fl->uli_u.dnports.objname, scp->addr.sdn_objname, 16);
-	}
 }
 
 extern unsigned dn_mss_from_pmtu(struct net_device *dev, int mtu);
