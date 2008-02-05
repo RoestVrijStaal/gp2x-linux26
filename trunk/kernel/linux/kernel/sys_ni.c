@@ -4,6 +4,10 @@
 
 #include <asm/unistd.h>
 
+/*  we can't #include <linux/syscalls.h> here,
+    but tell gcc to not warn with -Wmissing-prototypes  */
+asmlinkage long sys_ni_syscall(void);
+
 /*
  * Non-implemented system calls get redirected here.
  */
@@ -14,6 +18,7 @@ asmlinkage long sys_ni_syscall(void)
 
 cond_syscall(sys_nfsservctl);
 cond_syscall(sys_quotactl);
+cond_syscall(sys32_quotactl);
 cond_syscall(sys_acct);
 cond_syscall(sys_lookup_dcookie);
 cond_syscall(sys_swapon);
@@ -35,10 +40,14 @@ cond_syscall(sys_recvfrom);
 cond_syscall(sys_recv);
 cond_syscall(sys_socket);
 cond_syscall(sys_setsockopt);
+cond_syscall(compat_sys_setsockopt);
 cond_syscall(sys_getsockopt);
+cond_syscall(compat_sys_getsockopt);
 cond_syscall(sys_shutdown);
 cond_syscall(sys_sendmsg);
+cond_syscall(compat_sys_sendmsg);
 cond_syscall(sys_recvmsg);
+cond_syscall(compat_sys_recvmsg);
 cond_syscall(sys_socketcall);
 cond_syscall(sys_futex);
 cond_syscall(compat_sys_futex);
@@ -49,6 +58,7 @@ cond_syscall(compat_sys_get_robust_list);
 cond_syscall(sys_epoll_create);
 cond_syscall(sys_epoll_ctl);
 cond_syscall(sys_epoll_wait);
+cond_syscall(sys_epoll_pwait);
 cond_syscall(sys_semget);
 cond_syscall(sys_semop);
 cond_syscall(sys_semtimedop);
@@ -134,3 +144,16 @@ cond_syscall(sys_madvise);
 cond_syscall(sys_mremap);
 cond_syscall(sys_remap_file_pages);
 cond_syscall(compat_sys_move_pages);
+cond_syscall(compat_sys_migrate_pages);
+
+/* block-layer dependent */
+cond_syscall(sys_bdflush);
+cond_syscall(sys_ioprio_set);
+cond_syscall(sys_ioprio_get);
+
+/* New file descriptors */
+cond_syscall(sys_signalfd);
+cond_syscall(sys_timerfd);
+cond_syscall(compat_sys_signalfd);
+cond_syscall(compat_sys_timerfd);
+cond_syscall(sys_eventfd);

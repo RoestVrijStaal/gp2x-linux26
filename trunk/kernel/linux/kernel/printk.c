@@ -20,9 +20,10 @@
 #include <linux/mm.h>
 #include <linux/tty.h>
 #include <linux/tty_driver.h>
-#include <linux/smp_lock.h>
 #include <linux/console.h>
 #include <linux/init.h>
+#include <linux/jiffies.h>
+#include <linux/nmi.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/interrupt.h>			/* For in_interrupt() */
@@ -31,6 +32,7 @@
 #include <linux/security.h>
 #include <linux/bootmem.h>
 #include <linux/syscalls.h>
+#include <linux/jiffies.h>
 
 #include <asm/uaccess.h>
 
@@ -52,10 +54,8 @@ int console_printk[4] = {
 	DEFAULT_CONSOLE_LOGLEVEL,	/* default_console_loglevel */
 };
 
-EXPORT_UNUSED_SYMBOL(console_printk);  /*  June 2006  */
-
 /*
- * Low lever drivers may need that to know if they can schedule in
+ * Low level drivers may need that to know if they can schedule in
  * their unblank() callback or not. So let's export it.
  */
 int oops_in_progress;
@@ -163,6 +163,113 @@ out:
 }
 
 __setup("log_buf_len=", log_buf_len_setup);
+
+#ifdef CONFIG_BOOT_PRINTK_DELAY
+
+static unsigned int boot_delay; /* msecs delay after each printk during bootup */
+static unsigned long long printk_delay_msec; /* per msec, based on boot_delay */
+
+static int __init boot_delay_setup(char *str)
+{
+	unsigned long lpj;
+	unsigned long long loops_per_msec;
+
+	lpj = preset_lpj ? preset_lpj : 1000000;	/* some guess */
+	loops_per_msec = (unsigned long long)lpj / 1000 * HZ;
+
+	get_option(&str, &boot_delay);
+	if (boot_delay > 10 * 1000)
+		boot_delay = 0;
+
+	printk_delay_msec = loops_per_msec;
+	printk(KERN_DEBUG "boot_delay: %u, preset_lpj: %ld, lpj: %lu, "
+		"HZ: %d, printk_delay_msec: %llu\n",
+		boot_delay, preset_lpj, lpj, HZ, printk_delay_msec);
+	return 1;
+}
+__setup("boot_delay=", boot_delay_setup);
+
+static void boot_delay_msec(void)
+{
+	unsigned long long k;
+	unsigned long timeout;
+
+	if (boot_delay == 0 || system_state != SYSTEM_BOOTING)
+		return;
+
+	k = (unsigned long long)printk_delay_msec * boot_delay;
+
+	timeout = jiffies + msecs_to_jiffies(boot_delay);
+	while (k) {
+		k--;
+		cpu_relax();
+		/*
+		 * use (volatile) jiffies to prevent
+		 * compiler reduction; loop termination via jiffies
+		 * is secondary and may or may not happen.
+		 */
+		if (time_after(jiffies, timeout))
+			break;
+		touch_nmi_watchdog();
+	}
+}
+#else
+static inline void boot_delay_msec(void)
+{
+}
+#endif
+
+/*
+ * Return the number of unread characters in the log buffer.
+ */
+int log_buf_get_len(void)
+{
+	return logged_chars;
+}
+
+/*
+ * Copy a range of characters from the log buffer.
+ */
+int log_buf_copy(char *dest, int idx, int len)
+{
+	int ret, max;
+	bool took_lock = false;
+
+	if (!oops_in_progress) {
+		spin_lock_irq(&logbuf_lock);
+		took_lock = true;
+	}
+
+	max = log_buf_get_len();
+	if (idx < 0 || idx >= max) {
+		ret = -1;
+	} else {
+		if (len > max)
+			len = max;
+		ret = len;
+		idx += (log_end - max);
+		while (len-- > 0)
+			dest[len] = LOG_BUF(idx + len);
+	}
+
+	if (took_lock)
+		spin_unlock_irq(&logbuf_lock);
+
+	return ret;
+}
+
+/*
+ * Extract a single character from the log buffer.
+ */
+int log_buf_read(int idx)
+{
+	char ret;
+
+	if (log_buf_copy(&ret, idx, 1) == 1)
+		return ret;
+	else
+		return -1;
+}
 
 /*
  * Commands to do_syslog:
@@ -334,13 +441,25 @@ static void __call_console_drivers(unsigned long start, unsigned long end)
 	}
 }
 
+static int __read_mostly ignore_loglevel;
+
+static int __init ignore_loglevel_setup(char *str)
+{
+	ignore_loglevel = 1;
+	printk(KERN_INFO "debug: ignoring loglevel setting.\n");
+
+	return 1;
+}
+
+__setup("ignore_loglevel", ignore_loglevel_setup);
+
 /*
  * Write out chars from start to end - 1 inclusive
  */
 static void _call_console_drivers(unsigned long start,
 				unsigned long end, int msg_log_level)
 {
-	if (msg_log_level < console_loglevel &&
+	if ((msg_log_level < console_loglevel || ignore_loglevel) &&
 			console_drivers && start != end) {
 		if ((start & LOG_BUF_MASK) > (end & LOG_BUF_MASK)) {
 			/* wrapped write */
@@ -439,13 +558,16 @@ static int printk_time = 1;
 #else
 static int printk_time = 0;
 #endif
-module_param(printk_time, int, S_IRUGO | S_IWUSR);
+module_param_named(time, printk_time, bool, S_IRUGO | S_IWUSR);
 
 static int __init printk_time_setup(char *str)
 {
 	if (*str)
 		return 0;
 	printk_time = 1;
+	printk(KERN_NOTICE "The 'time' option is deprecated and "
+		"is scheduled for removal in early 2008\n");
+	printk(KERN_NOTICE "Use 'printk.time=<value>' instead\n");
 	return 1;
 }
 
@@ -472,7 +594,10 @@ static int have_callable_console(void)
  * printk - print a kernel message
  * @fmt: format string
  *
- * This is printk.  It can be called from any context.  We want it to work.
+ * This is printk().  It can be called from any context.  We want it to work.
+ * Be aware of the fact that if oops_in_progress is not set, we might try to
+ * wake klogd up which could deadlock on runqueue lock if printk() is called
+ * from scheduler code.
  *
  * We try to grab the console_sem.  If we succeed, it's easy - we log the output and
  * call the console drivers.  If we fail to get the semaphore we place the output
@@ -511,6 +636,8 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	static char printk_buf[1024];
 	static int log_level_unknown = 1;
 
+	boot_delay_msec();
+
 	preempt_disable();
 	if (unlikely(oops_in_progress) && printk_cpu == smp_processor_id())
 		/* If a crash is occurring during printk() on this CPU,
@@ -518,7 +645,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		zap_locks();
 
 	/* This stops the holder of console_sem just where we want him */
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	lockdep_off();
 	spin_lock(&logbuf_lock);
 	printk_cpu = smp_processor_id();
@@ -609,7 +736,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 			up(&console_sem);
 		}
 		lockdep_on();
-		local_irq_restore(flags);
+		raw_local_irq_restore(flags);
 	} else {
 		/*
 		 * Someone else owns the drivers.  We drop the spinlock, which
@@ -619,7 +746,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 		printk_cpu = UINT_MAX;
 		spin_unlock(&logbuf_lock);
 		lockdep_on();
-		local_irq_restore(flags);
+		raw_local_irq_restore(flags);
 	}
 
 	preempt_enable();
@@ -632,12 +759,7 @@ EXPORT_SYMBOL(vprintk);
 
 asmlinkage long sys_syslog(int type, char __user *buf, int len)
 {
-	return 0;
-}
-
-int do_syslog(int type, char __user *buf, int len)
-{
-	return 0;
+	return -ENOSYS;
 }
 
 static void call_console_drivers(unsigned long start, unsigned long end)
@@ -651,7 +773,7 @@ static void call_console_drivers(unsigned long start, unsigned long end)
  */
 static int __init console_setup(char *str)
 {
-	char name[sizeof(console_cmdline[0].name)];
+	char buf[sizeof(console_cmdline[0].name) + 4]; /* 4 for index */
 	char *s, *options;
 	int idx;
 
@@ -659,27 +781,27 @@ static int __init console_setup(char *str)
 	 * Decode str into name, index, options.
 	 */
 	if (str[0] >= '0' && str[0] <= '9') {
-		strcpy(name, "ttyS");
-		strncpy(name + 4, str, sizeof(name) - 5);
+		strcpy(buf, "ttyS");
+		strncpy(buf + 4, str, sizeof(buf) - 5);
 	} else {
-		strncpy(name, str, sizeof(name) - 1);
+		strncpy(buf, str, sizeof(buf) - 1);
 	}
-	name[sizeof(name) - 1] = 0;
+	buf[sizeof(buf) - 1] = 0;
 	if ((options = strchr(str, ',')) != NULL)
 		*(options++) = 0;
 #ifdef __sparc__
 	if (!strcmp(str, "ttya"))
-		strcpy(name, "ttyS0");
+		strcpy(buf, "ttyS0");
 	if (!strcmp(str, "ttyb"))
-		strcpy(name, "ttyS1");
+		strcpy(buf, "ttyS1");
 #endif
-	for (s = name; *s; s++)
+	for (s = buf; *s; s++)
 		if ((*s >= '0' && *s <= '9') || *s == ',')
 			break;
 	idx = simple_strtoul(s, NULL, 10);
 	*s = 0;
 
-	add_preferred_console(name, idx, options);
+	add_preferred_console(buf, idx, options);
 	return 1;
 }
 __setup("console=", console_setup);
@@ -697,7 +819,7 @@ __setup("console=", console_setup);
  * commonly to provide a default console (ie from PROM variables) when
  * the user has not supplied one.
  */
-int __init add_preferred_console(char *name, int idx, char *options)
+int add_preferred_console(char *name, int idx, char *options)
 {
 	struct console_cmdline *c;
 	int i;
@@ -706,7 +828,7 @@ int __init add_preferred_console(char *name, int idx, char *options)
 	 *	See if this tty is not yet registered, and
 	 *	if we have a slot free.
 	 */
-	for(i = 0; i < MAX_CMDLINECONSOLES && console_cmdline[i].name[0]; i++)
+	for (i = 0; i < MAX_CMDLINECONSOLES && console_cmdline[i].name[0]; i++)
 		if (strcmp(console_cmdline[i].name, name) == 0 &&
 			  console_cmdline[i].index == idx) {
 				selected_console = i;
@@ -723,6 +845,35 @@ int __init add_preferred_console(char *name, int idx, char *options)
 	return 0;
 }
 
+int update_console_cmdline(char *name, int idx, char *name_new, int idx_new, char *options)
+{
+	struct console_cmdline *c;
+	int i;
+
+	for (i = 0; i < MAX_CMDLINECONSOLES && console_cmdline[i].name[0]; i++)
+		if (strcmp(console_cmdline[i].name, name) == 0 &&
+			  console_cmdline[i].index == idx) {
+				c = &console_cmdline[i];
+				memcpy(c->name, name_new, sizeof(c->name));
+				c->name[sizeof(c->name) - 1] = 0;
+				c->options = options;
+				c->index = idx_new;
+				return i;
+		}
+	/* not found */
+	return -1;
+}
+
+int console_suspend_enabled = 1;
+EXPORT_SYMBOL(console_suspend_enabled);
+
+static int __init console_suspend_disable(char *str)
+{
+	console_suspend_enabled = 0;
+	return 1;
+}
+__setup("no_console_suspend", console_suspend_disable);
+
 /**
  * suspend_console - suspend the console subsystem
  *
@@ -730,12 +881,17 @@ int __init add_preferred_console(char *name, int idx, char *options)
  */
 void suspend_console(void)
 {
+	if (!console_suspend_enabled)
+		return;
+	printk("Suspending console(s)\n");
 	acquire_console_sem();
 	console_suspended = 1;
 }
 
 void resume_console(void)
 {
+	if (!console_suspend_enabled)
+		return;
 	console_suspended = 0;
 	release_console_sem();
 }
@@ -775,7 +931,12 @@ int is_console_locked(void)
 {
 	return console_locked;
 }
-EXPORT_UNUSED_SYMBOL(is_console_locked);  /*  June 2006  */
+
+void wake_up_klogd(void)
+{
+	if (!oops_in_progress && waitqueue_active(&log_wait))
+		wake_up_interruptible(&log_wait);
+}
 
 /**
  * release_console_sem - unlock the console system
@@ -819,15 +980,8 @@ void release_console_sem(void)
 	console_locked = 0;
 	up(&console_sem);
 	spin_unlock_irqrestore(&logbuf_lock, flags);
-	if (wake_klogd && !oops_in_progress && waitqueue_active(&log_wait)) {
-		/*
-		 * If we printk from within the lock dependency code,
-		 * from within the scheduler code, then do not lock
-		 * up due to self-recursion:
-		 */
-		if (!lockdep_internal())
-			wake_up_interruptible(&log_wait);
-	}
+	if (wake_klogd)
+		wake_up_klogd();
 }
 EXPORT_SYMBOL(release_console_sem);
 
@@ -926,9 +1080,20 @@ void register_console(struct console *console)
 {
 	int i;
 	unsigned long flags;
+	struct console *bootconsole = NULL;
 
-	if (preferred_console < 0)
+	if (console_drivers) {
+		if (console->flags & CON_BOOT)
+			return;
+		if (console_drivers->flags & CON_BOOT)
+			bootconsole = console_drivers;
+	}
+
+	if (preferred_console < 0 || bootconsole || !console_drivers)
 		preferred_console = selected_console;
+
+	if (console->early_setup)
+		console->early_setup();
 
 	/*
 	 *	See if we want to use this console driver. If we
@@ -973,9 +1138,15 @@ void register_console(struct console *console)
 	if (!(console->flags & CON_ENABLED))
 		return;
 
-	if (console_drivers && (console_drivers->flags & CON_BOOT)) {
-		unregister_console(console_drivers);
+	if (bootconsole && (console->flags & CON_CONSDEV)) {
+		printk(KERN_INFO "console handover: boot [%s%d] -> real [%s%d]\n",
+		       bootconsole->name, bootconsole->index,
+		       console->name, console->index);
+		unregister_console(bootconsole);
 		console->flags &= ~CON_PRINTBUFFER;
+	} else {
+		printk(KERN_INFO "console [%s%d] enabled\n",
+		       console->name, console->index);
 	}
 
 	/*
@@ -1025,22 +1196,30 @@ int unregister_console(struct console *console)
 		}
 	}
 
-	/* If last console is removed, we re-enable picking the first
-	 * one that gets registered. Without that, pmac early boot console
-	 * would prevent fbcon from taking over.
-	 *
+	/*
 	 * If this isn't the last console and it has CON_CONSDEV set, we
 	 * need to set it on the next preferred console.
 	 */
-	if (console_drivers == NULL)
-		preferred_console = selected_console;
-	else if (console->flags & CON_CONSDEV)
+	if (console_drivers != NULL && console->flags & CON_CONSDEV)
 		console_drivers->flags |= CON_CONSDEV;
 
 	release_console_sem();
 	return res;
 }
 EXPORT_SYMBOL(unregister_console);
+
+static int __init disable_boot_consoles(void)
+{
+	if (console_drivers != NULL) {
+		if (console_drivers->flags & CON_BOOT) {
+			printk(KERN_INFO "turn off boot console %s%d\n",
+				console_drivers->name, console_drivers->index);
+			return unregister_console(console_drivers);
+		}
+	}
+	return 0;
+}
+late_initcall(disable_boot_consoles);
 
 /**
  * tty_write_message - write a message to a certain tty, not just the console.
@@ -1107,3 +1286,23 @@ int printk_ratelimit(void)
 				printk_ratelimit_burst);
 }
 EXPORT_SYMBOL(printk_ratelimit);
+
+/**
+ * printk_timed_ratelimit - caller-controlled printk ratelimiting
+ * @caller_jiffies: pointer to caller's state
+ * @interval_msecs: minimum interval between prints
+ *
+ * printk_timed_ratelimit() returns true if more than @interval_msecs
+ * milliseconds have elapsed since the last time printk_timed_ratelimit()
+ * returned true.
+ */
+bool printk_timed_ratelimit(unsigned long *caller_jiffies,
+			unsigned int interval_msecs)
+{
+	if (*caller_jiffies == 0 || time_after(jiffies, *caller_jiffies)) {
+		*caller_jiffies = jiffies + msecs_to_jiffies(interval_msecs);
+		return true;
+	}
+	return false;
+}
+EXPORT_SYMBOL(printk_timed_ratelimit);

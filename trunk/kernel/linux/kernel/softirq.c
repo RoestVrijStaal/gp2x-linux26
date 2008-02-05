@@ -14,9 +14,11 @@
 #include <linux/notifier.h>
 #include <linux/percpu.h>
 #include <linux/cpu.h>
+#include <linux/freezer.h>
 #include <linux/kthread.h>
 #include <linux/rcupdate.h>
 #include <linux/smp.h>
+#include <linux/tick.h>
 
 #include <asm/irq.h>
 /*
@@ -269,9 +271,19 @@ asmlinkage void do_softirq(void)
 	local_irq_restore(flags);
 }
 
-EXPORT_SYMBOL(do_softirq);
-
 #endif
+
+/*
+ * Enter an interrupt context.
+ */
+void irq_enter(void)
+{
+	__irq_enter();
+#ifdef CONFIG_NO_HZ
+	if (idle_cpu(smp_processor_id()))
+		tick_nohz_update_jiffies();
+#endif
+}
 
 #ifdef __ARCH_IRQ_EXIT_IRQS_DISABLED
 # define invoke_softirq()	__do_softirq()
@@ -289,6 +301,12 @@ void irq_exit(void)
 	sub_preempt_count(IRQ_EXIT_OFFSET);
 	if (!in_interrupt() && local_softirq_pending())
 		invoke_softirq();
+
+#ifdef CONFIG_NO_HZ
+	/* Make sure that timer wheel updates are propagated */
+	if (!in_interrupt() && idle_cpu(smp_processor_id()) && !need_resched())
+		tick_nohz_stop_sched_tick();
+#endif
 	preempt_enable_no_resched();
 }
 
@@ -311,8 +329,6 @@ inline fastcall void raise_softirq_irqoff(unsigned int nr)
 	if (!in_interrupt())
 		wakeup_softirqd();
 }
-
-EXPORT_SYMBOL(raise_softirq_irqoff);
 
 void fastcall raise_softirq(unsigned int nr)
 {
@@ -469,9 +485,6 @@ void __init softirq_init(void)
 
 static int ksoftirqd(void * __bind_cpu)
 {
-	set_user_nice(current, 19);
-	current->flags |= PF_NOFREEZE;
-
 	set_current_state(TASK_INTERRUPTIBLE);
 
 	while (!kthread_should_stop()) {
@@ -574,8 +587,7 @@ static int __cpuinit cpu_callback(struct notifier_block *nfb,
 
 	switch (action) {
 	case CPU_UP_PREPARE:
-		BUG_ON(per_cpu(tasklet_vec, hotcpu).list);
-		BUG_ON(per_cpu(tasklet_hi_vec, hotcpu).list);
+	case CPU_UP_PREPARE_FROZEN:
 		p = kthread_create(ksoftirqd, hcpu, "ksoftirqd/%d", hotcpu);
 		if (IS_ERR(p)) {
 			printk("ksoftirqd for %i failed\n", hotcpu);
@@ -585,21 +597,28 @@ static int __cpuinit cpu_callback(struct notifier_block *nfb,
   		per_cpu(ksoftirqd, hotcpu) = p;
  		break;
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		wake_up_process(per_cpu(ksoftirqd, hotcpu));
 		break;
 #ifdef CONFIG_HOTPLUG_CPU
 	case CPU_UP_CANCELED:
+	case CPU_UP_CANCELED_FROZEN:
 		if (!per_cpu(ksoftirqd, hotcpu))
 			break;
 		/* Unbind so it can run.  Fall thru. */
 		kthread_bind(per_cpu(ksoftirqd, hotcpu),
 			     any_online_cpu(cpu_online_map));
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN: {
+		struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
+
 		p = per_cpu(ksoftirqd, hotcpu);
 		per_cpu(ksoftirqd, hotcpu) = NULL;
+		sched_setscheduler(p, SCHED_FIFO, &param);
 		kthread_stop(p);
 		takeover_tasklets(hotcpu);
 		break;
+	}
 #endif /* CONFIG_HOTPLUG_CPU */
  	}
 	return NOTIFY_OK;
@@ -612,7 +631,9 @@ static struct notifier_block __cpuinitdata cpu_nfb = {
 __init int spawn_ksoftirqd(void)
 {
 	void *cpu = (void *)(long)smp_processor_id();
-	cpu_callback(&cpu_nfb, CPU_UP_PREPARE, cpu);
+	int err = cpu_callback(&cpu_nfb, CPU_UP_PREPARE, cpu);
+
+	BUG_ON(err == NOTIFY_BAD);
 	cpu_callback(&cpu_nfb, CPU_ONLINE, cpu);
 	register_cpu_notifier(&cpu_nfb);
 	return 0;
