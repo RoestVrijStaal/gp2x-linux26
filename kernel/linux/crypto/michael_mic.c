@@ -3,7 +3,7 @@
  *
  * Michael MIC (IEEE 802.11i/TKIP) keyed digest
  *
- * Copyright (c) 2004 Jouni Malinen <jkmaline@cc.hut.fi>
+ * Copyright (c) 2004 Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -123,14 +123,13 @@ static void michael_final(struct crypto_tfm *tfm, u8 *out)
 
 
 static int michael_setkey(struct crypto_tfm *tfm, const u8 *key,
-			  unsigned int keylen, u32 *flags)
+			  unsigned int keylen)
 {
 	struct michael_mic_ctx *mctx = crypto_tfm_ctx(tfm);
 	const __le32 *data = (const __le32 *)key;
 
 	if (keylen != 8) {
-		if (flags)
-			*flags = CRYPTO_TFM_RES_BAD_KEY_LEN;
+		tfm->crt_flags |= CRYPTO_TFM_RES_BAD_KEY_LEN;
 		return -EINVAL;
 	}
 
@@ -174,4 +173,4 @@ module_exit(michael_mic_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Michael MIC");
-MODULE_AUTHOR("Jouni Malinen <jkmaline@cc.hut.fi>");
+MODULE_AUTHOR("Jouni Malinen <j@w1.fi>");
