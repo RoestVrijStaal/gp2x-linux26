@@ -1,7 +1,7 @@
 /*
  * Host AP crypt: host-based CCMP encryption implementation for Host AP driver
  *
- * Copyright (c) 2003-2004, Jouni Malinen <jkmaline@cc.hut.fi>
+ * Copyright (c) 2003-2004, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -9,6 +9,8 @@
  * more details.
  */
 
+#include <linux/kernel.h>
+#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -23,7 +25,6 @@
 #include <net/ieee80211.h>
 
 #include <linux/crypto.h>
-#include <asm/scatterlist.h>
 
 MODULE_AUTHOR("Jouni Malinen");
 MODULE_DESCRIPTION("Host AP crypt: CCMP");
@@ -48,7 +49,7 @@ struct ieee80211_ccmp_data {
 
 	int key_idx;
 
-	struct crypto_tfm *tfm;
+	struct crypto_cipher *tfm;
 
 	/* scratch buffers for virt_to_page() (crypto API) */
 	u8 tx_b0[AES_BLOCK_LEN], tx_b[AES_BLOCK_LEN],
@@ -56,20 +57,10 @@ struct ieee80211_ccmp_data {
 	u8 rx_b0[AES_BLOCK_LEN], rx_b[AES_BLOCK_LEN], rx_a[AES_BLOCK_LEN];
 };
 
-static void ieee80211_ccmp_aes_encrypt(struct crypto_tfm *tfm,
-				       const u8 pt[16], u8 ct[16])
+static inline void ieee80211_ccmp_aes_encrypt(struct crypto_cipher *tfm,
+					      const u8 pt[16], u8 ct[16])
 {
-	struct scatterlist src, dst;
-
-	src.page = virt_to_page(pt);
-	src.offset = offset_in_page(pt);
-	src.length = AES_BLOCK_LEN;
-
-	dst.page = virt_to_page(ct);
-	dst.offset = offset_in_page(ct);
-	dst.length = AES_BLOCK_LEN;
-
-	crypto_cipher_encrypt(tfm, &dst, &src, AES_BLOCK_LEN);
+	crypto_cipher_encrypt_one(tfm, ct, pt);
 }
 
 static void *ieee80211_ccmp_init(int key_idx)
@@ -81,10 +72,11 @@ static void *ieee80211_ccmp_init(int key_idx)
 		goto fail;
 	priv->key_idx = key_idx;
 
-	priv->tfm = crypto_alloc_tfm("aes", 0);
-	if (priv->tfm == NULL) {
+	priv->tfm = crypto_alloc_cipher("aes", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(priv->tfm)) {
 		printk(KERN_DEBUG "ieee80211_crypt_ccmp: could not allocate "
 		       "crypto API aes\n");
+		priv->tfm = NULL;
 		goto fail;
 	}
 
@@ -93,7 +85,7 @@ static void *ieee80211_ccmp_init(int key_idx)
       fail:
 	if (priv) {
 		if (priv->tfm)
-			crypto_free_tfm(priv->tfm);
+			crypto_free_cipher(priv->tfm);
 		kfree(priv);
 	}
 
@@ -104,7 +96,7 @@ static void ieee80211_ccmp_deinit(void *priv)
 {
 	struct ieee80211_ccmp_data *_priv = priv;
 	if (_priv && _priv->tfm)
-		crypto_free_tfm(_priv->tfm);
+		crypto_free_cipher(_priv->tfm);
 	kfree(priv);
 }
 
@@ -115,7 +107,7 @@ static inline void xor_block(u8 * b, u8 * a, size_t len)
 		b[i] ^= a[i];
 }
 
-static void ccmp_init_blocks(struct crypto_tfm *tfm,
+static void ccmp_init_blocks(struct crypto_cipher *tfm,
 			     struct ieee80211_hdr_4addr *hdr,
 			     u8 * pn, size_t dlen, u8 * b0, u8 * auth, u8 * s0)
 {
@@ -249,7 +241,7 @@ static int ieee80211_ccmp_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	hdr = (struct ieee80211_hdr_4addr *)skb->data;
 	ccmp_init_blocks(key->tfm, hdr, key->tx_pn, data_len, b0, b, s0);
 
-	blocks = (data_len + AES_BLOCK_LEN - 1) / AES_BLOCK_LEN;
+	blocks = DIV_ROUND_UP(data_len, AES_BLOCK_LEN);
 	last = data_len % AES_BLOCK_LEN;
 
 	for (i = 1; i <= blocks; i++) {
@@ -271,6 +263,27 @@ static int ieee80211_ccmp_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	return 0;
 }
 
+/*
+ * deal with seq counter wrapping correctly.
+ * refer to timer_after() for jiffies wrapping handling
+ */
+static inline int ccmp_replay_check(u8 *pn_n, u8 *pn_o)
+{
+	u32 iv32_n, iv16_n;
+	u32 iv32_o, iv16_o;
+
+	iv32_n = (pn_n[0] << 24) | (pn_n[1] << 16) | (pn_n[2] << 8) | pn_n[3];
+	iv16_n = (pn_n[4] << 8) | pn_n[5];
+
+	iv32_o = (pn_o[0] << 24) | (pn_o[1] << 16) | (pn_o[2] << 8) | pn_o[3];
+	iv16_o = (pn_o[4] << 8) | pn_o[5];
+
+	if ((s32)iv32_n - (s32)iv32_o < 0 ||
+	    (iv32_n == iv32_o && iv16_n <= iv16_o))
+		return 1;
+	return 0;
+}
+
 static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct ieee80211_ccmp_data *key = priv;
@@ -283,6 +296,7 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	int i, blocks, last, len;
 	size_t data_len = skb->len - hdr_len - CCMP_HDR_LEN - CCMP_MIC_LEN;
 	u8 *mic = skb->data + skb->len - CCMP_MIC_LEN;
+	DECLARE_MAC_BUF(mac);
 
 	if (skb->len < hdr_len + CCMP_HDR_LEN + CCMP_MIC_LEN) {
 		key->dot11RSNAStatsCCMPFormatErrors++;
@@ -295,7 +309,7 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	if (!(keyidx & (1 << 5))) {
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "CCMP: received packet without ExtIV"
-			       " flag from " MAC_FMT "\n", MAC_ARG(hdr->addr2));
+			       " flag from %s\n", print_mac(mac, hdr->addr2));
 		}
 		key->dot11RSNAStatsCCMPFormatErrors++;
 		return -2;
@@ -308,9 +322,9 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	}
 	if (!key->key_set) {
 		if (net_ratelimit()) {
-			printk(KERN_DEBUG "CCMP: received packet from " MAC_FMT
+			printk(KERN_DEBUG "CCMP: received packet from %s"
 			       " with keyid=%d that does not have a configured"
-			       " key\n", MAC_ARG(hdr->addr2), keyidx);
+			       " key\n", print_mac(mac, hdr->addr2), keyidx);
 		}
 		return -3;
 	}
@@ -323,13 +337,15 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	pn[5] = pos[0];
 	pos += 8;
 
-	if (memcmp(pn, key->rx_pn, CCMP_PN_LEN) <= 0) {
-		if (net_ratelimit()) {
-			printk(KERN_DEBUG "CCMP: replay detected: STA=" MAC_FMT
-			       " previous PN %02x%02x%02x%02x%02x%02x "
-			       "received PN %02x%02x%02x%02x%02x%02x\n",
-			       MAC_ARG(hdr->addr2), MAC_ARG(key->rx_pn),
-			       MAC_ARG(pn));
+	if (ccmp_replay_check(pn, key->rx_pn)) {
+		if (ieee80211_ratelimit_debug(IEEE80211_DL_DROP)) {
+			IEEE80211_DEBUG_DROP("CCMP: replay detected: STA=%s "
+				 "previous PN %02x%02x%02x%02x%02x%02x "
+				 "received PN %02x%02x%02x%02x%02x%02x\n",
+				 print_mac(mac, hdr->addr2),
+				 key->rx_pn[0], key->rx_pn[1], key->rx_pn[2],
+				 key->rx_pn[3], key->rx_pn[4], key->rx_pn[5],
+				 pn[0], pn[1], pn[2], pn[3], pn[4], pn[5]);
 		}
 		key->dot11RSNAStatsCCMPReplays++;
 		return -4;
@@ -338,7 +354,7 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	ccmp_init_blocks(key->tfm, hdr, pn, data_len, b0, a, b);
 	xor_block(mic, b, CCMP_MIC_LEN);
 
-	blocks = (data_len + AES_BLOCK_LEN - 1) / AES_BLOCK_LEN;
+	blocks = DIV_ROUND_UP(data_len, AES_BLOCK_LEN);
 	last = data_len % AES_BLOCK_LEN;
 
 	for (i = 1; i <= blocks; i++) {
@@ -357,7 +373,7 @@ static int ieee80211_ccmp_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	if (memcmp(mic, a, CCMP_MIC_LEN) != 0) {
 		if (net_ratelimit()) {
 			printk(KERN_DEBUG "CCMP: decrypt failed: STA="
-			       MAC_FMT "\n", MAC_ARG(hdr->addr2));
+			       "%s\n", print_mac(mac, hdr->addr2));
 		}
 		key->dot11RSNAStatsCCMPDecryptErrors++;
 		return -5;
@@ -377,7 +393,7 @@ static int ieee80211_ccmp_set_key(void *key, int len, u8 * seq, void *priv)
 {
 	struct ieee80211_ccmp_data *data = priv;
 	int keyidx;
-	struct crypto_tfm *tfm = data->tfm;
+	struct crypto_cipher *tfm = data->tfm;
 
 	keyidx = data->key_idx;
 	memset(data, 0, sizeof(*data));
@@ -429,12 +445,16 @@ static int ieee80211_ccmp_get_key(void *key, int len, u8 * seq, void *priv)
 static char *ieee80211_ccmp_print_stats(char *p, void *priv)
 {
 	struct ieee80211_ccmp_data *ccmp = priv;
+
 	p += sprintf(p, "key[%d] alg=CCMP key_set=%d "
 		     "tx_pn=%02x%02x%02x%02x%02x%02x "
 		     "rx_pn=%02x%02x%02x%02x%02x%02x "
 		     "format_errors=%d replays=%d decrypt_errors=%d\n",
 		     ccmp->key_idx, ccmp->key_set,
-		     MAC_ARG(ccmp->tx_pn), MAC_ARG(ccmp->rx_pn),
+		     ccmp->tx_pn[0], ccmp->tx_pn[1], ccmp->tx_pn[2],
+		     ccmp->tx_pn[3], ccmp->tx_pn[4], ccmp->tx_pn[5],
+		     ccmp->rx_pn[0], ccmp->rx_pn[1], ccmp->rx_pn[2],
+		     ccmp->rx_pn[3], ccmp->rx_pn[4], ccmp->rx_pn[5],
 		     ccmp->dot11RSNAStatsCCMPFormatErrors,
 		     ccmp->dot11RSNAStatsCCMPReplays,
 		     ccmp->dot11RSNAStatsCCMPDecryptErrors);

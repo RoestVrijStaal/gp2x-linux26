@@ -1,5 +1,5 @@
 /* net/atm/common.h - ATM sockets (common part for PVC and SVC) */
- 
+
 /* Written 1995-2000 by Werner Almesberger, EPFL LRC/ICA */
 
 
@@ -10,7 +10,7 @@
 #include <linux/poll.h> /* for poll_table */
 
 
-int vcc_create(struct socket *sock, int protocol, int family);
+int vcc_create(struct net *net, struct socket *sock, int protocol, int family);
 int vcc_release(struct socket *sock);
 int vcc_connect(struct socket *sock, int itf, short vpi, int vci);
 int vcc_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,

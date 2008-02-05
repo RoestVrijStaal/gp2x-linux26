@@ -56,8 +56,6 @@ do {								\
 #define ARP_NF_ASSERT(x)
 #endif
 
-#include <linux/netfilter_ipv4/listhelp.h>
-
 static inline int arp_devaddr_compare(const struct arpt_devaddr_info *ap,
 				      char *hdr_addr, int len)
 {
@@ -82,7 +80,7 @@ static inline int arp_packet_match(const struct arphdr *arphdr,
 {
 	char *arpptr = (char *)(arphdr + 1);
 	char *src_devaddr, *tgt_devaddr;
-	u32 src_ipaddr, tgt_ipaddr;
+	__be32 src_ipaddr, tgt_ipaddr;
 	int i, ret;
 
 #define FWINV(bool,invflg) ((bool) ^ !!(arpinfo->invflags & invflg))
@@ -168,13 +166,9 @@ static inline int arp_packet_match(const struct arphdr *arphdr,
 		return 0;
 	}
 
-	for (i = 0, ret = 0; i < IFNAMSIZ/sizeof(unsigned long); i++) {
-		unsigned long odev;
-		memcpy(&odev, outdev + i*sizeof(unsigned long),
-		       sizeof(unsigned long));
-		ret |= (odev
-			^ ((const unsigned long *)arpinfo->outiface)[i])
-			& ((const unsigned long *)arpinfo->outiface_mask)[i];
+	for (i = 0, ret = 0; i < IFNAMSIZ; i++) {
+		ret |= (outdev[i] ^ arpinfo->outiface[i])
+			& arpinfo->outiface_mask[i];
 	}
 
 	if (FWINV(ret != 0, ARPT_INV_VIA_OUT)) {
@@ -203,13 +197,12 @@ static inline int arp_checkentry(const struct arpt_arp *arp)
 	return 1;
 }
 
-static unsigned int arpt_error(struct sk_buff **pskb,
+static unsigned int arpt_error(struct sk_buff *skb,
 			       const struct net_device *in,
 			       const struct net_device *out,
 			       unsigned int hooknum,
 			       const struct xt_target *target,
-			       const void *targinfo,
-			       void *userinfo)
+			       const void *targinfo)
 {
 	if (net_ratelimit())
 		printk("arp_tables: error: '%s'\n", (char *)targinfo);
@@ -222,26 +215,25 @@ static inline struct arpt_entry *get_entry(void *base, unsigned int offset)
 	return (struct arpt_entry *)(base + offset);
 }
 
-unsigned int arpt_do_table(struct sk_buff **pskb,
+unsigned int arpt_do_table(struct sk_buff *skb,
 			   unsigned int hook,
 			   const struct net_device *in,
 			   const struct net_device *out,
-			   struct arpt_table *table,
-			   void *userdata)
+			   struct arpt_table *table)
 {
 	static const char nulldevname[IFNAMSIZ];
 	unsigned int verdict = NF_DROP;
 	struct arphdr *arp;
-	int hotdrop = 0;
+	bool hotdrop = false;
 	struct arpt_entry *e, *back;
 	const char *indev, *outdev;
 	void *table_base;
 	struct xt_table_info *private;
 
 	/* ARP header, plus 2 device addresses, plus 2 IP addresses.  */
-	if (!pskb_may_pull((*pskb), (sizeof(struct arphdr) +
-				     (2 * (*pskb)->dev->addr_len) +
-				     (2 * sizeof(u32)))))
+	if (!pskb_may_pull(skb, (sizeof(struct arphdr) +
+				 (2 * skb->dev->addr_len) +
+				 (2 * sizeof(u32)))))
 		return NF_DROP;
 
 	indev = in ? in->name : nulldevname;
@@ -253,14 +245,14 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 	e = get_entry(table_base, private->hook_entry[hook]);
 	back = get_entry(table_base, private->underflow[hook]);
 
-	arp = (*pskb)->nh.arph;
+	arp = arp_hdr(skb);
 	do {
-		if (arp_packet_match(arp, (*pskb)->dev, indev, outdev, &e->arp)) {
+		if (arp_packet_match(arp, skb->dev, indev, outdev, &e->arp)) {
 			struct arpt_entry_target *t;
 			int hdr_len;
 
 			hdr_len = sizeof(*arp) + (2 * sizeof(struct in_addr)) +
-				(2 * (*pskb)->dev->addr_len);
+				(2 * skb->dev->addr_len);
 			ADD_COUNTER(e->counters, hdr_len, 1);
 
 			t = arpt_get_target(e);
@@ -298,15 +290,14 @@ unsigned int arpt_do_table(struct sk_buff **pskb,
 				/* Targets which reenter must return
 				 * abs. verdicts
 				 */
-				verdict = t->u.kernel.target->target(pskb,
+				verdict = t->u.kernel.target->target(skb,
 								     in, out,
 								     hook,
 								     t->u.kernel.target,
-								     t->data,
-								     userdata);
+								     t->data);
 
 				/* Target might have changed stuff. */
-				arp = (*pskb)->nh.arph;
+				arp = arp_hdr(skb);
 
 				if (verdict == ARPT_CONTINUE)
 					e = (void *)e + e->next_offset;
@@ -363,6 +354,7 @@ static int mark_source_chains(struct xt_table_info *newinfo,
 		for (;;) {
 			struct arpt_standard_target *t
 				= (void *)arpt_get_target(e);
+			int visited = e->comefrom & (1 << hook);
 
 			if (e->comefrom & (1 << NF_ARP_NUMHOOKS)) {
 				printk("arptables: loop hook %u pos %u %08X.\n",
@@ -373,12 +365,19 @@ static int mark_source_chains(struct xt_table_info *newinfo,
 				|= ((1 << hook) | (1 << NF_ARP_NUMHOOKS));
 
 			/* Unconditional return/END. */
-			if (e->target_offset == sizeof(struct arpt_entry)
+			if ((e->target_offset == sizeof(struct arpt_entry)
 			    && (strcmp(t->target.u.user.name,
 				       ARPT_STANDARD_TARGET) == 0)
 			    && t->verdict < 0
-			    && unconditional(&e->arp)) {
+			    && unconditional(&e->arp)) || visited) {
 				unsigned int oldpos, size;
+
+				if (t->verdict < -NF_MAX_VERDICT - 1) {
+					duprintf("mark_source_chains: bad "
+						"negative verdict (%i)\n",
+								t->verdict);
+					return 0;
+				}
 
 				/* Return: backtrack through the last
 				 * big jump.
@@ -409,6 +408,14 @@ static int mark_source_chains(struct xt_table_info *newinfo,
 				if (strcmp(t->target.u.user.name,
 					   ARPT_STANDARD_TARGET) == 0
 				    && newpos >= 0) {
+					if (newpos > newinfo->size -
+						sizeof(struct arpt_entry)) {
+						duprintf("mark_source_chains: "
+							"bad verdict (%i)\n",
+								newpos);
+						return 0;
+					}
+
 					/* This a jump; chase it. */
 					duprintf("Jump rule %u -> %u\n",
 						 pos, newpos);
@@ -431,8 +438,6 @@ static int mark_source_chains(struct xt_table_info *newinfo,
 static inline int standard_check(const struct arpt_entry_target *t,
 				 unsigned int max_offset)
 {
-	struct arpt_standard_target *targ = (void *)t;
-
 	/* Check standard info. */
 	if (t->u.target_size
 	    != ARPT_ALIGN(sizeof(struct arpt_standard_target))) {
@@ -442,18 +447,6 @@ static inline int standard_check(const struct arpt_entry_target *t,
 		return 0;
 	}
 
-	if (targ->verdict >= 0
-	    && targ->verdict > max_offset - sizeof(struct arpt_entry)) {
-		duprintf("arpt_standard_check: bad verdict (%i)\n",
-			 targ->verdict);
-		return 0;
-	}
-
-	if (targ->verdict < -NF_MAX_VERDICT - 1) {
-		duprintf("arpt_standard_check: bad negative verdict (%i)\n",
-			 targ->verdict);
-		return 0;
-	}
 	return 1;
 }
 
@@ -471,7 +464,13 @@ static inline int check_entry(struct arpt_entry *e, const char *name, unsigned i
 		return -EINVAL;
 	}
 
+	if (e->target_offset + sizeof(struct arpt_entry_target) > e->next_offset)
+		return -EINVAL;
+
 	t = arpt_get_target(e);
+	if (e->target_offset + t->u.target_size > e->next_offset)
+		return -EINVAL;
+
 	target = try_then_request_module(xt_find_target(NF_ARP, t->u.user.name,
 							t->u.user.revision),
 					 "arpt_%s", t->u.user.name);
@@ -490,12 +489,10 @@ static inline int check_entry(struct arpt_entry *e, const char *name, unsigned i
 	if (t->u.kernel.target == &arpt_standard_target) {
 		if (!standard_check(t, size)) {
 			ret = -EINVAL;
-			goto out;
+			goto err;
 		}
 	} else if (t->u.kernel.target->checkentry
 		   && !t->u.kernel.target->checkentry(name, e, target, t->data,
-						      t->u.target_size
-						      - sizeof(*t),
 						      e->comefrom)) {
 		duprintf("arp_tables: check failed for `%s'.\n",
 			 t->u.kernel.target->name);
@@ -543,7 +540,7 @@ static inline int check_entry_size_and_hooks(struct arpt_entry *e,
 	}
 
 	/* FIXME: underflows must be unconditional, standard verdicts
-           < 0 (not ARPT_RETURN). --RR */
+	   < 0 (not ARPT_RETURN). --RR */
 
 	/* Clear counters and comefrom */
 	e->counters = ((struct xt_counters) { 0, 0 });
@@ -562,8 +559,7 @@ static inline int cleanup_entry(struct arpt_entry *e, unsigned int *i)
 
 	t = arpt_get_target(e);
 	if (t->u.kernel.target->destroy)
-		t->u.kernel.target->destroy(t->u.kernel.target, t->data,
-					    t->u.target_size - sizeof(*t));
+		t->u.kernel.target->destroy(t->u.kernel.target, t->data);
 	module_put(t->u.kernel.target->me);
 	return 0;
 }
@@ -641,7 +637,7 @@ static int translate_table(const char *name,
 
 	if (ret != 0) {
 		ARPT_ENTRY_ITERATE(entry0, newinfo->size,
-				   cleanup_entry, &i);
+				cleanup_entry, &i);
 		return ret;
 	}
 
@@ -869,8 +865,8 @@ static int do_replace(void __user *user, unsigned int len)
 	/* Update module usage count based on number of rules */
 	duprintf("do_replace: oldnum=%u, initnum=%u, newnum=%u\n",
 		oldinfo->number, oldinfo->initial_entries, newinfo->number);
-	if ((oldinfo->number > oldinfo->initial_entries) || 
-	    (newinfo->number <= oldinfo->initial_entries)) 
+	if ((oldinfo->number > oldinfo->initial_entries) ||
+	    (newinfo->number <= oldinfo->initial_entries))
 		module_put(t->me);
 	if ((oldinfo->number > oldinfo->initial_entries) &&
 	    (newinfo->number <= oldinfo->initial_entries))
@@ -1144,13 +1140,13 @@ void arpt_unregister_table(struct arpt_table *table)
 }
 
 /* The built-in targets: standard (NULL) and error. */
-static struct arpt_target arpt_standard_target = {
+static struct arpt_target arpt_standard_target __read_mostly = {
 	.name		= ARPT_STANDARD_TARGET,
 	.targetsize	= sizeof(int),
 	.family		= NF_ARP,
 };
 
-static struct arpt_target arpt_error_target = {
+static struct arpt_target arpt_error_target __read_mostly = {
 	.name		= ARPT_ERROR_TARGET,
 	.target		= arpt_error,
 	.targetsize	= ARPT_FUNCTION_MAXNAMELEN,
@@ -1165,6 +1161,7 @@ static struct nf_sockopt_ops arpt_sockopts = {
 	.get_optmin	= ARPT_BASE_CTL,
 	.get_optmax	= ARPT_SO_GET_MAX+1,
 	.get		= do_arpt_get_ctl,
+	.owner		= THIS_MODULE,
 };
 
 static int __init arp_tables_init(void)
@@ -1188,7 +1185,7 @@ static int __init arp_tables_init(void)
 	if (ret < 0)
 		goto err4;
 
-	printk("arp_tables: (C) 2002 David S. Miller\n");
+	printk(KERN_INFO "arp_tables: (C) 2002 David S. Miller\n");
 	return 0;
 
 err4:
@@ -1204,6 +1201,8 @@ err1:
 static void __exit arp_tables_fini(void)
 {
 	nf_unregister_sockopt(&arpt_sockopts);
+	xt_unregister_target(&arpt_error_target);
+	xt_unregister_target(&arpt_standard_target);
 	xt_proto_fini(NF_ARP);
 }
 

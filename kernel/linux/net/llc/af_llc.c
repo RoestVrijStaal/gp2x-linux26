@@ -64,10 +64,10 @@ static inline u16 llc_ui_next_link_no(int sap)
  *
  *	Given an ARP header type return the corresponding ethernet protocol.
  */
-static inline u16 llc_proto_type(u16 arphrd)
+static inline __be16 llc_proto_type(u16 arphrd)
 {
 	return arphrd == ARPHRD_IEEE802_TR ?
-		         htons(ETH_P_TR_802_2) : htons(ETH_P_802_2);
+			 htons(ETH_P_TR_802_2) : htons(ETH_P_802_2);
 }
 
 /**
@@ -114,7 +114,7 @@ static int llc_ui_send_data(struct sock* sk, struct sk_buff *skb, int noblock)
 	struct llc_sock* llc = llc_sk(sk);
 	int rc = 0;
 
-	if (unlikely(llc_data_accept_state(llc->state) || 
+	if (unlikely(llc_data_accept_state(llc->state) ||
 		     llc->remote_busy_flag ||
 		     llc->p_flag)) {
 		long timeout = sock_sndtimeo(sk, noblock);
@@ -150,14 +150,17 @@ static struct proto llc_proto = {
  *	socket type we have available.
  *	Returns 0 upon success, negative upon failure.
  */
-static int llc_ui_create(struct socket *sock, int protocol)
+static int llc_ui_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct sock *sk;
 	int rc = -ESOCKTNOSUPPORT;
 
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
+
 	if (likely(sock->type == SOCK_DGRAM || sock->type == SOCK_STREAM)) {
 		rc = -ENOMEM;
-		sk = llc_sk_alloc(PF_LLC, GFP_KERNEL, &llc_proto);
+		sk = llc_sk_alloc(net, PF_LLC, GFP_KERNEL, &llc_proto);
 		if (sk) {
 			rc = 0;
 			llc_ui_sk_init(sock, sk);
@@ -249,7 +252,7 @@ static int llc_ui_autobind(struct socket *sock, struct sockaddr_llc *addr)
 	if (!sock_flag(sk, SOCK_ZAPPED))
 		goto out;
 	rc = -ENODEV;
-	llc->dev = dev_getfirstbyhwtype(addr->sllc_arphrd);
+	llc->dev = dev_getfirstbyhwtype(&init_net, addr->sllc_arphrd);
 	if (!llc->dev)
 		goto out;
 	rc = -EUSERS;
@@ -300,7 +303,7 @@ static int llc_ui_bind(struct socket *sock, struct sockaddr *uaddr, int addrlen)
 		goto out;
 	rc = -ENODEV;
 	rtnl_lock();
-	llc->dev = dev_getbyhwaddr(addr->sllc_arphrd, addr->sllc_mac);
+	llc->dev = dev_getbyhwaddr(&init_net, addr->sllc_arphrd, addr->sllc_mac);
 	rtnl_unlock();
 	if (!llc->dev)
 		goto out;
@@ -324,7 +327,7 @@ static int llc_ui_bind(struct socket *sock, struct sockaddr *uaddr, int addrlen)
 		memset(&laddr, 0, sizeof(laddr));
 		memset(&daddr, 0, sizeof(daddr));
 		/*
-		 * FIXME: check if the the address is multicast,
+		 * FIXME: check if the address is multicast,
 		 * 	  only SOCK_DGRAM can do this.
 		 */
 		memcpy(laddr.mac, addr->sllc_mac, IFHWADDRLEN);
@@ -602,7 +605,7 @@ static int llc_ui_accept(struct socket *sock, struct socket *newsock, int flags)
 	int rc = -EOPNOTSUPP;
 
 	dprintk("%s: accepting on %02X\n", __FUNCTION__,
-	        llc_sk(sk)->laddr.lsap);
+		llc_sk(sk)->laddr.lsap);
 	lock_sock(sk);
 	if (unlikely(sk->sk_type != SOCK_STREAM))
 		goto out;
@@ -617,7 +620,7 @@ static int llc_ui_accept(struct socket *sock, struct socket *newsock, int flags)
 			goto out;
 	}
 	dprintk("%s: got a new connection on %02X\n", __FUNCTION__,
-	        llc_sk(sk)->laddr.lsap);
+		llc_sk(sk)->laddr.lsap);
 	skb = skb_dequeue(&sk->sk_receive_queue);
 	rc = -EINVAL;
 	if (!skb->sk)
@@ -682,7 +685,7 @@ static int llc_ui_recvmsg(struct kiocb *iocb, struct socket *sock,
 	if (flags & MSG_PEEK) {
 		peek_seq = llc->copied_seq;
 		seq = &peek_seq;
- 	}
+	}
 
 	target = sock_rcvlowat(sk, flags & MSG_WAITALL, len);
 	copied = 0;
@@ -759,7 +762,7 @@ static int llc_ui_recvmsg(struct kiocb *iocb, struct socket *sock,
 			if (net_ratelimit())
 				printk(KERN_DEBUG "LLC(%s:%d): Application "
 						  "bug, race in MSG_PEEK.\n",
-				       current->comm, current->pid);
+				       current->comm, task_pid_nr(current));
 			peek_seq = llc->copied_seq;
 		}
 		continue;
@@ -860,7 +863,7 @@ static int llc_ui_sendmsg(struct kiocb *iocb, struct socket *sock,
 		goto release;
 	skb->dev      = llc->dev;
 	skb->protocol = llc_proto_type(addr->sllc_arphrd);
-	skb_reserve(skb, hdrlen); 
+	skb_reserve(skb, hdrlen);
 	rc = memcpy_fromiovec(skb_put(skb, copied), msg->msg_iov, copied);
 	if (rc)
 		goto out;
@@ -1116,11 +1119,11 @@ static const struct proto_ops llc_ui_ops = {
 };
 
 static char llc_proc_err_msg[] __initdata =
-        KERN_CRIT "LLC: Unable to register the proc_fs entries\n";
+	KERN_CRIT "LLC: Unable to register the proc_fs entries\n";
 static char llc_sysctl_err_msg[] __initdata =
-        KERN_CRIT "LLC: Unable to register the sysctl entries\n";
+	KERN_CRIT "LLC: Unable to register the sysctl entries\n";
 static char llc_sock_err_msg[] __initdata =
-        KERN_CRIT "LLC: Unable to register the network family\n";
+	KERN_CRIT "LLC: Unable to register the network family\n";
 
 static int __init llc2_init(void)
 {

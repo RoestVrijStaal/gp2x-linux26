@@ -32,7 +32,6 @@ struct flow_cache_entry {
 	u8			dir;
 	struct flowi		key;
 	u32			genid;
-	u32			sk_sid;
 	void			*object;
 	atomic_t		*object_ref;
 };
@@ -45,7 +44,7 @@ static DEFINE_PER_CPU(struct flow_cache_entry **, flow_tables) = { NULL };
 
 #define flow_table(cpu) (per_cpu(flow_tables, cpu))
 
-static kmem_cache_t *flow_cachep __read_mostly;
+static struct kmem_cache *flow_cachep __read_mostly;
 
 static int flow_lwm, flow_hwm;
 
@@ -86,6 +85,14 @@ static void flow_cache_new_hashrnd(unsigned long arg)
 	add_timer(&flow_hash_rnd_timer);
 }
 
+static void flow_entry_kill(int cpu, struct flow_cache_entry *fle)
+{
+	if (fle->object)
+		atomic_dec(fle->object_ref);
+	kmem_cache_free(flow_cachep, fle);
+	flow_count(cpu)--;
+}
+
 static void __flow_cache_shrink(int cpu, int shrink_to)
 {
 	struct flow_cache_entry *fle, **flp;
@@ -101,10 +108,7 @@ static void __flow_cache_shrink(int cpu, int shrink_to)
 		}
 		while ((fle = *flp) != NULL) {
 			*flp = fle->next;
-			if (fle->object)
-				atomic_dec(fle->object_ref);
-			kmem_cache_free(flow_cachep, fle);
-			flow_count(cpu)--;
+			flow_entry_kill(cpu, fle);
 		}
 	}
 }
@@ -138,8 +142,6 @@ typedef u64 flow_compare_t;
 typedef u32 flow_compare_t;
 #endif
 
-extern void flowi_is_missized(void);
-
 /* I hear what you're saying, use memcmp.  But memcmp cannot make
  * important assumptions that we can here, such as alignment and
  * constant size.
@@ -149,8 +151,7 @@ static int flow_key_compare(struct flowi *key1, struct flowi *key2)
 	flow_compare_t *k1, *k1_lim, *k2;
 	const int n_elem = sizeof(struct flowi) / sizeof(flow_compare_t);
 
-	if (sizeof(struct flowi) % sizeof(flow_compare_t))
-		flowi_is_missized();
+	BUILD_BUG_ON(sizeof(struct flowi) % sizeof(flow_compare_t));
 
 	k1 = (flow_compare_t *) key1;
 	k1_lim = k1 + n_elem;
@@ -165,7 +166,7 @@ static int flow_key_compare(struct flowi *key1, struct flowi *key2)
 	return 0;
 }
 
-void *flow_cache_lookup(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
+void *flow_cache_lookup(struct flowi *key, u16 family, u8 dir,
 			flow_resolve_t resolver)
 {
 	struct flow_cache_entry *fle, **head;
@@ -189,7 +190,6 @@ void *flow_cache_lookup(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
 	for (fle = *head; fle; fle = fle->next) {
 		if (fle->family == family &&
 		    fle->dir == dir &&
-		    fle->sk_sid == sk_sid &&
 		    flow_key_compare(key, &fle->key) == 0) {
 			if (fle->genid == atomic_read(&flow_cache_genid)) {
 				void *ret = fle->object;
@@ -208,13 +208,12 @@ void *flow_cache_lookup(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
 		if (flow_count(cpu) > flow_hwm)
 			flow_cache_shrink(cpu);
 
-		fle = kmem_cache_alloc(flow_cachep, SLAB_ATOMIC);
+		fle = kmem_cache_alloc(flow_cachep, GFP_ATOMIC);
 		if (fle) {
 			fle->next = *head;
 			*head = fle;
 			fle->family = family;
 			fle->dir = dir;
-			fle->sk_sid = sk_sid;
 			memcpy(&fle->key, key, sizeof(*key));
 			fle->object = NULL;
 			flow_count(cpu)++;
@@ -223,12 +222,13 @@ void *flow_cache_lookup(struct flowi *key, u32 sk_sid, u16 family, u8 dir,
 
 nocache:
 	{
+		int err;
 		void *obj;
 		atomic_t *obj_ref;
 
-		resolver(key, sk_sid, family, dir, &obj, &obj_ref);
+		err = resolver(key, family, dir, &obj, &obj_ref);
 
-		if (fle) {
+		if (fle && !err) {
 			fle->genid = atomic_read(&flow_cache_genid);
 
 			if (fle->object)
@@ -241,6 +241,8 @@ nocache:
 		}
 		local_bh_enable();
 
+		if (err)
+			obj = ERR_PTR(err);
 		return obj;
 	}
 }
@@ -329,16 +331,14 @@ static void __devinit flow_cache_cpu_prepare(int cpu)
 	tasklet_init(tasklet, flow_cache_flush_tasklet, 0);
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
 static int flow_cache_cpu(struct notifier_block *nfb,
 			  unsigned long action,
 			  void *hcpu)
 {
-	if (action == CPU_DEAD)
+	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN)
 		__flow_cache_shrink((unsigned long)hcpu, 0);
 	return NOTIFY_OK;
 }
-#endif /* CONFIG_HOTPLUG_CPU */
 
 static int __init flow_cache_init(void)
 {
@@ -346,12 +346,8 @@ static int __init flow_cache_init(void)
 
 	flow_cachep = kmem_cache_create("flow_cache",
 					sizeof(struct flow_cache_entry),
-					0, SLAB_HWCACHE_ALIGN,
-					NULL, NULL);
-
-	if (!flow_cachep)
-		panic("NET: failed to allocate flow cache slab\n");
-
+					0, SLAB_HWCACHE_ALIGN|SLAB_PANIC,
+					NULL);
 	flow_hash_shift = 10;
 	flow_lwm = 2 * flow_hash_size;
 	flow_hwm = 4 * flow_hash_size;

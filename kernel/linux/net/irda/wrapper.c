@@ -20,7 +20,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -238,8 +238,9 @@ async_bump(struct net_device *dev,
 	skb_reserve(newskb, 1);
 
 	if(docopy) {
-		/* Copy data without CRC (lenght already checked) */
-		memcpy(newskb->data, rx_buff->data, rx_buff->len - 2);
+		/* Copy data without CRC (length already checked) */
+		skb_copy_to_linear_data(newskb, rx_buff->data,
+					rx_buff->len - 2);
 		/* Deliver this skb */
 		dataskb = newskb;
 	} else {
@@ -256,7 +257,7 @@ async_bump(struct net_device *dev,
 
 	/* Feed it to IrLAP layer */
 	dataskb->dev = dev;
-	dataskb->mac.raw  = dataskb->data;
+	skb_reset_mac_header(dataskb);
 	dataskb->protocol = htons(ETH_P_IRDA);
 
 	netif_rx(dataskb);
@@ -295,7 +296,7 @@ async_unwrap_bof(struct net_device *dev,
 	case OUTSIDE_FRAME:
 	case BEGIN_FRAME:
 	default:
-		/* We may receive multiple BOF at the start of frame */ 
+		/* We may receive multiple BOF at the start of frame */
 		break;
 	}
 

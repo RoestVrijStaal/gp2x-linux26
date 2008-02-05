@@ -8,27 +8,28 @@
  *		From code orinally in TCP
  */
 
-
+#include <linux/kernel.h>
 #include <net/inet_hashtables.h>
 #include <net/inet_timewait_sock.h>
 #include <net/ip.h>
 
 /* Must be called with locally disabled BHs. */
-void __inet_twsk_kill(struct inet_timewait_sock *tw, struct inet_hashinfo *hashinfo)
+static void __inet_twsk_kill(struct inet_timewait_sock *tw,
+			     struct inet_hashinfo *hashinfo)
 {
 	struct inet_bind_hashbucket *bhead;
 	struct inet_bind_bucket *tb;
 	/* Unlink from established hashes. */
-	struct inet_ehash_bucket *ehead = inet_ehash_bucket(hashinfo, tw->tw_hash);
+	rwlock_t *lock = inet_ehash_lockp(hashinfo, tw->tw_hash);
 
-	write_lock(&ehead->lock);
+	write_lock(lock);
 	if (hlist_unhashed(&tw->tw_node)) {
-		write_unlock(&ehead->lock);
+		write_unlock(lock);
 		return;
 	}
 	__hlist_del(&tw->tw_node);
 	sk_node_init(&tw->tw_node);
-	write_unlock(&ehead->lock);
+	write_unlock(lock);
 
 	/* Disassociate with bind bucket. */
 	bhead = &hashinfo->bhash[inet_bhashfn(tw->tw_num, hashinfo->bhash_size)];
@@ -47,8 +48,6 @@ void __inet_twsk_kill(struct inet_timewait_sock *tw, struct inet_hashinfo *hashi
 	inet_twsk_put(tw);
 }
 
-EXPORT_SYMBOL_GPL(__inet_twsk_kill);
-
 /*
  * Enter the time wait state. This is called with locally disabled BH.
  * Essentially we whip up a timewait bucket, copy the relevant info into it
@@ -60,6 +59,7 @@ void __inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 	const struct inet_sock *inet = inet_sk(sk);
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	struct inet_ehash_bucket *ehead = inet_ehash_bucket(hashinfo, sk->sk_hash);
+	rwlock_t *lock = inet_ehash_lockp(hashinfo, sk->sk_hash);
 	struct inet_bind_hashbucket *bhead;
 	/* Step 1: Put TW into bind hash. Original socket stays there too.
 	   Note, that any socket with inet->num != 0 MUST be bound in
@@ -72,17 +72,17 @@ void __inet_twsk_hashdance(struct inet_timewait_sock *tw, struct sock *sk,
 	inet_twsk_add_bind_node(tw, &tw->tw_tb->owners);
 	spin_unlock(&bhead->lock);
 
-	write_lock(&ehead->lock);
+	write_lock(lock);
 
 	/* Step 2: Remove SK from established hash. */
 	if (__sk_del_node_init(sk))
 		sock_prot_dec_use(sk->sk_prot);
 
-	/* Step 3: Hash TW into TIMEWAIT half of established hash table. */
-	inet_twsk_add_node(tw, &(ehead + hashinfo->ehash_size)->chain);
+	/* Step 3: Hash TW into TIMEWAIT chain. */
+	inet_twsk_add_node(tw, &ehead->twchain);
 	atomic_inc(&tw->tw_refcnt);
 
-	write_unlock(&ehead->lock);
+	write_unlock(lock);
 }
 
 EXPORT_SYMBOL_GPL(__inet_twsk_hashdance);
@@ -91,7 +91,7 @@ struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk, const int stat
 {
 	struct inet_timewait_sock *tw =
 		kmem_cache_alloc(sk->sk_prot_creator->twsk_prot->twsk_slab,
-				 SLAB_ATOMIC);
+				 GFP_ATOMIC);
 	if (tw != NULL) {
 		const struct inet_sock *inet = inet_sk(sk);
 
@@ -178,7 +178,6 @@ void inet_twdr_hangman(unsigned long data)
 	need_timer = 0;
 	if (inet_twdr_do_twkill_work(twdr, twdr->slot)) {
 		twdr->thread_slots |= (1 << twdr->slot);
-		mb();
 		schedule_work(&twdr->twkill_work);
 		need_timer = 1;
 	} else {
@@ -197,9 +196,10 @@ EXPORT_SYMBOL_GPL(inet_twdr_hangman);
 
 extern void twkill_slots_invalid(void);
 
-void inet_twdr_twkill_work(void *data)
+void inet_twdr_twkill_work(struct work_struct *work)
 {
-	struct inet_timewait_death_row *twdr = data;
+	struct inet_timewait_death_row *twdr =
+		container_of(work, struct inet_timewait_death_row, twkill_work);
 	int i;
 
 	if ((INET_TWDR_TWKILL_SLOTS - 1) > (sizeof(twdr->thread_slots) * 8))
@@ -293,7 +293,7 @@ void inet_twsk_schedule(struct inet_timewait_sock *tw,
 		if (timeo >= timewait_len) {
 			slot = INET_TWDR_TWKILL_SLOTS - 1;
 		} else {
-			slot = (timeo + twdr->period - 1) / twdr->period;
+			slot = DIV_ROUND_UP(timeo, twdr->period);
 			if (slot >= INET_TWDR_TWKILL_SLOTS)
 				slot = INET_TWDR_TWKILL_SLOTS - 1;
 		}

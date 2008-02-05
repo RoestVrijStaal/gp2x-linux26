@@ -700,7 +700,7 @@ static struct sock *llc_create_incoming_sock(struct sock *sk,
 					     struct llc_addr *saddr,
 					     struct llc_addr *daddr)
 {
-	struct sock *newsk = llc_sk_alloc(sk->sk_family, GFP_ATOMIC,
+	struct sock *newsk = llc_sk_alloc(sk->sk_net, sk->sk_family, GFP_ATOMIC,
 					  sk->sk_prot);
 	struct llc_sock *newllc, *llc = llc_sk(sk);
 
@@ -854,7 +854,7 @@ static void llc_sk_init(struct sock* sk)
 	llc->n2 = 2;   /* max retransmit */
 	llc->k  = 2;   /* tx win size, will adjust dynam */
 	llc->rw = 128; /* rx win size (opt and equal to
-		        * tx_win of remote LLC) */
+			* tx_win of remote LLC) */
 	skb_queue_head_init(&llc->pdu_unack_q);
 	sk->sk_backlog_rcv = llc_backlog_rcv;
 }
@@ -867,9 +867,9 @@ static void llc_sk_init(struct sock* sk)
  *	Allocates a LLC sock and initializes it. Returns the new LLC sock
  *	or %NULL if there's no memory available for one
  */
-struct sock *llc_sk_alloc(int family, gfp_t priority, struct proto *prot)
+struct sock *llc_sk_alloc(struct net *net, int family, gfp_t priority, struct proto *prot)
 {
-	struct sock *sk = sk_alloc(family, priority, prot, 1);
+	struct sock *sk = sk_alloc(net, family, priority, prot);
 
 	if (!sk)
 		goto out;

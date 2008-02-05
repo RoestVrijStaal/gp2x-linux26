@@ -1,7 +1,7 @@
 /*
  * Host AP crypt: host-based WEP encryption implementation for Host AP driver
  *
- * Copyright (c) 2002-2004, Jouni Malinen <jkmaline@cc.hut.fi>
+ * Copyright (c) 2002-2004, Jouni Malinen <j@w1.fi>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -9,17 +9,19 @@
  * more details.
  */
 
+#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/random.h>
+#include <linux/scatterlist.h>
 #include <linux/skbuff.h>
+#include <linux/mm.h>
 #include <asm/string.h>
 
 #include <net/ieee80211.h>
 
 #include <linux/crypto.h>
-#include <asm/scatterlist.h>
 #include <linux/crc32.h>
 
 MODULE_AUTHOR("Jouni Malinen");
@@ -32,7 +34,8 @@ struct prism2_wep_data {
 	u8 key[WEP_KEY_LEN + 1];
 	u8 key_len;
 	u8 key_idx;
-	struct crypto_tfm *tfm;
+	struct crypto_blkcipher *tx_tfm;
+	struct crypto_blkcipher *rx_tfm;
 };
 
 static void *prism2_wep_init(int keyidx)
@@ -44,13 +47,21 @@ static void *prism2_wep_init(int keyidx)
 		goto fail;
 	priv->key_idx = keyidx;
 
-	priv->tfm = crypto_alloc_tfm("arc4", 0);
-	if (priv->tfm == NULL) {
+	priv->tx_tfm = crypto_alloc_blkcipher("ecb(arc4)", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(priv->tx_tfm)) {
 		printk(KERN_DEBUG "ieee80211_crypt_wep: could not allocate "
 		       "crypto API arc4\n");
+		priv->tx_tfm = NULL;
 		goto fail;
 	}
 
+	priv->rx_tfm = crypto_alloc_blkcipher("ecb(arc4)", 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(priv->rx_tfm)) {
+		printk(KERN_DEBUG "ieee80211_crypt_wep: could not allocate "
+		       "crypto API arc4\n");
+		priv->rx_tfm = NULL;
+		goto fail;
+	}
 	/* start WEP IV from a random value */
 	get_random_bytes(&priv->iv, 4);
 
@@ -58,8 +69,10 @@ static void *prism2_wep_init(int keyidx)
 
       fail:
 	if (priv) {
-		if (priv->tfm)
-			crypto_free_tfm(priv->tfm);
+		if (priv->tx_tfm)
+			crypto_free_blkcipher(priv->tx_tfm);
+		if (priv->rx_tfm)
+			crypto_free_blkcipher(priv->rx_tfm);
 		kfree(priv);
 	}
 	return NULL;
@@ -68,8 +81,12 @@ static void *prism2_wep_init(int keyidx)
 static void prism2_wep_deinit(void *priv)
 {
 	struct prism2_wep_data *_priv = priv;
-	if (_priv && _priv->tfm)
-		crypto_free_tfm(_priv->tfm);
+	if (_priv) {
+		if (_priv->tx_tfm)
+			crypto_free_blkcipher(_priv->tx_tfm);
+		if (_priv->rx_tfm)
+			crypto_free_blkcipher(_priv->rx_tfm);
+	}
 	kfree(priv);
 }
 
@@ -80,7 +97,7 @@ static int prism2_wep_build_iv(struct sk_buff *skb, int hdr_len,
 	struct prism2_wep_data *wep = priv;
 	u32 klen, len;
 	u8 *pos;
-	
+
 	if (skb_headroom(skb) < 4 || skb->len < hdr_len)
 		return -1;
 
@@ -120,6 +137,7 @@ static int prism2_wep_build_iv(struct sk_buff *skb, int hdr_len,
 static int prism2_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct prism2_wep_data *wep = priv;
+	struct blkcipher_desc desc = { .tfm = wep->tx_tfm };
 	u32 crc, klen, len;
 	u8 *pos, *icv;
 	struct scatterlist sg;
@@ -128,17 +146,17 @@ static int prism2_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	/* other checks are in prism2_wep_build_iv */
 	if (skb_tailroom(skb) < 4)
 		return -1;
-	
+
 	/* add the IV to the frame */
 	if (prism2_wep_build_iv(skb, hdr_len, NULL, 0, priv))
 		return -1;
-	
+
 	/* Copy the IV into the first 3 bytes of the key */
-	memcpy(key, skb->data + hdr_len, 3);
+	skb_copy_from_linear_data_offset(skb, hdr_len, key, 3);
 
 	/* Copy rest of the WEP key (the secret part) */
 	memcpy(key + 3, wep->key, wep->key_len);
-	
+
 	len = skb->len - hdr_len - 4;
 	pos = skb->data + hdr_len + 4;
 	klen = 3 + wep->key_len;
@@ -151,13 +169,9 @@ static int prism2_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	icv[2] = crc >> 16;
 	icv[3] = crc >> 24;
 
-	crypto_cipher_setkey(wep->tfm, key, klen);
-	sg.page = virt_to_page(pos);
-	sg.offset = offset_in_page(pos);
-	sg.length = len + 4;
-	crypto_cipher_encrypt(wep->tfm, &sg, &sg, len + 4);
-
-	return 0;
+	crypto_blkcipher_setkey(wep->tx_tfm, key, klen);
+	sg_init_one(&sg, pos, len + 4);
+	return crypto_blkcipher_encrypt(&desc, &sg, &sg, len + 4);
 }
 
 /* Perform WEP decryption on given buffer. Buffer includes whole WEP part of
@@ -170,6 +184,7 @@ static int prism2_wep_encrypt(struct sk_buff *skb, int hdr_len, void *priv)
 static int prism2_wep_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 {
 	struct prism2_wep_data *wep = priv;
+	struct blkcipher_desc desc = { .tfm = wep->rx_tfm };
 	u32 crc, klen, plen;
 	u8 key[WEP_KEY_LEN + 3];
 	u8 keyidx, *pos, icv[4];
@@ -194,11 +209,10 @@ static int prism2_wep_decrypt(struct sk_buff *skb, int hdr_len, void *priv)
 	/* Apply RC4 to data and compute CRC32 over decrypted data */
 	plen = skb->len - hdr_len - 8;
 
-	crypto_cipher_setkey(wep->tfm, key, klen);
-	sg.page = virt_to_page(pos);
-	sg.offset = offset_in_page(pos);
-	sg.length = plen + 4;
-	crypto_cipher_decrypt(wep->tfm, &sg, &sg, plen + 4);
+	crypto_blkcipher_setkey(wep->rx_tfm, key, klen);
+	sg_init_one(&sg, pos, plen + 4);
+	if (crypto_blkcipher_decrypt(&desc, &sg, &sg, plen + 4))
+		return -7;
 
 	crc = ~crc32_le(~0, pos, plen);
 	icv[0] = crc;

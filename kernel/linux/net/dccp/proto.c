@@ -26,6 +26,7 @@
 #include <net/sock.h>
 #include <net/xfrm.h>
 
+#include <asm/ioctls.h>
 #include <asm/semaphore.h>
 #include <linux/spinlock.h>
 #include <linux/timer.h>
@@ -51,6 +52,9 @@ struct inet_hashinfo __cacheline_aligned dccp_hashinfo = {
 };
 
 EXPORT_SYMBOL_GPL(dccp_hashinfo);
+
+/* the maximum queue length for tx in packets. 0 is no limit */
+int sysctl_dccp_tx_qlen __read_mostly = 5;
 
 void dccp_set_state(struct sock *sk, const int state)
 {
@@ -169,7 +173,6 @@ int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 	struct inet_connection_sock *icsk = inet_csk(sk);
 
 	dccp_minisock_init(&dp->dccps_minisock);
-	do_gettimeofday(&dp->dccps_epoch);
 
 	/*
 	 * FIXME: We're hardcoding the CCID, and doing this at this point makes
@@ -193,7 +196,7 @@ int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 						      sk, GFP_KERNEL);
 		dp->dccps_hc_tx_ccid = ccid_hc_tx_new(dmsk->dccpms_tx_ccid,
 						      sk, GFP_KERNEL);
-	    	if (unlikely(dp->dccps_hc_rx_ccid == NULL ||
+		if (unlikely(dp->dccps_hc_rx_ccid == NULL ||
 			     dp->dccps_hc_tx_ccid == NULL)) {
 			ccid_hc_rx_delete(dp->dccps_hc_rx_ccid, sk);
 			ccid_hc_tx_delete(dp->dccps_hc_tx_ccid, sk);
@@ -212,12 +215,14 @@ int dccp_init_sock(struct sock *sk, const __u8 ctl_sock_initialized)
 
 	dccp_init_xmit_timers(sk);
 	icsk->icsk_rto		= DCCP_TIMEOUT_INIT;
+	icsk->icsk_syn_retries	= sysctl_dccp_request_retries;
 	sk->sk_state		= DCCP_CLOSED;
 	sk->sk_write_space	= dccp_write_space;
 	icsk->icsk_sync_mss	= dccp_sync_mss;
 	dp->dccps_mss_cache	= 536;
+	dp->dccps_rate_last	= jiffies;
 	dp->dccps_role		= DCCP_ROLE_UNDEFINED;
-	dp->dccps_service	= DCCP_SERVICE_INVALID_VALUE;
+	dp->dccps_service	= DCCP_SERVICE_CODE_IS_ABSENT;
 	dp->dccps_l_ack_ratio	= dp->dccps_r_ack_ratio = 1;
 
 	return 0;
@@ -262,18 +267,12 @@ int dccp_destroy_sock(struct sock *sk)
 
 EXPORT_SYMBOL_GPL(dccp_destroy_sock);
 
-static inline int dccp_listen_start(struct sock *sk)
+static inline int dccp_listen_start(struct sock *sk, int backlog)
 {
 	struct dccp_sock *dp = dccp_sk(sk);
 
 	dp->dccps_role = DCCP_ROLE_LISTEN;
-	/*
-	 * Apps need to use setsockopt(DCCP_SOCKOPT_SERVICE)
-	 * before calling listen()
-	 */
-	if (dccp_service_not_initialized(sk))
-		return -EPROTO;
-	return inet_csk_listen_start(sk, TCP_SYNQ_HSIZE);
+	return inet_csk_listen_start(sk, backlog);
 }
 
 int dccp_disconnect(struct sock *sk, int flags)
@@ -380,8 +379,36 @@ EXPORT_SYMBOL_GPL(dccp_poll);
 
 int dccp_ioctl(struct sock *sk, int cmd, unsigned long arg)
 {
-	dccp_pr_debug("entry\n");
-	return -ENOIOCTLCMD;
+	int rc = -ENOTCONN;
+
+	lock_sock(sk);
+
+	if (sk->sk_state == DCCP_LISTEN)
+		goto out;
+
+	switch (cmd) {
+	case SIOCINQ: {
+		struct sk_buff *skb;
+		unsigned long amount = 0;
+
+		skb = skb_peek(&sk->sk_receive_queue);
+		if (skb != NULL) {
+			/*
+			 * We will only return the amount of this packet since
+			 * that is all that will be read.
+			 */
+			amount = skb->len;
+		}
+		rc = put_user(amount, (int __user *)arg);
+	}
+		break;
+	default:
+		rc = -ENOIOCTLCMD;
+		break;
+	}
+out:
+	release_sock(sk);
+	return rc;
 }
 
 EXPORT_SYMBOL_GPL(dccp_ioctl);
@@ -392,7 +419,7 @@ static int dccp_setsockopt_service(struct sock *sk, const __be32 service,
 	struct dccp_sock *dp = dccp_sk(sk);
 	struct dccp_service_list *sl = NULL;
 
-	if (service == DCCP_SERVICE_INVALID_VALUE || 
+	if (service == DCCP_SERVICE_INVALID_VALUE ||
 	    optlen > DCCP_SERVICE_LIST_MAX_LEN * sizeof(u32))
 		return -EINVAL;
 
@@ -457,9 +484,8 @@ out_free_val:
 static int do_dccp_setsockopt(struct sock *sk, int level, int optname,
 		char __user *optval, int optlen)
 {
-	struct dccp_sock *dp;
-	int err;
-	int val;
+	struct dccp_sock *dp = dccp_sk(sk);
+	int val, err = 0;
 
 	if (optlen < sizeof(int))
 		return -EINVAL;
@@ -471,23 +497,19 @@ static int do_dccp_setsockopt(struct sock *sk, int level, int optname,
 		return dccp_setsockopt_service(sk, val, optval, optlen);
 
 	lock_sock(sk);
-	dp = dccp_sk(sk);
-	err = 0;
-
 	switch (optname) {
 	case DCCP_SOCKOPT_PACKET_SIZE:
-		dp->dccps_packet_size = val;
+		DCCP_WARN("sockopt(PACKET_SIZE) is deprecated: fix your app\n");
+		err = 0;
 		break;
-
 	case DCCP_SOCKOPT_CHANGE_L:
 		if (optlen != sizeof(struct dccp_so_feat))
 			err = -EINVAL;
 		else
 			err = dccp_setsockopt_change(sk, DCCPO_CHANGE_L,
-					             (struct dccp_so_feat __user *)
+						     (struct dccp_so_feat __user *)
 						     optval);
 		break;
-
 	case DCCP_SOCKOPT_CHANGE_R:
 		if (optlen != sizeof(struct dccp_so_feat))
 			err = -EINVAL;
@@ -496,12 +518,26 @@ static int do_dccp_setsockopt(struct sock *sk, int level, int optname,
 						     (struct dccp_so_feat __user *)
 						     optval);
 		break;
-
+	case DCCP_SOCKOPT_SEND_CSCOV:	/* sender side, RFC 4340, sec. 9.2 */
+		if (val < 0 || val > 15)
+			err = -EINVAL;
+		else
+			dp->dccps_pcslen = val;
+		break;
+	case DCCP_SOCKOPT_RECV_CSCOV:	/* receiver side, RFC 4340 sec. 9.2.1 */
+		if (val < 0 || val > 15)
+			err = -EINVAL;
+		else {
+			dp->dccps_pcrlen = val;
+			/* FIXME: add feature negotiation,
+			 * ChangeL(MinimumChecksumCoverage, val) */
+		}
+		break;
 	default:
 		err = -ENOPROTOOPT;
 		break;
 	}
-	
+
 	release_sock(sk);
 	return err;
 }
@@ -540,9 +576,6 @@ static int dccp_getsockopt_service(struct sock *sk, int len,
 	int err = -ENOENT, slen = 0, total_len = sizeof(u32);
 
 	lock_sock(sk);
-	if (dccp_service_not_initialized(sk))
-		goto out;
-
 	if ((sl = dp->dccps_service_list) != NULL) {
 		slen = sl->dccpsl_nr * sizeof(u32);
 		total_len += slen;
@@ -571,19 +604,30 @@ static int do_dccp_getsockopt(struct sock *sk, int level, int optname,
 	if (get_user(len, optlen))
 		return -EFAULT;
 
-	if (len < sizeof(int))
+	if (len < (int)sizeof(int))
 		return -EINVAL;
 
 	dp = dccp_sk(sk);
 
 	switch (optname) {
 	case DCCP_SOCKOPT_PACKET_SIZE:
-		val = dp->dccps_packet_size;
-		len = sizeof(dp->dccps_packet_size);
-		break;
+		DCCP_WARN("sockopt(PACKET_SIZE) is deprecated: fix your app\n");
+		return 0;
 	case DCCP_SOCKOPT_SERVICE:
 		return dccp_getsockopt_service(sk, len,
 					       (__be32 __user *)optval, optlen);
+	case DCCP_SOCKOPT_GET_CUR_MPS:
+		val = dp->dccps_mss_cache;
+		len = sizeof(val);
+		break;
+	case DCCP_SOCKOPT_SEND_CSCOV:
+		val = dp->dccps_pcslen;
+		len = sizeof(val);
+		break;
+	case DCCP_SOCKOPT_RECV_CSCOV:
+		val = dp->dccps_pcrlen;
+		len = sizeof(val);
+		break;
 	case 128 ... 191:
 		return ccid_hc_rx_getsockopt(dp->dccps_hc_rx_ccid, sk, optname,
 					     len, (u32 __user *)optval, optlen);
@@ -639,6 +683,13 @@ int dccp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 		return -EMSGSIZE;
 
 	lock_sock(sk);
+
+	if (sysctl_dccp_tx_qlen &&
+	    (sk->sk_write_queue.qlen >= sysctl_dccp_tx_qlen)) {
+		rc = -EAGAIN;
+		goto out_release;
+	}
+
 	timeo = sock_sndtimeo(sk, noblock);
 
 	/*
@@ -646,7 +697,7 @@ int dccp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	 * so that the trick in dccp_rcv_request_sent_state_process.
 	 */
 	/* Wait for a connection to finish. */
-	if ((1 << sk->sk_state) & ~(DCCPF_OPEN | DCCPF_PARTOPEN | DCCPF_CLOSING))
+	if ((1 << sk->sk_state) & ~(DCCPF_OPEN | DCCPF_PARTOPEN))
 		if ((rc = sk_stream_wait_connect(sk, &timeo)) != 0)
 			goto out_release;
 
@@ -662,17 +713,8 @@ int dccp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
 	if (rc != 0)
 		goto out_discard;
 
-	rc = dccp_write_xmit(sk, skb, &timeo);
-	/*
-	 * XXX we don't use sk_write_queue, so just discard the packet.
-	 *     Current plan however is to _use_ sk_write_queue with
-	 *     an algorith similar to tcp_sendmsg, where the main difference
-	 *     is that in DCCP we have to respect packet boundaries, so
-	 *     no coalescing of skbs.
-	 *
-	 *     This bug was _quickly_ found & fixed by just looking at an OSTRA
-	 *     generated callgraph 8) -acme
-	 */
+	skb_queue_tail(&sk->sk_write_queue, skb);
+	dccp_write_xmit(sk,0);
 out_release:
 	release_sock(sk);
 	return rc ? : len;
@@ -806,7 +848,7 @@ int inet_dccp_listen(struct socket *sock, int backlog)
 		 * FIXME: here it probably should be sk->sk_prot->listen_start
 		 * see tcp_listen_start
 		 */
-		err = dccp_listen_start(sk);
+		err = dccp_listen_start(sk, backlog);
 		if (err)
 			goto out;
 	}
@@ -823,7 +865,7 @@ EXPORT_SYMBOL_GPL(inet_dccp_listen);
 static const unsigned char dccp_new_state[] = {
 	/* current state:   new state:      action:	*/
 	[0]		  = DCCP_CLOSED,
-	[DCCP_OPEN] 	  = DCCP_CLOSING | DCCP_ACTION_FIN,
+	[DCCP_OPEN]	  = DCCP_CLOSING | DCCP_ACTION_FIN,
 	[DCCP_REQUESTING] = DCCP_CLOSED,
 	[DCCP_PARTOPEN]	  = DCCP_CLOSING | DCCP_ACTION_FIN,
 	[DCCP_LISTEN]	  = DCCP_CLOSED,
@@ -846,6 +888,7 @@ static int dccp_close_state(struct sock *sk)
 
 void dccp_close(struct sock *sk, long timeout)
 {
+	struct dccp_sock *dp = dccp_sk(sk);
 	struct sk_buff *skb;
 	int state;
 
@@ -861,6 +904,8 @@ void dccp_close(struct sock *sk, long timeout)
 
 		goto adjudge_to_death;
 	}
+
+	sk_stop_timer(sk, &dp->dccps_xmit_timer);
 
 	/*
 	 * We need to flush the recv. buffs.  We do this only on the
@@ -976,7 +1021,7 @@ MODULE_PARM_DESC(thash_entries, "Number of ehash buckets");
 
 #ifdef CONFIG_IP_DCCP_DEBUG
 int dccp_debug;
-module_param(dccp_debug, int, 0444);
+module_param(dccp_debug, bool, 0444);
 MODULE_PARM_DESC(dccp_debug, "Enable debug messages");
 
 EXPORT_SYMBOL_GPL(dccp_debug);
@@ -991,7 +1036,7 @@ static int __init dccp_init(void)
 	dccp_hashinfo.bind_bucket_cachep =
 		kmem_cache_create("dccp_bind_bucket",
 				  sizeof(struct inet_bind_bucket), 0,
-				  SLAB_HWCACHE_ALIGN, NULL, NULL);
+				  SLAB_HWCACHE_ALIGN, NULL);
 	if (!dccp_hashinfo.bind_bucket_cachep)
 		goto out;
 
@@ -1014,7 +1059,6 @@ static int __init dccp_init(void)
 	do {
 		dccp_hashinfo.ehash_size = (1UL << ehash_order) * PAGE_SIZE /
 					sizeof(struct inet_ehash_bucket);
-		dccp_hashinfo.ehash_size >>= 1;
 		while (dccp_hashinfo.ehash_size &
 		       (dccp_hashinfo.ehash_size - 1))
 			dccp_hashinfo.ehash_size--;
@@ -1023,15 +1067,17 @@ static int __init dccp_init(void)
 	} while (!dccp_hashinfo.ehash && --ehash_order > 0);
 
 	if (!dccp_hashinfo.ehash) {
-		printk(KERN_CRIT "Failed to allocate DCCP "
-				 "established hash table\n");
+		DCCP_CRIT("Failed to allocate DCCP established hash table");
 		goto out_free_bind_bucket_cachep;
 	}
 
-	for (i = 0; i < (dccp_hashinfo.ehash_size << 1); i++) {
-		rwlock_init(&dccp_hashinfo.ehash[i].lock);
+	for (i = 0; i < dccp_hashinfo.ehash_size; i++) {
 		INIT_HLIST_HEAD(&dccp_hashinfo.ehash[i].chain);
+		INIT_HLIST_HEAD(&dccp_hashinfo.ehash[i].twchain);
 	}
+
+	if (inet_ehash_locks_alloc(&dccp_hashinfo))
+			goto out_free_dccp_ehash;
 
 	bhash_order = ehash_order;
 
@@ -1046,8 +1092,8 @@ static int __init dccp_init(void)
 	} while (!dccp_hashinfo.bhash && --bhash_order >= 0);
 
 	if (!dccp_hashinfo.bhash) {
-		printk(KERN_CRIT "Failed to allocate DCCP bind hash table\n");
-		goto out_free_dccp_ehash;
+		DCCP_CRIT("Failed to allocate DCCP bind hash table");
+		goto out_free_dccp_locks;
 	}
 
 	for (i = 0; i < dccp_hashinfo.bhash_size; i++) {
@@ -1066,6 +1112,8 @@ static int __init dccp_init(void)
 	rc = dccp_sysctl_init();
 	if (rc)
 		goto out_ackvec_exit;
+
+	dccp_timestamping_init();
 out:
 	return rc;
 out_ackvec_exit:
@@ -1075,6 +1123,8 @@ out_free_dccp_mib:
 out_free_dccp_bhash:
 	free_pages((unsigned long)dccp_hashinfo.bhash, bhash_order);
 	dccp_hashinfo.bhash = NULL;
+out_free_dccp_locks:
+	inet_ehash_locks_free(&dccp_hashinfo);
 out_free_dccp_ehash:
 	free_pages((unsigned long)dccp_hashinfo.ehash, ehash_order);
 	dccp_hashinfo.ehash = NULL;
@@ -1093,6 +1143,7 @@ static void __exit dccp_fini(void)
 	free_pages((unsigned long)dccp_hashinfo.ehash,
 		   get_order(dccp_hashinfo.ehash_size *
 			     sizeof(struct inet_ehash_bucket)));
+	inet_ehash_locks_free(&dccp_hashinfo);
 	kmem_cache_destroy(dccp_hashinfo.bind_bucket_cachep);
 	dccp_ackvec_exit();
 	dccp_sysctl_exit();

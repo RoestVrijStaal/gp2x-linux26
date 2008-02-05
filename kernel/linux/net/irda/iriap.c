@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -27,6 +27,7 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/skbuff.h>
+#include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/seq_file.h>
@@ -78,10 +79,10 @@ static int iriap_data_indication(void *instance, void *sap,
 
 static void iriap_watchdog_timer_expired(void *data);
 
-static inline void iriap_start_watchdog_timer(struct iriap_cb *self, 
-					      int timeout) 
+static inline void iriap_start_watchdog_timer(struct iriap_cb *self,
+					      int timeout)
 {
-	irda_start_timer(&self->watchdog_timer, timeout, self, 
+	irda_start_timer(&self->watchdog_timer, timeout, self,
 			 iriap_watchdog_timer_expired);
 }
 
@@ -152,7 +153,7 @@ int __init iriap_init(void)
  *    Initializes the IrIAP layer, called by the module cleanup code in
  *    irmod.c
  */
-void __exit iriap_cleanup(void)
+void iriap_cleanup(void)
 {
 	irlmp_unregister_service(service_handle);
 
@@ -172,7 +173,7 @@ struct iriap_cb *iriap_open(__u8 slsap_sel, int mode, void *priv,
 
 	IRDA_DEBUG(2, "%s()\n", __FUNCTION__);
 
-	self = kmalloc(sizeof(struct iriap_cb), GFP_ATOMIC);
+	self = kzalloc(sizeof(*self), GFP_ATOMIC);
 	if (!self) {
 		IRDA_WARNING("%s: Unable to kmalloc!\n", __FUNCTION__);
 		return NULL;
@@ -181,7 +182,6 @@ struct iriap_cb *iriap_open(__u8 slsap_sel, int mode, void *priv,
 	/*
 	 *  Initialize instance
 	 */
-	memset(self, 0, sizeof(struct iriap_cb));
 
 	self->magic = IAS_MAGIC;
 	self->mode = mode;
@@ -345,10 +345,11 @@ static void iriap_disconnect_request(struct iriap_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IAS_MAGIC, return;);
 
-	tx_skb = alloc_skb(64, GFP_ATOMIC);
+	tx_skb = alloc_skb(LMP_MAX_HEADER, GFP_ATOMIC);
 	if (tx_skb == NULL) {
-		IRDA_DEBUG(0, "%s(), Could not allocate an sk_buff of length %d\n", 
-			__FUNCTION__, 64);
+		IRDA_DEBUG(0,
+			   "%s(), Could not allocate an sk_buff of length %d\n",
+			   __FUNCTION__, LMP_MAX_HEADER);
 		return;
 	}
 
@@ -450,12 +451,12 @@ static void iriap_getvaluebyclass_confirm(struct iriap_cb *self,
 	n = 2;
 
 	/* Get length, MSB first */
-	len = be16_to_cpu(get_unaligned((__u16 *)(fp+n))); n += 2;
+	len = be16_to_cpu(get_unaligned((__be16 *)(fp+n))); n += 2;
 
 	IRDA_DEBUG(4, "%s(), len=%d\n", __FUNCTION__, len);
 
 	/* Get object ID, MSB first */
-	obj_id = be16_to_cpu(get_unaligned((__u16 *)(fp+n))); n += 2;
+	obj_id = be16_to_cpu(get_unaligned((__be16 *)(fp+n))); n += 2;
 
 	type = fp[n++];
 	IRDA_DEBUG(4, "%s(), Value type = %d\n", __FUNCTION__, type);
@@ -505,7 +506,7 @@ static void iriap_getvaluebyclass_confirm(struct iriap_cb *self,
 		value = irias_new_string_value(fp+n);
 		break;
 	case IAS_OCT_SEQ:
-		value_len = be16_to_cpu(get_unaligned((__u16 *)(fp+n)));
+		value_len = be16_to_cpu(get_unaligned((__be16 *)(fp+n)));
 		n += 2;
 
 		/* Will truncate to IAS_MAX_OCTET_STRING bytes */
@@ -543,7 +544,7 @@ static void iriap_getvaluebyclass_response(struct iriap_cb *self,
 {
 	struct sk_buff *tx_skb;
 	int n;
-	__u32 tmp_be32;
+	__be32 tmp_be32;
 	__be16 tmp_be16;
 	__u8 *fp;
 
@@ -673,7 +674,7 @@ static void iriap_getvaluebyclass_indication(struct iriap_cb *self,
 	if (attrib == NULL) {
 		IRDA_DEBUG(2, "LM-IAS: Attribute %s not found\n", attr);
 		iriap_getvaluebyclass_response(self, obj->id,
-					       IAS_ATTRIB_UNKNOWN, 
+					       IAS_ATTRIB_UNKNOWN,
 					       &irias_missing);
 		return;
 	}
@@ -701,7 +702,7 @@ void iriap_send_ack(struct iriap_cb *self)
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IAS_MAGIC, return;);
 
-	tx_skb = alloc_skb(64, GFP_ATOMIC);
+	tx_skb = alloc_skb(LMP_MAX_HEADER + 1, GFP_ATOMIC);
 	if (!tx_skb)
 		return;
 
@@ -927,7 +928,7 @@ void iriap_call_indication(struct iriap_cb *self, struct sk_buff *skb)
 
 	opcode = fp[0];
 	if (~opcode & 0x80) {
-		IRDA_WARNING("%s: IrIAS multiframe commands or results"
+		IRDA_WARNING("%s: IrIAS multiframe commands or results "
 			     "is not implemented yet!\n", __FUNCTION__);
 		return;
 	}
@@ -970,7 +971,7 @@ static const char *ias_value_types[] = {
 	"IAS_STRING"
 };
 
-static inline struct ias_object *irias_seq_idx(loff_t pos) 
+static inline struct ias_object *irias_seq_idx(loff_t pos)
 {
 	struct ias_object *obj;
 
@@ -979,7 +980,7 @@ static inline struct ias_object *irias_seq_idx(loff_t pos)
 		if (pos-- == 0)
 			break;
 	}
-		
+
 	return obj;
 }
 
@@ -994,7 +995,7 @@ static void *irias_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 {
 	++*pos;
 
-	return (v == SEQ_START_TOKEN) 
+	return (v == SEQ_START_TOKEN)
 		? (void *) hashbin_get_first(irias_objects)
 		: (void *) hashbin_get_next(irias_objects);
 }
@@ -1026,7 +1027,7 @@ static int irias_seq_show(struct seq_file *seq, void *v)
 		for (attrib = (struct ias_attrib *) hashbin_get_first(obj->attribs);
 		     attrib != NULL;
 		     attrib = (struct ias_attrib *) hashbin_get_next(obj->attribs)) {
-		     
+
 			IRDA_ASSERT(attrib->magic == IAS_ATTRIB_MAGIC,
 				    goto outloop; );
 
@@ -1045,14 +1046,14 @@ static int irias_seq_show(struct seq_file *seq, void *v)
 					   attrib->value->t.string);
 				break;
 			case IAS_OCT_SEQ:
-				seq_printf(seq, "octet sequence (%d bytes)\n", 
+				seq_printf(seq, "octet sequence (%d bytes)\n",
 					   attrib->value->len);
 				break;
 			case IAS_MISSING:
 				seq_puts(seq, "missing\n");
 				break;
 			default:
-				seq_printf(seq, "type %d?\n", 
+				seq_printf(seq, "type %d?\n",
 					   attrib->value->type);
 			}
 			seq_putc(seq, '\n');
@@ -1065,7 +1066,7 @@ static int irias_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irias_seq_ops = {
+static const struct seq_operations irias_seq_ops = {
 	.start  = irias_seq_start,
 	.next   = irias_seq_next,
 	.stop   = irias_seq_stop,
@@ -1079,7 +1080,7 @@ static int irias_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &irias_seq_ops);
 }
 
-struct file_operations irias_seq_fops = {
+const struct file_operations irias_seq_fops = {
 	.owner		= THIS_MODULE,
 	.open           = irias_seq_open,
 	.read           = seq_read,

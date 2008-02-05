@@ -25,16 +25,7 @@
 #include "signaling.h"
 #include "addr.h"
 
-
-#if 0
-#define DPRINTK(format,args...) printk(KERN_DEBUG format,##args)
-#else
-#define DPRINTK(format,args...)
-#endif
-
-
-static int svc_create(struct socket *sock,int protocol);
-
+static int svc_create(struct net *net, struct socket *sock,int protocol);
 
 /*
  * Note: since all this is still nicely synchronized with the signaling demon,
@@ -55,7 +46,7 @@ static void svc_disconnect(struct atm_vcc *vcc)
 	struct sk_buff *skb;
 	struct sock *sk = sk_atm(vcc);
 
-	DPRINTK("svc_disconnect %p\n",vcc);
+	pr_debug("svc_disconnect %p\n",vcc);
 	if (test_bit(ATM_VF_REGIS,&vcc->flags)) {
 		prepare_to_wait(sk->sk_sleep, &wait, TASK_UNINTERRUPTIBLE);
 		sigd_enq(vcc,as_close,NULL,NULL,NULL);
@@ -69,7 +60,7 @@ static void svc_disconnect(struct atm_vcc *vcc)
 	   as_indicate has been answered */
 	while ((skb = skb_dequeue(&sk->sk_receive_queue)) != NULL) {
 		atm_return(vcc, skb->truesize);
-		DPRINTK("LISTEN REL\n");
+		pr_debug("LISTEN REL\n");
 		sigd_enq2(NULL,as_reject,vcc,NULL,NULL,&vcc->qos,0);
 		dev_kfree_skb(skb);
 	}
@@ -85,11 +76,11 @@ static int svc_release(struct socket *sock)
 
 	if (sk)  {
 		vcc = ATM_SD(sock);
-		DPRINTK("svc_release %p\n", vcc);
+		pr_debug("svc_release %p\n", vcc);
 		clear_bit(ATM_VF_READY, &vcc->flags);
 		/* VCC pointer is used as a reference, so we must not free it
 		   (thereby subjecting it to re-use) before all pending connections
-	           are closed */
+		   are closed */
 		svc_disconnect(vcc);
 		vcc_release(sock);
 	}
@@ -144,7 +135,7 @@ static int svc_bind(struct socket *sock,struct sockaddr *sockaddr,
 		error = -EUNATCH;
 		goto out;
 	}
-        if (!sk->sk_err)
+	if (!sk->sk_err)
 		set_bit(ATM_VF_BOUND,&vcc->flags);
 	error = -sk->sk_err;
 out:
@@ -162,7 +153,7 @@ static int svc_connect(struct socket *sock,struct sockaddr *sockaddr,
 	struct atm_vcc *vcc = ATM_SD(sock);
 	int error;
 
-	DPRINTK("svc_connect %p\n",vcc);
+	pr_debug("svc_connect %p\n",vcc);
 	lock_sock(sk);
 	if (sockaddr_len != sizeof(struct sockaddr_atmsvc)) {
 		error = -EINVAL;
@@ -224,12 +215,12 @@ static int svc_connect(struct socket *sock,struct sockaddr *sockaddr,
 				prepare_to_wait(sk->sk_sleep, &wait, TASK_INTERRUPTIBLE);
 				continue;
 			}
-			DPRINTK("*ABORT*\n");
+			pr_debug("*ABORT*\n");
 			/*
 			 * This is tricky:
 			 *   Kernel ---close--> Demon
 			 *   Kernel <--close--- Demon
-		         * or
+			 * or
 			 *   Kernel ---close--> Demon
 			 *   Kernel <--error--- Demon
 			 * or
@@ -295,7 +286,7 @@ static int svc_listen(struct socket *sock,int backlog)
 	struct atm_vcc *vcc = ATM_SD(sock);
 	int error;
 
-	DPRINTK("svc_listen %p\n",vcc);
+	pr_debug("svc_listen %p\n",vcc);
 	lock_sock(sk);
 	/* let server handle listen on unbound sockets */
 	if (test_bit(ATM_VF_SESSION,&vcc->flags)) {
@@ -335,13 +326,13 @@ static int svc_accept(struct socket *sock,struct socket *newsock,int flags)
 
 	lock_sock(sk);
 
-	error = svc_create(newsock,0);
+	error = svc_create(sk->sk_net, newsock,0);
 	if (error)
 		goto out;
 
 	new_vcc = ATM_SD(newsock);
 
-	DPRINTK("svc_accept %p -> %p\n",old_vcc,new_vcc);
+	pr_debug("svc_accept %p -> %p\n",old_vcc,new_vcc);
 	while (1) {
 		DEFINE_WAIT(wait);
 
@@ -470,13 +461,13 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			}
 			set_bit(ATM_VF_HASSAP, &vcc->flags);
 			break;
- 		case SO_MULTIPOINT:
+		case SO_MULTIPOINT:
 			if (level != SOL_ATM || optlen != sizeof(int)) {
 				error = -EINVAL;
 				goto out;
 			}
- 			if (get_user(value, (int __user *) optval)) {
- 				error = -EFAULT;
+			if (get_user(value, (int __user *) optval)) {
+				error = -EFAULT;
 				goto out;
 			}
 			if (value == 1) {
@@ -486,7 +477,7 @@ static int svc_setsockopt(struct socket *sock, int level, int optname,
 			} else {
 				error = -EINVAL;
 			}
-  			break;
+			break;
 		default:
 			error = vcc_setsockopt(sock, level, optname,
 					       optval, optlen);
@@ -539,13 +530,13 @@ static int svc_addparty(struct socket *sock, struct sockaddr *sockaddr,
 	set_bit(ATM_VF_WAITING, &vcc->flags);
 	prepare_to_wait(sk->sk_sleep, &wait, TASK_INTERRUPTIBLE);
 	sigd_enq(vcc, as_addparty, NULL, NULL,
-	         (struct sockaddr_atmsvc *) sockaddr);
+		 (struct sockaddr_atmsvc *) sockaddr);
 	if (flags & O_NONBLOCK) {
 		finish_wait(sk->sk_sleep, &wait);
 		error = -EINPROGRESS;
 		goto out;
 	}
-	DPRINTK("svc_addparty added wait queue\n");
+	pr_debug("svc_addparty added wait queue\n");
 	while (test_bit(ATM_VF_WAITING, &vcc->flags) && sigd) {
 		schedule();
 		prepare_to_wait(sk->sk_sleep, &wait, TASK_INTERRUPTIBLE);
@@ -587,26 +578,26 @@ out:
 
 static int svc_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg)
 {
- 	int error, ep_ref;
- 	struct sockaddr_atmsvc sa;
+	int error, ep_ref;
+	struct sockaddr_atmsvc sa;
 	struct atm_vcc *vcc = ATM_SD(sock);
-  
+
 	switch (cmd) {
- 		case ATM_ADDPARTY:
- 			if (!test_bit(ATM_VF_SESSION, &vcc->flags))
- 				return -EINVAL;
- 			if (copy_from_user(&sa, (void __user *) arg, sizeof(sa)))
+		case ATM_ADDPARTY:
+			if (!test_bit(ATM_VF_SESSION, &vcc->flags))
+				return -EINVAL;
+			if (copy_from_user(&sa, (void __user *) arg, sizeof(sa)))
 				return -EFAULT;
- 			error = svc_addparty(sock, (struct sockaddr *) &sa, sizeof(sa), 0);
- 			break;
- 		case ATM_DROPPARTY:
- 			if (!test_bit(ATM_VF_SESSION, &vcc->flags))
- 				return -EINVAL;
- 			if (copy_from_user(&ep_ref, (void __user *) arg, sizeof(int)))
+			error = svc_addparty(sock, (struct sockaddr *) &sa, sizeof(sa), 0);
+			break;
+		case ATM_DROPPARTY:
+			if (!test_bit(ATM_VF_SESSION, &vcc->flags))
+				return -EINVAL;
+			if (copy_from_user(&ep_ref, (void __user *) arg, sizeof(int)))
 				return -EFAULT;
- 			error = svc_dropparty(sock, ep_ref);
- 			break;
-  		default:
+			error = svc_dropparty(sock, ep_ref);
+			break;
+		default:
 			error = vcc_ioctl(sock, cmd, arg);
 	}
 
@@ -636,12 +627,15 @@ static const struct proto_ops svc_proto_ops = {
 };
 
 
-static int svc_create(struct socket *sock,int protocol)
+static int svc_create(struct net *net, struct socket *sock,int protocol)
 {
 	int error;
 
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
+
 	sock->ops = &svc_proto_ops;
-	error = vcc_create(sock, protocol, AF_ATMSVC);
+	error = vcc_create(net, sock, protocol, AF_ATMSVC);
 	if (error) return error;
 	ATM_SD(sock)->local.sas_family = AF_ATMSVC;
 	ATM_SD(sock)->remote.sas_family = AF_ATMSVC;

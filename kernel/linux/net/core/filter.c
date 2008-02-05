@@ -18,7 +18,6 @@
 
 #include <linux/module.h>
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/fcntl.h>
 #include <linux/socket.h>
@@ -43,17 +42,17 @@ static void *__load_pointer(struct sk_buff *skb, int k)
 	u8 *ptr = NULL;
 
 	if (k >= SKF_NET_OFF)
-		ptr = skb->nh.raw + k - SKF_NET_OFF;
+		ptr = skb_network_header(skb) + k - SKF_NET_OFF;
 	else if (k >= SKF_LL_OFF)
-		ptr = skb->mac.raw + k - SKF_LL_OFF;
+		ptr = skb_mac_header(skb) + k - SKF_LL_OFF;
 
-	if (ptr >= skb->head && ptr < skb->tail)
+	if (ptr >= skb->head && ptr < skb_tail_pointer(skb))
 		return ptr;
 	return NULL;
 }
 
 static inline void *load_pointer(struct sk_buff *skb, int k,
-                                 unsigned int size, void *buffer)
+				 unsigned int size, void *buffer)
 {
 	if (k >= 0)
 		return skb_header_pointer(skb, k, size, buffer);
@@ -91,7 +90,7 @@ unsigned int sk_run_filter(struct sk_buff *skb, struct sock_filter *filter, int 
 	 */
 	for (pc = 0; pc < flen; pc++) {
 		fentry = &filter[pc];
-			
+
 		switch (fentry->code) {
 		case BPF_ALU|BPF_ADD|BPF_X:
 			A += X;
@@ -178,7 +177,7 @@ unsigned int sk_run_filter(struct sk_buff *skb, struct sock_filter *filter, int 
 load_w:
 			ptr = load_pointer(skb, k, 4, &tmp);
 			if (ptr != NULL) {
-				A = ntohl(get_unaligned((u32 *)ptr));
+				A = ntohl(get_unaligned((__be32 *)ptr));
 				continue;
 			}
 			break;
@@ -187,7 +186,7 @@ load_w:
 load_h:
 			ptr = load_pointer(skb, k, 2, &tmp);
 			if (ptr != NULL) {
-				A = ntohs(get_unaligned((u16 *)ptr));
+				A = ntohs(get_unaligned((__be16 *)ptr));
 				continue;
 			}
 			break;
@@ -261,7 +260,7 @@ load_b:
 		 */
 		switch (k-SKF_AD_OFF) {
 		case SKF_AD_PROTOCOL:
-			A = htons(skb->protocol);
+			A = ntohs(skb->protocol);
 			continue;
 		case SKF_AD_PKTTYPE:
 			A = skb->pkt_type;
@@ -388,6 +387,25 @@ int sk_chk_filter(struct sock_filter *filter, int flen)
 }
 
 /**
+ * 	sk_filter_rcu_release: Release a socket filter by rcu_head
+ *	@rcu: rcu_head that contains the sk_filter to free
+ */
+static void sk_filter_rcu_release(struct rcu_head *rcu)
+{
+	struct sk_filter *fp = container_of(rcu, struct sk_filter, rcu);
+
+	sk_filter_release(fp);
+}
+
+static void sk_filter_delayed_uncharge(struct sock *sk, struct sk_filter *fp)
+{
+	unsigned int size = sk_filter_len(fp);
+
+	atomic_sub(size, &sk->sk_omem_alloc);
+	call_rcu_bh(&fp->rcu, sk_filter_rcu_release);
+}
+
+/**
  *	sk_attach_filter - attach a socket filter
  *	@fprog: the filter program
  *	@sk: the socket to use
@@ -399,7 +417,7 @@ int sk_chk_filter(struct sock_filter *filter, int flen)
  */
 int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 {
-	struct sk_filter *fp; 
+	struct sk_filter *fp, *old_fp;
 	unsigned int fsize = sizeof(struct sock_filter) * fprog->len;
 	int err;
 
@@ -411,7 +429,7 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 	if (!fp)
 		return -ENOMEM;
 	if (copy_from_user(fp->insns, fprog->filter, fsize)) {
-		sock_kfree_s(sk, fp, fsize+sizeof(*fp)); 
+		sock_kfree_s(sk, fp, fsize+sizeof(*fp));
 		return -EFAULT;
 	}
 
@@ -419,19 +437,35 @@ int sk_attach_filter(struct sock_fprog *fprog, struct sock *sk)
 	fp->len = fprog->len;
 
 	err = sk_chk_filter(fp->insns, fp->len);
-	if (!err) {
-		struct sk_filter *old_fp;
-
-		spin_lock_bh(&sk->sk_lock.slock);
-		old_fp = sk->sk_filter;
-		sk->sk_filter = fp;
-		spin_unlock_bh(&sk->sk_lock.slock);
-		fp = old_fp;
+	if (err) {
+		sk_filter_uncharge(sk, fp);
+		return err;
 	}
 
-	if (fp)
-		sk_filter_release(sk, fp);
-	return err;
+	rcu_read_lock_bh();
+	old_fp = rcu_dereference(sk->sk_filter);
+	rcu_assign_pointer(sk->sk_filter, fp);
+	rcu_read_unlock_bh();
+
+	if (old_fp)
+		sk_filter_delayed_uncharge(sk, old_fp);
+	return 0;
+}
+
+int sk_detach_filter(struct sock *sk)
+{
+	int ret = -ENOENT;
+	struct sk_filter *filter;
+
+	rcu_read_lock_bh();
+	filter = rcu_dereference(sk->sk_filter);
+	if (filter) {
+		rcu_assign_pointer(sk->sk_filter, NULL);
+		sk_filter_delayed_uncharge(sk, filter);
+		ret = 0;
+	}
+	rcu_read_unlock_bh();
+	return ret;
 }
 
 EXPORT_SYMBOL(sk_chk_filter);

@@ -4,31 +4,26 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
- *	- enable working with Layer 3 protocol independent connection tracking.
- *
- * Derived from net/ipv4/netfilter/ip_conntrack_proto_udp.c
  */
 
 #include <linux/types.h>
-#include <linux/sched.h>
 #include <linux/timer.h>
 #include <linux/module.h>
-#include <linux/netfilter.h>
 #include <linux/udp.h>
 #include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/ipv6.h>
 #include <net/ip6_checksum.h>
 #include <net/checksum.h>
+
 #include <linux/netfilter.h>
 #include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
-#include <net/netfilter/nf_conntrack_protocol.h>
+#include <net/netfilter/nf_conntrack_l4proto.h>
+#include <net/netfilter/nf_conntrack_ecache.h>
 
-unsigned int nf_ct_udp_timeout = 30*HZ;
-unsigned int nf_ct_udp_timeout_stream = 180*HZ;
+static unsigned int nf_ct_udp_timeout __read_mostly = 30*HZ;
+static unsigned int nf_ct_udp_timeout_stream __read_mostly = 180*HZ;
 
 static int udp_pkt_to_tuple(const struct sk_buff *skb,
 			     unsigned int dataoff,
@@ -131,8 +126,7 @@ static int udp_error(struct sk_buff *skb, unsigned int dataoff,
 
 	/* Checksum invalid? Ignore.
 	 * We skip checking packets on the outgoing path
-	 * because the semantic of CHECKSUM_HW is different there
-	 * and moreover root might send raw packets.
+	 * because the checksum is assumed to be correct.
 	 * FIXME: Source route IP option packets --RR */
 	if (nf_conntrack_checksum &&
 	    ((pf == PF_INET && hooknum == NF_IP_PRE_ROUTING) ||
@@ -147,10 +141,55 @@ static int udp_error(struct sk_buff *skb, unsigned int dataoff,
 	return NF_ACCEPT;
 }
 
-struct nf_conntrack_protocol nf_conntrack_protocol_udp4 =
+#ifdef CONFIG_SYSCTL
+static unsigned int udp_sysctl_table_users;
+static struct ctl_table_header *udp_sysctl_header;
+static struct ctl_table udp_sysctl_table[] = {
+	{
+		.procname	= "nf_conntrack_udp_timeout",
+		.data		= &nf_ct_udp_timeout,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.procname	= "nf_conntrack_udp_timeout_stream",
+		.data		= &nf_ct_udp_timeout_stream,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= 0
+	}
+};
+#ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
+static struct ctl_table udp_compat_sysctl_table[] = {
+	{
+		.procname	= "ip_conntrack_udp_timeout",
+		.data		= &nf_ct_udp_timeout,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.procname	= "ip_conntrack_udp_timeout_stream",
+		.data		= &nf_ct_udp_timeout_stream,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_jiffies,
+	},
+	{
+		.ctl_name	= 0
+	}
+};
+#endif /* CONFIG_NF_CONNTRACK_PROC_COMPAT */
+#endif /* CONFIG_SYSCTL */
+
+struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4 __read_mostly =
 {
 	.l3proto		= PF_INET,
-	.proto			= IPPROTO_UDP,
+	.l4proto		= IPPROTO_UDP,
 	.name			= "udp",
 	.pkt_to_tuple		= udp_pkt_to_tuple,
 	.invert_tuple		= udp_invert_tuple,
@@ -159,17 +198,26 @@ struct nf_conntrack_protocol nf_conntrack_protocol_udp4 =
 	.packet			= udp_packet,
 	.new			= udp_new,
 	.error			= udp_error,
-#if defined(CONFIG_NF_CT_NETLINK) || \
-    defined(CONFIG_NF_CT_NETLINK_MODULE)
-	.tuple_to_nfattr	= nf_ct_port_tuple_to_nfattr,
-	.nfattr_to_tuple	= nf_ct_port_nfattr_to_tuple,
+#if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
+	.tuple_to_nlattr	= nf_ct_port_tuple_to_nlattr,
+	.nlattr_to_tuple	= nf_ct_port_nlattr_to_tuple,
+	.nla_policy		= nf_ct_port_nla_policy,
+#endif
+#ifdef CONFIG_SYSCTL
+	.ctl_table_users	= &udp_sysctl_table_users,
+	.ctl_table_header	= &udp_sysctl_header,
+	.ctl_table		= udp_sysctl_table,
+#ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
+	.ctl_compat_table	= udp_compat_sysctl_table,
+#endif
 #endif
 };
+EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_udp4);
 
-struct nf_conntrack_protocol nf_conntrack_protocol_udp6 =
+struct nf_conntrack_l4proto nf_conntrack_l4proto_udp6 __read_mostly =
 {
 	.l3proto		= PF_INET6,
-	.proto			= IPPROTO_UDP,
+	.l4proto		= IPPROTO_UDP,
 	.name			= "udp",
 	.pkt_to_tuple		= udp_pkt_to_tuple,
 	.invert_tuple		= udp_invert_tuple,
@@ -178,12 +226,15 @@ struct nf_conntrack_protocol nf_conntrack_protocol_udp6 =
 	.packet			= udp_packet,
 	.new			= udp_new,
 	.error			= udp_error,
-#if defined(CONFIG_NF_CT_NETLINK) || \
-    defined(CONFIG_NF_CT_NETLINK_MODULE)
-	.tuple_to_nfattr	= nf_ct_port_tuple_to_nfattr,
-	.nfattr_to_tuple	= nf_ct_port_nfattr_to_tuple,
+#if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
+	.tuple_to_nlattr	= nf_ct_port_tuple_to_nlattr,
+	.nlattr_to_tuple	= nf_ct_port_nlattr_to_tuple,
+	.nla_policy		= nf_ct_port_nla_policy,
+#endif
+#ifdef CONFIG_SYSCTL
+	.ctl_table_users	= &udp_sysctl_table_users,
+	.ctl_table_header	= &udp_sysctl_header,
+	.ctl_table		= udp_sysctl_table,
 #endif
 };
-
-EXPORT_SYMBOL(nf_conntrack_protocol_udp4);
-EXPORT_SYMBOL(nf_conntrack_protocol_udp6);
+EXPORT_SYMBOL_GPL(nf_conntrack_l4proto_udp6);

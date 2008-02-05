@@ -31,15 +31,26 @@ EXPORT_SYMBOL(inet_csk_timer_bug_msg);
 
 /*
  * This array holds the first and last local port number.
- * For high-usage systems, use sysctl to change this to
- * 32768-61000
  */
-int sysctl_local_port_range[2] = { 1024, 4999 };
+int sysctl_local_port_range[2] = { 32768, 61000 };
+DEFINE_SEQLOCK(sysctl_port_range_lock);
+
+void inet_get_local_port_range(int *low, int *high)
+{
+	unsigned seq;
+	do {
+		seq = read_seqbegin(&sysctl_port_range_lock);
+
+		*low = sysctl_local_port_range[0];
+		*high = sysctl_local_port_range[1];
+	} while (read_seqretry(&sysctl_port_range_lock, seq));
+}
+EXPORT_SYMBOL(inet_get_local_port_range);
 
 int inet_csk_bind_conflict(const struct sock *sk,
 			   const struct inet_bind_bucket *tb)
 {
-	const u32 sk_rcv_saddr = inet_rcv_saddr(sk);
+	const __be32 sk_rcv_saddr = inet_rcv_saddr(sk);
 	struct sock *sk2;
 	struct hlist_node *node;
 	int reuse = sk->sk_reuse;
@@ -52,7 +63,7 @@ int inet_csk_bind_conflict(const struct sock *sk,
 		     sk->sk_bound_dev_if == sk2->sk_bound_dev_if)) {
 			if (!reuse || !sk2->sk_reuse ||
 			    sk2->sk_state == TCP_LISTEN) {
-				const u32 sk2_rcv_saddr = inet_rcv_saddr(sk2);
+				const __be32 sk2_rcv_saddr = inet_rcv_saddr(sk2);
 				if (!sk2_rcv_saddr || !sk_rcv_saddr ||
 				    sk2_rcv_saddr == sk_rcv_saddr)
 					break;
@@ -79,10 +90,11 @@ int inet_csk_get_port(struct inet_hashinfo *hashinfo,
 
 	local_bh_disable();
 	if (!snum) {
-		int low = sysctl_local_port_range[0];
-		int high = sysctl_local_port_range[1];
-		int remaining = (high - low) + 1;
-		int rover = net_random() % (high - low) + low;
+		int remaining, rover, low, high;
+
+		inet_get_local_port_range(&low, &high);
+		remaining = (high - low) + 1;
+		rover = net_random() % remaining + low;
 
 		do {
 			head = &hashinfo->bhash[inet_bhashfn(rover, hashinfo->bhash_size)];
@@ -149,7 +161,7 @@ success:
 	if (!inet_csk(sk)->icsk_bind_hash)
 		inet_bind_hash(sk, tb, snum);
 	BUG_TRAP(inet_csk(sk)->icsk_bind_hash == tb);
- 	ret = 0;
+	ret = 0;
 
 fail_unlock:
 	spin_unlock(&head->lock);
@@ -255,7 +267,7 @@ EXPORT_SYMBOL(inet_csk_accept);
 
 /*
  * Using different timers for retransmit, delayed acks and probes
- * We may wish use just one timer maintaining a list of expire jiffies 
+ * We may wish use just one timer maintaining a list of expire jiffies
  * to optimize.
  */
 void inet_csk_init_xmit_timers(struct sock *sk,
@@ -273,7 +285,7 @@ void inet_csk_init_xmit_timers(struct sock *sk,
 	icsk->icsk_delack_timer.function     = delack_handler;
 	sk->sk_timer.function		     = keepalive_handler;
 
-	icsk->icsk_retransmit_timer.data = 
+	icsk->icsk_retransmit_timer.data =
 		icsk->icsk_delack_timer.data =
 			sk->sk_timer.data  = (unsigned long)sk;
 
@@ -327,6 +339,7 @@ struct dst_entry* inet_csk_route_req(struct sock *sk,
 				       { .sport = inet_sk(sk)->sport,
 					 .dport = ireq->rmt_port } } };
 
+	security_req_classify_flow(req, &fl);
 	if (ip_route_output_flow(&rt, &fl, sk, 0)) {
 		IP_INC_STATS_BH(IPSTATS_MIB_OUTNOROUTES);
 		return NULL;
@@ -341,10 +354,10 @@ struct dst_entry* inet_csk_route_req(struct sock *sk,
 
 EXPORT_SYMBOL_GPL(inet_csk_route_req);
 
-static inline u32 inet_synq_hash(const u32 raddr, const u16 rport,
-				 const u32 rnd, const u16 synq_hsize)
+static inline u32 inet_synq_hash(const __be32 raddr, const __be16 rport,
+				 const u32 rnd, const u32 synq_hsize)
 {
-	return jhash_2words(raddr, (u32)rport, rnd) & (synq_hsize - 1);
+	return jhash_2words((__force u32)raddr, (__force u32)rport, rnd) & (synq_hsize - 1);
 }
 
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
@@ -355,8 +368,8 @@ static inline u32 inet_synq_hash(const u32 raddr, const u16 rport,
 
 struct request_sock *inet_csk_search_req(const struct sock *sk,
 					 struct request_sock ***prevp,
-					 const __u16 rport, const __u32 raddr,
-					 const __u32 laddr)
+					 const __be16 rport, const __be32 raddr,
+					 const __be32 laddr)
 {
 	const struct inet_connection_sock *icsk = inet_csk(sk);
 	struct listen_sock *lopt = icsk->icsk_accept_queue.listen_opt;
@@ -509,6 +522,8 @@ struct sock *inet_csk_clone(struct sock *sk, const struct request_sock *req,
 
 		/* Deinitialize accept_queue to trap illegal accesses. */
 		memset(&newicsk->icsk_accept_queue, 0, sizeof(newicsk->icsk_accept_queue));
+
+		security_inet_csk_clone(newsk, req);
 	}
 	return newsk;
 }
