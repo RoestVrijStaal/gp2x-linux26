@@ -1,12 +1,6 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Routines for control of YMF724/740/744/754 chips
- *
- *  BUGS:
- *    --
- *
- *  TODO:
- *    --
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -26,6 +20,7 @@
 
 #include <sound/driver.h>
 #include <linux/delay.h>
+#include <linux/firmware.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/pci.h>
@@ -36,15 +31,13 @@
 #include <sound/core.h>
 #include <sound/control.h>
 #include <sound/info.h>
+#include <sound/tlv.h>
 #include <sound/ymfpci.h>
 #include <sound/asoundef.h>
 #include <sound/mpu401.h>
 
 #include <asm/io.h>
-
-/*
- *  constants
- */
+#include <asm/byteorder.h>
 
 /*
  *  common I/O routines
@@ -91,7 +84,6 @@ static int snd_ymfpci_codec_ready(struct snd_ymfpci *chip, int secondary)
 	do {
 		if ((snd_ymfpci_readw(chip, reg) & 0x8000) == 0)
 			return 0;
-		set_current_state(TASK_UNINTERRUPTIBLE);
 		schedule_timeout_uninterruptible(1);
 	} while (time_before(jiffies, end_time));
 	snd_printk(KERN_ERR "codec_ready: codec %i is not ready [0x%x]\n", secondary, snd_ymfpci_readw(chip, reg));
@@ -289,6 +281,10 @@ static int snd_ymfpci_voice_free(struct snd_ymfpci *chip, struct snd_ymfpci_voic
 	snd_assert(pvoice != NULL, return -EINVAL);
 	snd_ymfpci_hw_stop(chip);
 	spin_lock_irqsave(&chip->voice_lock, flags);
+	if (pvoice->number == chip->src441_used) {
+		chip->src441_used = -1;
+		pvoice->ypcm->use_441_slot = 0;
+	}
 	pvoice->use = pvoice->pcm = pvoice->synth = pvoice->midi = 0;
 	pvoice->ypcm = NULL;
 	pvoice->interrupt = NULL;
@@ -381,6 +377,7 @@ static int snd_ymfpci_playback_trigger(struct snd_pcm_substream *substream,
 {
 	struct snd_ymfpci *chip = snd_pcm_substream_chip(substream);
 	struct snd_ymfpci_pcm *ypcm = substream->runtime->private_data;
+	struct snd_kcontrol *kctl = NULL;
 	int result = 0;
 
 	spin_lock(&chip->reg_lock);
@@ -393,15 +390,20 @@ static int snd_ymfpci_playback_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		chip->ctrl_playback[ypcm->voices[0]->number + 1] = cpu_to_le32(ypcm->voices[0]->bank_addr);
-		if (ypcm->voices[1] != NULL)
+		if (ypcm->voices[1] != NULL && !ypcm->use_441_slot)
 			chip->ctrl_playback[ypcm->voices[1]->number + 1] = cpu_to_le32(ypcm->voices[1]->bank_addr);
 		ypcm->running = 1;
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
+		if (substream->pcm == chip->pcm && !ypcm->use_441_slot) {
+			kctl = chip->pcm_mixer[substream->number].ctl;
+			kctl->vd[0].access |= SNDRV_CTL_ELEM_ACCESS_INACTIVE;
+		}
+		/* fall through */
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 		chip->ctrl_playback[ypcm->voices[0]->number + 1] = 0;
-		if (ypcm->voices[1] != NULL)
+		if (ypcm->voices[1] != NULL && !ypcm->use_441_slot)
 			chip->ctrl_playback[ypcm->voices[1]->number + 1] = 0;
 		ypcm->running = 0;
 		break;
@@ -411,6 +413,8 @@ static int snd_ymfpci_playback_trigger(struct snd_pcm_substream *substream,
 	}
       __unlock:
 	spin_unlock(&chip->reg_lock);
+	if (kctl)
+		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_INFO, &kctl->id);
 	return result;
 }
 static int snd_ymfpci_capture_trigger(struct snd_pcm_substream *substream,
@@ -488,6 +492,7 @@ static void snd_ymfpci_pcm_init_voice(struct snd_ymfpci_pcm *ypcm, unsigned int 
 	unsigned int nbank;
 	u32 vol_left, vol_right;
 	u8 use_left, use_right;
+	unsigned long flags;
 
 	snd_assert(voice != NULL, return);
 	if (runtime->channels == 1) {
@@ -506,11 +511,26 @@ static void snd_ymfpci_pcm_init_voice(struct snd_ymfpci_pcm *ypcm, unsigned int 
 		vol_left = cpu_to_le32(0x40000000);
 		vol_right = cpu_to_le32(0x40000000);
 	}
+	spin_lock_irqsave(&ypcm->chip->voice_lock, flags);
 	format = runtime->channels == 2 ? 0x00010000 : 0;
 	if (snd_pcm_format_width(runtime->format) == 8)
 		format |= 0x80000000;
+	else if (ypcm->chip->device_id == PCI_DEVICE_ID_YAMAHA_754 &&
+		 runtime->rate == 44100 && runtime->channels == 2 &&
+		 voiceidx == 0 && (ypcm->chip->src441_used == -1 ||
+				   ypcm->chip->src441_used == voice->number)) {
+		ypcm->chip->src441_used = voice->number;
+		ypcm->use_441_slot = 1;
+		format |= 0x10000000;
+	}
+	if (ypcm->chip->src441_used == voice->number &&
+	    (format & 0x10000000) == 0) {
+		ypcm->chip->src441_used = -1;
+		ypcm->use_441_slot = 0;
+	}
 	if (runtime->channels == 2 && (voiceidx & 1) != 0)
 		format |= 1;
+	spin_unlock_irqrestore(&ypcm->chip->voice_lock, flags);
 	for (nbank = 0; nbank < 2; nbank++) {
 		bank = &voice->bank[nbank];
 		memset(bank, 0, sizeof(*bank));
@@ -642,6 +662,7 @@ static int snd_ymfpci_playback_prepare(struct snd_pcm_substream *substream)
 	struct snd_ymfpci *chip = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_ymfpci_pcm *ypcm = runtime->private_data;
+	struct snd_kcontrol *kctl;
 	unsigned int nvoice;
 
 	ypcm->period_size = runtime->period_size;
@@ -651,6 +672,12 @@ static int snd_ymfpci_playback_prepare(struct snd_pcm_substream *substream)
 	for (nvoice = 0; nvoice < runtime->channels; nvoice++)
 		snd_ymfpci_pcm_init_voice(ypcm, nvoice, runtime,
 					  substream->pcm == chip->pcm);
+
+	if (substream->pcm == chip->pcm && !ypcm->use_441_slot) {
+		kctl = chip->pcm_mixer[substream->number].ctl;
+		kctl->vd[0].access &= ~SNDRV_CTL_ELEM_ACCESS_INACTIVE;
+		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_INFO, &kctl->id);
+	}
 	return 0;
 }
 
@@ -752,7 +779,7 @@ static void snd_ymfpci_irq_wait(struct snd_ymfpci *chip)
 	}
 }
 
-static irqreturn_t snd_ymfpci_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_ymfpci_interrupt(int irq, void *dev_id)
 {
 	struct snd_ymfpci *chip = dev_id;
 	u32 status, nvoice, mode;
@@ -798,7 +825,7 @@ static irqreturn_t snd_ymfpci_interrupt(int irq, void *dev_id, struct pt_regs *r
 	snd_ymfpci_writew(chip, YDSXGR_INTFLAG, status);
 
 	if (chip->rawmidi)
-		snd_mpu401_uart_interrupt(irq, chip->rawmidi->private_data, regs);
+		snd_mpu401_uart_interrupt(irq, chip->rawmidi->private_data);
 	return IRQ_HANDLED;
 }
 
@@ -901,7 +928,6 @@ static int snd_ymfpci_playback_open(struct snd_pcm_substream *substream)
 	struct snd_ymfpci *chip = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_ymfpci_pcm *ypcm;
-	struct snd_kcontrol *kctl;
 	int err;
 	
 	if ((err = snd_ymfpci_playback_open_1(substream)) < 0)
@@ -909,17 +935,13 @@ static int snd_ymfpci_playback_open(struct snd_pcm_substream *substream)
 	ypcm = runtime->private_data;
 	ypcm->output_front = 1;
 	ypcm->output_rear = chip->mode_dup4ch ? 1 : 0;
-	ypcm->swap_rear = chip->rear_swap;
+	ypcm->swap_rear = 0;
 	spin_lock_irq(&chip->reg_lock);
 	if (ypcm->output_rear) {
 		ymfpci_open_extension(chip);
 		chip->rear_opened++;
 	}
 	spin_unlock_irq(&chip->reg_lock);
-
-	kctl = chip->pcm_mixer[substream->number].ctl;
-	kctl->vd[0].access &= ~SNDRV_CTL_ELEM_ACCESS_INACTIVE;
-	snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_INFO, &kctl->id);
 	return 0;
 }
 
@@ -935,6 +957,7 @@ static int snd_ymfpci_playback_spdif_open(struct snd_pcm_substream *substream)
 	ypcm = runtime->private_data;
 	ypcm->output_front = 0;
 	ypcm->output_rear = 1;
+	ypcm->swap_rear = 1;
 	spin_lock_irq(&chip->reg_lock);
 	snd_ymfpci_writew(chip, YDSXGR_SPDIFOUTCTRL,
 			  snd_ymfpci_readw(chip, YDSXGR_SPDIFOUTCTRL) | 2);
@@ -962,6 +985,7 @@ static int snd_ymfpci_playback_4ch_open(struct snd_pcm_substream *substream)
 	ypcm = runtime->private_data;
 	ypcm->output_front = 0;
 	ypcm->output_rear = 1;
+	ypcm->swap_rear = 0;
 	spin_lock_irq(&chip->reg_lock);
 	ymfpci_open_extension(chip);
 	chip->rear_opened++;
@@ -1012,7 +1036,6 @@ static int snd_ymfpci_playback_close(struct snd_pcm_substream *substream)
 {
 	struct snd_ymfpci *chip = snd_pcm_substream_chip(substream);
 	struct snd_ymfpci_pcm *ypcm = substream->runtime->private_data;
-	struct snd_kcontrol *kctl;
 
 	spin_lock_irq(&chip->reg_lock);
 	if (ypcm->output_rear && chip->rear_opened > 0) {
@@ -1020,9 +1043,6 @@ static int snd_ymfpci_playback_close(struct snd_pcm_substream *substream)
 		ymfpci_close_extension(chip);
 	}
 	spin_unlock_irq(&chip->reg_lock);
-	kctl = chip->pcm_mixer[substream->number].ctl;
-	kctl->vd[0].access |= SNDRV_CTL_ELEM_ACCESS_INACTIVE;
-	snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_INFO, &kctl->id);
 	return snd_ymfpci_playback_close_1(substream);
 }
 
@@ -1416,22 +1436,7 @@ static struct snd_kcontrol_new snd_ymfpci_drec_source __devinitdata = {
   .get = snd_ymfpci_get_single, .put = snd_ymfpci_put_single, \
   .private_value = ((reg) | ((shift) << 16)) }
 
-static int snd_ymfpci_info_single(struct snd_kcontrol *kcontrol,
-				  struct snd_ctl_elem_info *uinfo)
-{
-	int reg = kcontrol->private_value & 0xffff;
-
-	switch (reg) {
-	case YDSXGR_SPDIFOUTCTRL: break;
-	case YDSXGR_SPDIFINCTRL: break;
-	default: return -EINVAL;
-	}
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ymfpci_info_single		snd_ctl_boolean_mono_info
 
 static int snd_ymfpci_get_single(struct snd_kcontrol *kcontrol,
 				 struct snd_ctl_elem_value *ucontrol)
@@ -1477,11 +1482,15 @@ static int snd_ymfpci_put_single(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
+static const DECLARE_TLV_DB_LINEAR(db_scale_native, TLV_DB_GAIN_MUTE, 0);
+
 #define YMFPCI_DOUBLE(xname, xindex, reg) \
 { .iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, .index = xindex, \
+  .access = SNDRV_CTL_ELEM_ACCESS_READWRITE | SNDRV_CTL_ELEM_ACCESS_TLV_READ, \
   .info = snd_ymfpci_info_double, \
   .get = snd_ymfpci_get_double, .put = snd_ymfpci_put_double, \
-  .private_value = reg }
+  .private_value = reg, \
+  .tlv = { .p = db_scale_native } }
 
 static int snd_ymfpci_info_double(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
 {
@@ -1536,17 +1545,30 @@ static int snd_ymfpci_put_double(struct snd_kcontrol *kcontrol, struct snd_ctl_e
 	return change;
 }
 
+static int snd_ymfpci_put_nativedacvol(struct snd_kcontrol *kcontrol,
+				       struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_ymfpci *chip = snd_kcontrol_chip(kcontrol);
+	unsigned int reg = YDSXGR_NATIVEDACOUTVOL;
+	unsigned int reg2 = YDSXGR_BUF441OUTVOL;
+	int change;
+	unsigned int value, oval;
+	
+	value = ucontrol->value.integer.value[0] & 0x3fff;
+	value |= (ucontrol->value.integer.value[1] & 0x3fff) << 16;
+	spin_lock_irq(&chip->reg_lock);
+	oval = snd_ymfpci_readl(chip, reg);
+	change = value != oval;
+	snd_ymfpci_writel(chip, reg, value);
+	snd_ymfpci_writel(chip, reg2, value);
+	spin_unlock_irq(&chip->reg_lock);
+	return change;
+}
+
 /*
  * 4ch duplication
  */
-static int snd_ymfpci_info_dup4ch(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ymfpci_info_dup4ch		snd_ctl_boolean_mono_info
 
 static int snd_ymfpci_get_dup4ch(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1567,7 +1589,17 @@ static int snd_ymfpci_put_dup4ch(struct snd_kcontrol *kcontrol, struct snd_ctl_e
 
 
 static struct snd_kcontrol_new snd_ymfpci_controls[] __devinitdata = {
-YMFPCI_DOUBLE("Wave Playback Volume", 0, YDSXGR_NATIVEDACOUTVOL),
+{
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "Wave Playback Volume",
+	.access = SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		  SNDRV_CTL_ELEM_ACCESS_TLV_READ,
+	.info = snd_ymfpci_info_double,
+	.get = snd_ymfpci_get_double,
+	.put = snd_ymfpci_put_nativedacvol,
+	.private_value = YDSXGR_NATIVEDACOUTVOL,
+	.tlv = { .p = db_scale_native },
+},
 YMFPCI_DOUBLE("Wave Capture Volume", 0, YDSXGR_NATIVEDACLOOPVOL),
 YMFPCI_DOUBLE("Digital Capture Volume", 0, YDSXGR_NATIVEDACINVOL),
 YMFPCI_DOUBLE("Digital Capture Volume", 1, YDSXGR_NATIVEADCINVOL),
@@ -1634,14 +1666,7 @@ static int snd_ymfpci_set_gpio_out(struct snd_ymfpci *chip, int pin, int enable)
 	return 0;
 }
 
-static int snd_ymfpci_gpio_sw_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ymfpci_gpio_sw_info		snd_ctl_boolean_mono_info
 
 static int snd_ymfpci_gpio_sw_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1715,7 +1740,8 @@ static int snd_ymfpci_pcm_vol_put(struct snd_kcontrol *kcontrol,
 		spin_lock_irqsave(&chip->voice_lock, flags);
 		if (substream->runtime && substream->runtime->private_data) {
 			struct snd_ymfpci_pcm *ypcm = substream->runtime->private_data;
-			ypcm->update_pcm_vol = 2;
+			if (!ypcm->use_441_slot)
+				ypcm->update_pcm_vol = 2;
 		}
 		spin_unlock_irqrestore(&chip->voice_lock, flags);
 		return 1;
@@ -1750,7 +1776,7 @@ static void snd_ymfpci_mixer_free_ac97(struct snd_ac97 *ac97)
 	chip->ac97 = NULL;
 }
 
-int __devinit snd_ymfpci_mixer(struct snd_ymfpci *chip, int rear_switch, int rear_swap)
+int __devinit snd_ymfpci_mixer(struct snd_ymfpci *chip, int rear_switch)
 {
 	struct snd_ac97_template ac97;
 	struct snd_kcontrol *kctl;
@@ -1762,7 +1788,6 @@ int __devinit snd_ymfpci_mixer(struct snd_ymfpci *chip, int rear_switch, int rea
 		.read = snd_ymfpci_codec_read,
 	};
 
-	chip->rear_swap = rear_swap;
 	if ((err = snd_ac97_bus(chip->card, 0, &ops, chip, &chip->ac97_bus)) < 0)
 		return err;
 	chip->ac97_bus->private_free = snd_ymfpci_mixer_free_ac97_bus;
@@ -1965,13 +1990,104 @@ static void snd_ymfpci_disable_dsp(struct snd_ymfpci *chip)
 	}
 }
 
+#ifdef CONFIG_SND_YMFPCI_FIRMWARE_IN_KERNEL
+
 #include "ymfpci_image.h"
+
+static struct firmware snd_ymfpci_dsp_microcode = {
+	.size = YDSXG_DSPLENGTH,
+	.data = (u8 *)DspInst,
+};
+static struct firmware snd_ymfpci_controller_microcode = {
+	.size = YDSXG_CTRLLENGTH,
+	.data = (u8 *)CntrlInst,
+};
+static struct firmware snd_ymfpci_controller_1e_microcode = {
+	.size = YDSXG_CTRLLENGTH,
+	.data = (u8 *)CntrlInst1E,
+};
+#endif
+
+#ifdef CONFIG_SND_YMFPCI_FIRMWARE_IN_KERNEL
+static int snd_ymfpci_request_firmware(struct snd_ymfpci *chip)
+{
+	chip->dsp_microcode = &snd_ymfpci_dsp_microcode;
+	if (chip->device_id == PCI_DEVICE_ID_YAMAHA_724F ||
+	    chip->device_id == PCI_DEVICE_ID_YAMAHA_740C ||
+	    chip->device_id == PCI_DEVICE_ID_YAMAHA_744 ||
+	    chip->device_id == PCI_DEVICE_ID_YAMAHA_754)
+		chip->controller_microcode =
+			&snd_ymfpci_controller_1e_microcode;
+	else
+		chip->controller_microcode =
+			&snd_ymfpci_controller_microcode;
+	return 0;
+}
+
+#else /* use fw_loader */
+
+#ifdef __LITTLE_ENDIAN
+static inline void snd_ymfpci_convert_from_le(const struct firmware *fw) { }
+#else
+static void snd_ymfpci_convert_from_le(const struct firmware *fw)
+{
+	int i;
+	u32 *data = (u32 *)fw->data;
+
+	for (i = 0; i < fw->size / 4; ++i)
+		le32_to_cpus(&data[i]);
+}
+#endif
+
+static int snd_ymfpci_request_firmware(struct snd_ymfpci *chip)
+{
+	int err, is_1e;
+	const char *name;
+
+	err = request_firmware(&chip->dsp_microcode, "yamaha/ds1_dsp.fw",
+			       &chip->pci->dev);
+	if (err >= 0) {
+		if (chip->dsp_microcode->size == YDSXG_DSPLENGTH)
+			snd_ymfpci_convert_from_le(chip->dsp_microcode);
+		else {
+			snd_printk(KERN_ERR "DSP microcode has wrong size\n");
+			err = -EINVAL;
+		}
+	}
+	if (err < 0)
+		return err;
+	is_1e = chip->device_id == PCI_DEVICE_ID_YAMAHA_724F ||
+		chip->device_id == PCI_DEVICE_ID_YAMAHA_740C ||
+		chip->device_id == PCI_DEVICE_ID_YAMAHA_744 ||
+		chip->device_id == PCI_DEVICE_ID_YAMAHA_754;
+	name = is_1e ? "yamaha/ds1e_ctrl.fw" : "yamaha/ds1_ctrl.fw";
+	err = request_firmware(&chip->controller_microcode, name,
+			       &chip->pci->dev);
+	if (err >= 0) {
+		if (chip->controller_microcode->size == YDSXG_CTRLLENGTH)
+			snd_ymfpci_convert_from_le(chip->controller_microcode);
+		else {
+			snd_printk(KERN_ERR "controller microcode"
+				   " has wrong size\n");
+			err = -EINVAL;
+		}
+	}
+	if (err < 0)
+		return err;
+	return 0;
+}
+
+MODULE_FIRMWARE("yamaha/ds1_dsp.fw");
+MODULE_FIRMWARE("yamaha/ds1_ctrl.fw");
+MODULE_FIRMWARE("yamaha/ds1e_ctrl.fw");
+
+#endif
 
 static void snd_ymfpci_download_image(struct snd_ymfpci *chip)
 {
 	int i;
 	u16 ctrl;
-	unsigned long *inst;
+	u32 *inst;
 
 	snd_ymfpci_writel(chip, YDSXGR_NATIVEDACOUTVOL, 0x00000000);
 	snd_ymfpci_disable_dsp(chip);
@@ -1986,21 +2102,12 @@ static void snd_ymfpci_download_image(struct snd_ymfpci *chip)
 	snd_ymfpci_writew(chip, YDSXGR_GLOBALCTRL, ctrl & ~0x0007);
 
 	/* setup DSP instruction code */
+	inst = (u32 *)chip->dsp_microcode->data;
 	for (i = 0; i < YDSXG_DSPLENGTH / 4; i++)
-		snd_ymfpci_writel(chip, YDSXGR_DSPINSTRAM + (i << 2), DspInst[i]);
+		snd_ymfpci_writel(chip, YDSXGR_DSPINSTRAM + (i << 2), inst[i]);
 
 	/* setup control instruction code */
-	switch (chip->device_id) {
-	case PCI_DEVICE_ID_YAMAHA_724F:
-	case PCI_DEVICE_ID_YAMAHA_740C:
-	case PCI_DEVICE_ID_YAMAHA_744:
-	case PCI_DEVICE_ID_YAMAHA_754:
-		inst = CntrlInst1E;
-		break;
-	default:
-		inst = CntrlInst;
-		break;
-	}
+	inst = (u32 *)chip->controller_microcode->data;
 	for (i = 0; i < YDSXG_CTRLLENGTH / 4; i++)
 		snd_ymfpci_writel(chip, YDSXGR_CTRLINSTRAM + (i << 2), inst[i]);
 
@@ -2020,10 +2127,10 @@ static int __devinit snd_ymfpci_memalloc(struct snd_ymfpci *chip)
 	chip->bank_size_effect = snd_ymfpci_readl(chip, YDSXGR_EFFCTRLSIZE) << 2;
 	chip->work_size = YDSXG_DEFAULT_WORK_SIZE;
 	
-	size = ((playback_ctrl_size + 0x00ff) & ~0x00ff) +
-	       ((chip->bank_size_playback * 2 * YDSXG_PLAYBACK_VOICES + 0x00ff) & ~0x00ff) +
-	       ((chip->bank_size_capture * 2 * YDSXG_CAPTURE_VOICES + 0x00ff) & ~0x00ff) +
-	       ((chip->bank_size_effect * 2 * YDSXG_EFFECT_VOICES + 0x00ff) & ~0x00ff) +
+	size = ALIGN(playback_ctrl_size, 0x100) +
+	       ALIGN(chip->bank_size_playback * 2 * YDSXG_PLAYBACK_VOICES, 0x100) +
+	       ALIGN(chip->bank_size_capture * 2 * YDSXG_CAPTURE_VOICES, 0x100) +
+	       ALIGN(chip->bank_size_effect * 2 * YDSXG_EFFECT_VOICES, 0x100) +
 	       chip->work_size;
 	/* work_ptr must be aligned to 256 bytes, but it's already
 	   covered with the kernel page allocation mechanism */
@@ -2038,8 +2145,8 @@ static int __devinit snd_ymfpci_memalloc(struct snd_ymfpci *chip)
 	chip->bank_base_playback_addr = ptr_addr;
 	chip->ctrl_playback = (u32 *)ptr;
 	chip->ctrl_playback[0] = cpu_to_le32(YDSXG_PLAYBACK_VOICES);
-	ptr += (playback_ctrl_size + 0x00ff) & ~0x00ff;
-	ptr_addr += (playback_ctrl_size + 0x00ff) & ~0x00ff;
+	ptr += ALIGN(playback_ctrl_size, 0x100);
+	ptr_addr += ALIGN(playback_ctrl_size, 0x100);
 	for (voice = 0; voice < YDSXG_PLAYBACK_VOICES; voice++) {
 		chip->voices[voice].number = voice;
 		chip->voices[voice].bank = (struct snd_ymfpci_playback_bank *)ptr;
@@ -2050,8 +2157,8 @@ static int __devinit snd_ymfpci_memalloc(struct snd_ymfpci *chip)
 			ptr_addr += chip->bank_size_playback;
 		}
 	}
-	ptr = (char *)(((unsigned long)ptr + 0x00ff) & ~0x00ff);
-	ptr_addr = (ptr_addr + 0x00ff) & ~0x00ff;
+	ptr = (char *)ALIGN((unsigned long)ptr, 0x100);
+	ptr_addr = ALIGN(ptr_addr, 0x100);
 	chip->bank_base_capture = ptr;
 	chip->bank_base_capture_addr = ptr_addr;
 	for (voice = 0; voice < YDSXG_CAPTURE_VOICES; voice++)
@@ -2060,8 +2167,8 @@ static int __devinit snd_ymfpci_memalloc(struct snd_ymfpci *chip)
 			ptr += chip->bank_size_capture;
 			ptr_addr += chip->bank_size_capture;
 		}
-	ptr = (char *)(((unsigned long)ptr + 0x00ff) & ~0x00ff);
-	ptr_addr = (ptr_addr + 0x00ff) & ~0x00ff;
+	ptr = (char *)ALIGN((unsigned long)ptr, 0x100);
+	ptr_addr = ALIGN(ptr_addr, 0x100);
 	chip->bank_base_effect = ptr;
 	chip->bank_base_effect_addr = ptr_addr;
 	for (voice = 0; voice < YDSXG_EFFECT_VOICES; voice++)
@@ -2070,8 +2177,8 @@ static int __devinit snd_ymfpci_memalloc(struct snd_ymfpci *chip)
 			ptr += chip->bank_size_effect;
 			ptr_addr += chip->bank_size_effect;
 		}
-	ptr = (char *)(((unsigned long)ptr + 0x00ff) & ~0x00ff);
-	ptr_addr = (ptr_addr + 0x00ff) & ~0x00ff;
+	ptr = (char *)ALIGN((unsigned long)ptr, 0x100);
+	ptr_addr = ALIGN(ptr_addr, 0x100);
 	chip->work_base = ptr;
 	chip->work_base_addr = ptr_addr;
 	
@@ -2148,12 +2255,16 @@ static int snd_ymfpci_free(struct snd_ymfpci *chip)
 		snd_dma_free_pages(&chip->work_ptr);
 	
 	if (chip->irq >= 0)
-		free_irq(chip->irq, (void *)chip);
+		free_irq(chip->irq, chip);
 	release_and_free_resource(chip->res_reg_area);
 
 	pci_write_config_word(chip->pci, 0x40, chip->old_legacy_ctrl);
 	
 	pci_disable_device(chip->pci);
+#ifndef CONFIG_SND_YMFPCI_FIRMWARE_IN_KERNEL
+	release_firmware(chip->dsp_microcode);
+	release_firmware(chip->controller_microcode);
+#endif
 	kfree(chip);
 	return 0;
 }
@@ -2174,7 +2285,7 @@ static int saved_regs_index[] = {
 	YDSXGR_PRIADCLOOPVOL,
 	YDSXGR_NATIVEDACINVOL,
 	YDSXGR_NATIVEDACOUTVOL,
-	// YDSXGR_BUF441OUTVOL,
+	YDSXGR_BUF441OUTVOL,
 	YDSXGR_NATIVEADCINVOL,
 	YDSXGR_SPDIFLOOPVOL,
 	YDSXGR_SPDIFOUTVOL,
@@ -2213,6 +2324,7 @@ int snd_ymfpci_suspend(struct pci_dev *pci, pm_message_t state)
 	snd_ymfpci_disable_dsp(chip);
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -2222,8 +2334,14 @@ int snd_ymfpci_resume(struct pci_dev *pci)
 	struct snd_ymfpci *chip = card->private_data;
 	unsigned int i;
 
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "ymfpci: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 	snd_ymfpci_aclink_reset(pci);
 	snd_ymfpci_codec_ready(chip, 0);
@@ -2278,17 +2396,19 @@ int __devinit snd_ymfpci_create(struct snd_card *card,
 	chip->pci = pci;
 	chip->irq = -1;
 	chip->device_id = pci->device;
-	pci_read_config_byte(pci, PCI_REVISION_ID, (u8 *)&chip->rev);
+	chip->rev = pci->revision;
 	chip->reg_area_phys = pci_resource_start(pci, 0);
 	chip->reg_area_virt = ioremap_nocache(chip->reg_area_phys, 0x8000);
 	pci_set_master(pci);
+	chip->src441_used = -1;
 
 	if ((chip->res_reg_area = request_mem_region(chip->reg_area_phys, 0x8000, "YMFPCI")) == NULL) {
 		snd_printk(KERN_ERR "unable to grab memory region 0x%lx-0x%lx\n", chip->reg_area_phys, chip->reg_area_phys + 0x8000 - 1);
 		snd_ymfpci_free(chip);
 		return -EBUSY;
 	}
-	if (request_irq(pci->irq, snd_ymfpci_interrupt, IRQF_DISABLED|IRQF_SHARED, "YMFPCI", (void *) chip)) {
+	if (request_irq(pci->irq, snd_ymfpci_interrupt, IRQF_SHARED,
+			"YMFPCI", chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_ymfpci_free(chip);
 		return -EBUSY;
@@ -2301,6 +2421,12 @@ int __devinit snd_ymfpci_create(struct snd_card *card,
 		return -EIO;
 	}
 
+	err = snd_ymfpci_request_firmware(chip);
+	if (err < 0) {
+		snd_printk(KERN_ERR "firmware request failed: %d\n", err);
+		snd_ymfpci_free(chip);
+		return err;
+	}
 	snd_ymfpci_download_image(chip);
 
 	udelay(100); /* seems we need a delay after downloading image.. */
@@ -2310,7 +2436,6 @@ int __devinit snd_ymfpci_create(struct snd_card *card,
 		return -EIO;
 	}
 
-	chip->rear_swap = 1;
 	if ((err = snd_ymfpci_ac3_init(chip)) < 0) {
 		snd_ymfpci_free(chip);
 		return err;

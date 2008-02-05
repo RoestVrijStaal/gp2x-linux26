@@ -1,6 +1,6 @@
 /*
  *  Driver for Cirrus Logic CS4281 based PCI soundcard
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>,
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>,
  *
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -33,11 +33,12 @@
 #include <sound/pcm.h>
 #include <sound/rawmidi.h>
 #include <sound/ac97_codec.h>
+#include <sound/tlv.h>
 #include <sound/opl3.h>
 #include <sound/initval.h>
 
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("Cirrus Logic CS4281");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{Cirrus Logic,CS4281}}");
@@ -492,7 +493,7 @@ struct cs4281 {
 
 };
 
-static irqreturn_t snd_cs4281_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t snd_cs4281_interrupt(int irq, void *dev_id);
 
 static struct pci_device_id snd_cs4281_ids[] = {
 	{ 0x1013, 0x6005, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0, },	/* CS4281 */
@@ -841,12 +842,11 @@ static snd_pcm_uframes_t snd_cs4281_pointer(struct snd_pcm_substream *substream)
 
 static struct snd_pcm_hardware snd_cs4281_playback =
 {
-	.info =			(SNDRV_PCM_INFO_MMAP |
-				 SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_MMAP_VALID |
-				 SNDRV_PCM_INFO_PAUSE |
-				 SNDRV_PCM_INFO_RESUME |
-				 SNDRV_PCM_INFO_SYNC_START),
+	.info =			SNDRV_PCM_INFO_MMAP |
+				SNDRV_PCM_INFO_INTERLEAVED |
+				SNDRV_PCM_INFO_MMAP_VALID |
+				SNDRV_PCM_INFO_PAUSE |
+				SNDRV_PCM_INFO_RESUME,
 	.formats =		SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S8 |
 				SNDRV_PCM_FMTBIT_U16_LE | SNDRV_PCM_FMTBIT_S16_LE |
 				SNDRV_PCM_FMTBIT_U16_BE | SNDRV_PCM_FMTBIT_S16_BE |
@@ -867,12 +867,11 @@ static struct snd_pcm_hardware snd_cs4281_playback =
 
 static struct snd_pcm_hardware snd_cs4281_capture =
 {
-	.info =			(SNDRV_PCM_INFO_MMAP |
-				 SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_MMAP_VALID |
-				 SNDRV_PCM_INFO_PAUSE |
-				 SNDRV_PCM_INFO_RESUME |
-				 SNDRV_PCM_INFO_SYNC_START),
+	.info =			SNDRV_PCM_INFO_MMAP |
+				SNDRV_PCM_INFO_INTERLEAVED |
+				SNDRV_PCM_INFO_MMAP_VALID |
+				SNDRV_PCM_INFO_PAUSE |
+				SNDRV_PCM_INFO_RESUME,
 	.formats =		SNDRV_PCM_FMTBIT_U8 | SNDRV_PCM_FMTBIT_S8 |
 				SNDRV_PCM_FMTBIT_U16_LE | SNDRV_PCM_FMTBIT_S16_LE |
 				SNDRV_PCM_FMTBIT_U16_BE | SNDRV_PCM_FMTBIT_S16_BE |
@@ -903,7 +902,6 @@ static int snd_cs4281_playback_open(struct snd_pcm_substream *substream)
 	dma->right_slot = 1;
 	runtime->private_data = dma;
 	runtime->hw = snd_cs4281_playback;
-	snd_pcm_set_sync(substream);
 	/* should be detected from the AC'97 layer, but it seems
 	   that although CS4297A rev B reports 18-bit ADC resolution,
 	   samples are 20-bit */
@@ -923,7 +921,6 @@ static int snd_cs4281_capture_open(struct snd_pcm_substream *substream)
 	dma->right_slot = 11;
 	runtime->private_data = dma;
 	runtime->hw = snd_cs4281_capture;
-	snd_pcm_set_sync(substream);
 	/* should be detected from the AC'97 layer, but it seems
 	   that although CS4297A rev B reports 18-bit ADC resolution,
 	   samples are 20-bit */
@@ -1054,6 +1051,8 @@ static int snd_cs4281_put_volume(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_dsp, -4650, 150, 0);
+
 static struct snd_kcontrol_new snd_cs4281_fm_vol = 
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -1062,6 +1061,7 @@ static struct snd_kcontrol_new snd_cs4281_fm_vol =
 	.get = snd_cs4281_get_volume,
 	.put = snd_cs4281_put_volume, 
 	.private_value = ((BA0_FMLVC << 16) | BA0_FMRVC),
+	.tlv = { .p = db_scale_dsp },
 };
 
 static struct snd_kcontrol_new snd_cs4281_pcm_vol = 
@@ -1072,6 +1072,7 @@ static struct snd_kcontrol_new snd_cs4281_pcm_vol =
 	.get = snd_cs4281_get_volume,
 	.put = snd_cs4281_put_volume, 
 	.private_value = ((BA0_PPLVC << 16) | BA0_PPRVC),
+	.tlv = { .p = db_scale_dsp },
 };
 
 static void snd_cs4281_mixer_free_ac97_bus(struct snd_ac97_bus *bus)
@@ -1386,7 +1387,7 @@ static int __devinit snd_cs4281_create(struct snd_card *card,
 		return -ENOMEM;
 	}
 	
-	if (request_irq(pci->irq, snd_cs4281_interrupt, IRQF_DISABLED|IRQF_SHARED,
+	if (request_irq(pci->irq, snd_cs4281_interrupt, IRQF_SHARED,
 			"CS4281", chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_cs4281_free(chip);
@@ -1809,7 +1810,7 @@ static int __devinit snd_cs4281_midi(struct cs4281 * chip, int device,
  *  Interrupt handler
  */
 
-static irqreturn_t snd_cs4281_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_cs4281_interrupt(int irq, void *dev_id)
 {
 	struct cs4281 *chip = dev_id;
 	unsigned int status, dma, val;
@@ -2045,6 +2046,7 @@ static int cs4281_suspend(struct pci_dev *pci, pm_message_t state)
 
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -2055,8 +2057,14 @@ static int cs4281_resume(struct pci_dev *pci)
 	unsigned int i;
 	u32 ulCLK;
 
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "cs4281: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 
 	ulCLK = snd_cs4281_peekBA0(chip, BA0_CLKCR1);

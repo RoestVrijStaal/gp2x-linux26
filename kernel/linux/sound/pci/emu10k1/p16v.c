@@ -100,6 +100,7 @@
 #include <sound/pcm.h>
 #include <sound/ac97_codec.h>
 #include <sound/info.h>
+#include <sound/tlv.h>
 #include <sound/emu10k1.h>
 #include "p16v.h"
 
@@ -123,11 +124,12 @@
 
  /* hardware definition */
 static struct snd_pcm_hardware snd_p16v_playback_hw = {
-	.info =			(SNDRV_PCM_INFO_MMAP | 
-				 SNDRV_PCM_INFO_INTERLEAVED |
-				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
-				 SNDRV_PCM_INFO_RESUME |
-				 SNDRV_PCM_INFO_MMAP_VALID),
+	.info =			SNDRV_PCM_INFO_MMAP | 
+				SNDRV_PCM_INFO_INTERLEAVED |
+				SNDRV_PCM_INFO_BLOCK_TRANSFER |
+				SNDRV_PCM_INFO_RESUME |
+				SNDRV_PCM_INFO_MMAP_VALID |
+				SNDRV_PCM_INFO_SYNC_START,
 	.formats =		SNDRV_PCM_FMTBIT_S32_LE, /* Only supports 24-bit samples padded to 32 bits. */
 	.rates =		SNDRV_PCM_RATE_192000 | SNDRV_PCM_RATE_96000 | SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_44100, 
 	.rate_min =		44100,
@@ -206,6 +208,11 @@ static int snd_p16v_pcm_open_playback_channel(struct snd_pcm_substream *substrea
 	if ((err = snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS)) < 0)
                 return err;
 
+	runtime->sync.id32[0] = substream->pcm->card->number;
+	runtime->sync.id32[1] = 'P';
+	runtime->sync.id32[2] = 16;
+	runtime->sync.id32[3] = 'V';
+
 	return 0;
 }
 /* open_capture callback */
@@ -252,7 +259,7 @@ static int snd_p16v_pcm_close_playback(struct snd_pcm_substream *substream)
 	struct snd_emu10k1 *emu = snd_pcm_substream_chip(substream);
 	//struct snd_pcm_runtime *runtime = substream->runtime;
 	//struct snd_emu10k1_pcm *epcm = runtime->private_data;
-	emu->p16v_voices[substream->pcm->device - emu->p16v_device_offset].use=0;
+	emu->p16v_voices[substream->pcm->device - emu->p16v_device_offset].use = 0;
 	/* FIXME: maybe zero others */
 	return 0;
 }
@@ -263,7 +270,7 @@ static int snd_p16v_pcm_close_capture(struct snd_pcm_substream *substream)
 	struct snd_emu10k1 *emu = snd_pcm_substream_chip(substream);
 	//struct snd_pcm_runtime *runtime = substream->runtime;
 	//struct snd_emu10k1_pcm *epcm = runtime->private_data;
-	emu->p16v_capture_voice.use=0;
+	emu->p16v_capture_voice.use = 0;
 	/* FIXME: maybe zero others */
 	return 0;
 }
@@ -348,7 +355,7 @@ static int snd_p16v_pcm_prepare_playback(struct snd_pcm_substream *substream)
 	  break;
 	}
 	/* FIXME: Check emu->buffer.size before actually writing to it. */
-	for(i=0; i < runtime->periods; i++) {
+	for(i = 0; i < runtime->periods; i++) {
 		table_base[i*2]=runtime->dma_addr+(i*period_size_bytes);
 		table_base[(i*2)+1]=period_size_bytes<<16;
 	}
@@ -393,7 +400,7 @@ static int snd_p16v_pcm_prepare_capture(struct snd_pcm_substream *substream)
 	/* FIXME: Check emu->buffer.size before actually writing to it. */
 	snd_emu10k1_ptr20_write(emu, 0x13, channel, 0);
 	snd_emu10k1_ptr20_write(emu, CAPTURE_DMA_ADDR, channel, runtime->dma_addr);
-	snd_emu10k1_ptr20_write(emu, CAPTURE_BUFFER_SIZE, channel, frames_to_bytes(runtime, runtime->buffer_size)<<16); // buffer size in bytes
+	snd_emu10k1_ptr20_write(emu, CAPTURE_BUFFER_SIZE, channel, frames_to_bytes(runtime, runtime->buffer_size) << 16); // buffer size in bytes
 	snd_emu10k1_ptr20_write(emu, CAPTURE_POINTER, channel, 0);
 	//snd_emu10k1_ptr20_write(emu, CAPTURE_SOURCE, 0x0, 0x333300e4); /* Select MIC or Line in */
 	//snd_emu10k1_ptr20_write(emu, EXTENDED_INT_MASK, 0, snd_emu10k1_ptr20_read(emu, EXTENDED_INT_MASK, 0) | (0x110000<<channel));
@@ -432,11 +439,10 @@ static int snd_p16v_pcm_trigger_playback(struct snd_pcm_substream *substream,
 	struct snd_emu10k1_pcm *epcm;
 	int channel;
 	int result = 0;
-	struct list_head *pos;
         struct snd_pcm_substream *s;
 	u32 basic = 0;
 	u32 inte = 0;
-	int running=0;
+	int running = 0;
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
@@ -444,11 +450,13 @@ static int snd_p16v_pcm_trigger_playback(struct snd_pcm_substream *substream,
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	default:
-		running=0;
+		running = 0;
 		break;
 	}
-        snd_pcm_group_for_each(pos, substream) {
-                s = snd_pcm_group_substream_entry(pos);
+        snd_pcm_group_for_each_entry(s, substream) {
+		if (snd_pcm_substream_chip(s) != emu ||
+		    s->stream != SNDRV_PCM_STREAM_PLAYBACK)
+			continue;
 		runtime = s->runtime;
 		epcm = runtime->private_data;
 		channel = substream->pcm->device-emu->p16v_device_offset;
@@ -734,6 +742,8 @@ static int snd_p16v_capture_source_put(struct snd_kcontrol *kcontrol,
 	u32 source;
 
 	val = ucontrol->value.enumerated.item[0] ;
+	if (val > 7)
+		return -EINVAL;
 	change = (emu->p16v_capture_source != val);
 	if (change) {
 		emu->p16v_capture_source = val;
@@ -776,6 +786,8 @@ static int snd_p16v_capture_channel_put(struct snd_kcontrol *kcontrol,
 	u32 tmp;
 
 	val = ucontrol->value.enumerated.item[0] ;
+	if (val > 3)
+		return -EINVAL;
 	change = (emu->p16v_capture_channel != val);
 	if (change) {
 		emu->p16v_capture_channel = val;
@@ -784,12 +796,16 @@ static int snd_p16v_capture_channel_put(struct snd_kcontrol *kcontrol,
 	}
         return change;
 }
+static const DECLARE_TLV_DB_SCALE(snd_p16v_db_scale1, -5175, 25, 1);
 
 #define P16V_VOL(xname,xreg,xhl) { \
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = xname, \
+        .access = SNDRV_CTL_ELEM_ACCESS_READWRITE |             \
+                  SNDRV_CTL_ELEM_ACCESS_TLV_READ,               \
 	.info = snd_p16v_volume_info, \
 	.get = snd_p16v_volume_get, \
 	.put = snd_p16v_volume_put, \
+	.tlv = { .p = snd_p16v_db_scale1 },	\
 	.private_value = ((xreg) | ((xhl) << 8)) \
 }
 

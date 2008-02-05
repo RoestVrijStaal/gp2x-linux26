@@ -3,7 +3,7 @@
  *
  *   Lowlevel functions for Hoontech STDSP24
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -325,4 +325,3 @@ struct snd_ice1712_card_info snd_ice1712_hoontech_cards[] __devinitdata = {
 	},
 	{ } /* terminator */
 };
-

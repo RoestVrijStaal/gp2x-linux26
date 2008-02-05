@@ -24,7 +24,6 @@
 #include <sound/driver.h>
 #include <asm/io.h>
 #include <linux/delay.h>
-#include <linux/pci.h>
 #include <linux/pm.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -233,7 +232,7 @@ void cs46xx_dsp_proc_free_scb_desc (struct dsp_scb_descriptor * scb)
 
 		snd_printdd("cs46xx_dsp_proc_free_scb_desc: freeing %s\n",scb->scb_name);
 
-		snd_info_unregister(scb->proc_info);
+		snd_info_free_entry(scb->proc_info);
 		scb->proc_info = NULL;
 
 		snd_assert (scb_info != NULL, return);
@@ -1481,7 +1480,7 @@ void cs46xx_dsp_destroy_pcm_channel (struct snd_cs46xx * chip,
 	if (!pcm_channel->src_scb->ref_count) {
 		cs46xx_dsp_remove_scb(chip,pcm_channel->src_scb);
 
-		snd_assert (pcm_channel->src_slot >= 0 && pcm_channel->src_slot <= DSP_MAX_SRC_NR,
+		snd_assert (pcm_channel->src_slot >= 0 && pcm_channel->src_slot < DSP_MAX_SRC_NR,
 			    return );
 
 		ins->src_scb_slots[pcm_channel->src_slot] = 0;

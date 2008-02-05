@@ -31,6 +31,7 @@
 #include "mixart_core.h"
 #include "mixart_hwdep.h"
 #include <sound/control.h>
+#include <sound/tlv.h>
 #include "mixart_mixer.h"
 
 static u32 mixart_analog_level[256] = {
@@ -388,23 +389,21 @@ static int mixart_analog_vol_put(struct snd_kcontrol *kcontrol, struct snd_ctl_e
 	return changed;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_analog, -9600, 50, 0);
+
 static struct snd_kcontrol_new mixart_control_analog_level = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	/* name will be filled later */
 	.info =		mixart_analog_vol_info,
 	.get =		mixart_analog_vol_get,
 	.put =		mixart_analog_vol_put,
+	.tlv = { .p = db_scale_analog },
 };
 
 /* shared */
-static int mixart_sw_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define mixart_sw_info		snd_ctl_boolean_stereo_info
 
 static int mixart_audio_sw_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -866,14 +865,19 @@ static int mixart_pcm_vol_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem
 	return changed;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_digital, -10950, 50, 0);
+
 static struct snd_kcontrol_new snd_mixart_pcm_vol =
 {
 	.iface =        SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	/* name will be filled later */
 	/* count will be filled later */
 	.info =         mixart_digital_vol_info,		/* shared */
 	.get =          mixart_pcm_vol_get,
 	.put =          mixart_pcm_vol_put,
+	.tlv = { .p = db_scale_digital },
 };
 
 
@@ -984,10 +988,13 @@ static int mixart_monitor_vol_put(struct snd_kcontrol *kcontrol, struct snd_ctl_
 
 static struct snd_kcontrol_new mixart_control_monitor_vol = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	.name =         "Monitoring Volume",
 	.info =		mixart_digital_vol_info,		/* shared */
 	.get =		mixart_monitor_vol_get,
 	.put =		mixart_monitor_vol_put,
+	.tlv = { .p = db_scale_digital },
 };
 
 /*

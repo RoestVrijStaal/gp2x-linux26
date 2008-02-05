@@ -46,6 +46,7 @@
 #include "ice1712.h"
 #include "envy24ht.h"
 #include "phase.h"
+#include <sound/tlv.h>
 
 /* WM8770 registers */
 #define WM_DAC_ATTEN		0x00	/* DAC1-8 analog attenuation */
@@ -70,7 +71,7 @@
  * Logarithmic volume values for WM8770
  * Computed as 20 * Log10(255 / x)
  */
-static unsigned char wm_vol[256] = {
+static const unsigned char wm_vol[256] = {
 	127, 48, 42, 39, 36, 34, 33, 31, 30, 29, 28, 27, 27, 26, 25, 25, 24, 24, 23,
 	23, 22, 22, 21, 21, 21, 20, 20, 20, 19, 19, 19, 18, 18, 18, 18, 17, 17, 17,
 	17, 16, 16, 16, 16, 15, 15, 15, 15, 15, 15, 14, 14, 14, 14, 14, 13, 13, 13,
@@ -152,35 +153,35 @@ static int __devinit phase22_add_controls(struct snd_ice1712 *ice)
 }
 
 static unsigned char phase22_eeprom[] __devinitdata = {
-	0x00,	/* SYSCONF: 1xADC, 1xDACs */
-	0x80,	/* ACLINK: I2S */
-	0xf8,	/* I2S: vol, 96k, 24bit*/
-	0xc3,	/* SPDIF: out-en, out-int, spdif-in */
-	0xFF,	/* GPIO_DIR */
-	0xFF,	/* GPIO_DIR1 */
-	0xFF,	/* GPIO_DIR2 */
-	0x00,	/* GPIO_MASK */
-	0x00,	/* GPIO_MASK1 */
-	0x00,	/* GPIO_MASK2 */
-	0x00,	/* GPIO_STATE: */
-	0x00,	/* GPIO_STATE1: */
-	0x00,	/* GPIO_STATE2 */
+	[ICE_EEP2_SYSCONF]     = 0x00,	/* 1xADC, 1xDACs */
+	[ICE_EEP2_ACLINK]      = 0x80,	/* I2S */
+	[ICE_EEP2_I2S]         = 0xf8,	/* vol, 96k, 24bit */
+	[ICE_EEP2_SPDIF]       = 0xc3,	/* out-en, out-int, spdif-in */
+	[ICE_EEP2_GPIO_DIR]    = 0xff,
+	[ICE_EEP2_GPIO_DIR1]   = 0xff,
+	[ICE_EEP2_GPIO_DIR2]   = 0xff,
+	[ICE_EEP2_GPIO_MASK]   = 0x00,
+	[ICE_EEP2_GPIO_MASK1]  = 0x00,
+	[ICE_EEP2_GPIO_MASK2]  = 0x00,
+	[ICE_EEP2_GPIO_STATE]  = 0x00,
+	[ICE_EEP2_GPIO_STATE1] = 0x00,
+	[ICE_EEP2_GPIO_STATE2] = 0x00,
 };
 
 static unsigned char phase28_eeprom[] __devinitdata = {
-	0x0b,	/* SYSCONF: clock 512, spdif-in/ADC, 4DACs */
-	0x80,	/* ACLINK: I2S */
-	0xfc,	/* I2S: vol, 96k, 24bit, 192k */
-	0xc3,	/* SPDIF: out-en, out-int, spdif-in */
-	0xff,	/* GPIO_DIR */
-	0xff,	/* GPIO_DIR1 */
-	0x5f,	/* GPIO_DIR2 */
-	0x00,	/* GPIO_MASK */
-	0x00,	/* GPIO_MASK1 */
-	0x00,	/* GPIO_MASK2 */
-	0x00,	/* GPIO_STATE */
-	0x00,	/* GPIO_STATE1 */
-	0x00,	/* GPIO_STATE2 */
+	[ICE_EEP2_SYSCONF]     = 0x0b,	/* clock 512, spdif-in/ADC, 4DACs */
+	[ICE_EEP2_ACLINK]      = 0x80,	/* I2S */
+	[ICE_EEP2_I2S]         = 0xfc,	/* vol, 96k, 24bit, 192k */
+	[ICE_EEP2_SPDIF]       = 0xc3,	/* out-en, out-int, spdif-in */
+	[ICE_EEP2_GPIO_DIR]    = 0xff,
+	[ICE_EEP2_GPIO_DIR1]   = 0xff,
+	[ICE_EEP2_GPIO_DIR2]   = 0x5f,
+	[ICE_EEP2_GPIO_MASK]   = 0x00,
+	[ICE_EEP2_GPIO_MASK1]  = 0x00,
+	[ICE_EEP2_GPIO_MASK2]  = 0x00,
+	[ICE_EEP2_GPIO_STATE]  = 0x00,
+	[ICE_EEP2_GPIO_STATE1] = 0x00,
+	[ICE_EEP2_GPIO_STATE2] = 0x00,
 };
 
 /*
@@ -269,7 +270,7 @@ static void wm_set_vol(struct snd_ice1712 *ice, unsigned int index, unsigned sho
 /*
  * DAC mute control
  */
-#define wm_pcm_mute_info	phase28_mono_bool_info
+#define wm_pcm_mute_info	snd_ctl_boolean_mono_info
 
 static int wm_pcm_mute_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -342,7 +343,7 @@ static int wm_master_vol_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_
 
 static int __devinit phase28_init(struct snd_ice1712 *ice)
 {
-	static unsigned short wm_inits_phase28[] = {
+	static const unsigned short wm_inits_phase28[] = {
 		/* These come first to reduce init pop noise */
 		0x1b, 0x044,		/* ADC Mux (AC'97 source) */
 		0x1c, 0x00B,		/* Out Mux1 (VOUT1 = DAC+AUX, VOUT2 = DAC) */
@@ -381,7 +382,7 @@ static int __devinit phase28_init(struct snd_ice1712 *ice)
 
 	unsigned int tmp;
 	struct snd_akm4xxx *ak;
-	unsigned short *p;
+	const unsigned short *p;
 	int i;
 
 	ice->num_total_dacs = 8;
@@ -526,13 +527,7 @@ static int wm_mute_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value 
 /*
  * WM8770 master mute control
  */
-static int wm_master_mute_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo) {
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define wm_master_mute_info		snd_ctl_boolean_stereo_info
 
 static int wm_master_mute_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -614,20 +609,9 @@ static int wm_pcm_vol_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_val
 }
 
 /*
- */
-static int phase28_mono_bool_info(struct snd_kcontrol *k, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-
-/*
  * Deemphasis
  */
-#define phase28_deemp_info	phase28_mono_bool_info
+#define phase28_deemp_info	snd_ctl_boolean_mono_info
 
 static int phase28_deemp_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -696,6 +680,9 @@ static int phase28_oversampling_put(struct snd_kcontrol *kcontrol, struct snd_ct
 	return 0;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_wm_dac, -12700, 100, 1);
+static const DECLARE_TLV_DB_SCALE(db_scale_wm_pcm, -6400, 50, 1);
+
 static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -706,10 +693,13 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Master Playback Volume",
 		.info = wm_master_vol_info,
 		.get = wm_master_vol_get,
-		.put = wm_master_vol_put
+		.put = wm_master_vol_put,
+		.tlv = { .p = db_scale_wm_dac }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -721,11 +711,14 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Front Playback Volume",
 		.info = wm_vol_info,
 		.get = wm_vol_get,
 		.put = wm_vol_put,
-		.private_value = (2 << 8) | 0
+		.private_value = (2 << 8) | 0,
+		.tlv = { .p = db_scale_wm_dac }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -737,11 +730,14 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Rear Playback Volume",
 		.info = wm_vol_info,
 		.get = wm_vol_get,
 		.put = wm_vol_put,
-		.private_value = (2 << 8) | 2
+		.private_value = (2 << 8) | 2,
+		.tlv = { .p = db_scale_wm_dac }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -753,11 +749,14 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Center Playback Volume",
 		.info = wm_vol_info,
 		.get = wm_vol_get,
 		.put = wm_vol_put,
-		.private_value = (1 << 8) | 4
+		.private_value = (1 << 8) | 4,
+		.tlv = { .p = db_scale_wm_dac }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -769,11 +768,14 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "LFE Playback Volume",
 		.info = wm_vol_info,
 		.get = wm_vol_get,
 		.put = wm_vol_put,
-		.private_value = (1 << 8) | 5
+		.private_value = (1 << 8) | 5,
+		.tlv = { .p = db_scale_wm_dac }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -785,11 +787,14 @@ static struct snd_kcontrol_new phase28_dac_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Side Playback Volume",
 		.info = wm_vol_info,
 		.get = wm_vol_get,
 		.put = wm_vol_put,
-		.private_value = (2 << 8) | 6
+		.private_value = (2 << 8) | 6,
+		.tlv = { .p = db_scale_wm_dac }
 	}
 };
 
@@ -803,10 +808,13 @@ static struct snd_kcontrol_new wm_controls[] __devinitdata = {
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "PCM Playback Volume",
 		.info = wm_pcm_vol_info,
 		.get = wm_pcm_vol_get,
-		.put = wm_pcm_vol_put
+		.put = wm_pcm_vol_put,
+		.tlv = { .p = db_scale_wm_pcm }
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
