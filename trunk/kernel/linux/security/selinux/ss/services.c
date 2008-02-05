@@ -13,8 +13,17 @@
  *
  * 	Added conditional policy language extensions
  *
+ * Updated: Hewlett-Packard <paul.moore@hp.com>
+ *
+ *      Added support for NetLabel
+ *
+ * Updated: Chad Sellers <csellers@tresys.com>
+ *
+ *  Added validation of kernel classes and permissions
+ *
+ * Copyright (C) 2006 Hewlett-Packard Development Company, L.P.
  * Copyright (C) 2004-2006 Trusted Computer Solutions, Inc.
- * Copyright (C) 2003 - 2004 Tresys Technology, LLC
+ * Copyright (C) 2003 - 2004, 2006 Tresys Technology, LLC
  * Copyright (C) 2003 Red Hat, Inc., James Morris <jmorris@redhat.com>
  *	This program is free software; you can redistribute it and/or modify
  *  	it under the terms of the GNU General Public License as published by
@@ -24,11 +33,13 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/spinlock.h>
+#include <linux/rcupdate.h>
 #include <linux/errno.h>
 #include <linux/in.h>
 #include <linux/sched.h>
 #include <linux/audit.h>
 #include <linux/mutex.h>
+#include <net/netlabel.h>
 
 #include "flask.h"
 #include "avc.h"
@@ -40,9 +51,18 @@
 #include "services.h"
 #include "conditional.h"
 #include "mls.h"
+#include "objsec.h"
+#include "netlabel.h"
+#include "xfrm.h"
+#include "ebitmap.h"
 
 extern void selnl_notify_policyload(u32 seqno);
 unsigned int policydb_loaded_version;
+
+/*
+ * This is declared in avc.c
+ */
+extern const struct selinux_class_perm selinux_class_perm;
 
 static DEFINE_RWLOCK(policy_rwlock);
 #define POLICY_RDLOCK read_lock(&policy_rwlock)
@@ -272,6 +292,7 @@ static int context_struct_compute_av(struct context *scontext,
 	struct class_datum *tclass_datum;
 	struct ebitmap *sattr, *tattr;
 	struct ebitmap_node *snode, *tnode;
+	const struct selinux_class_perm *kdefs = &selinux_class_perm;
 	unsigned int i, j;
 
 	/*
@@ -285,13 +306,6 @@ static int context_struct_compute_av(struct context *scontext,
 		    tclass <= SECCLASS_NETLINK_DNRT_SOCKET)
 			tclass = SECCLASS_NETLINK_SOCKET;
 
-	if (!tclass || tclass > policydb.p_classes.nprim) {
-		printk(KERN_ERR "security_compute_av:  unrecognized class %d\n",
-		       tclass);
-		return -EINVAL;
-	}
-	tclass_datum = policydb.class_val_to_struct[tclass - 1];
-
 	/*
 	 * Initialize the access vectors to the default values.
 	 */
@@ -302,6 +316,36 @@ static int context_struct_compute_av(struct context *scontext,
 	avd->seqno = latest_granting;
 
 	/*
+	 * Check for all the invalid cases.
+	 * - tclass 0
+	 * - tclass > policy and > kernel
+	 * - tclass > policy but is a userspace class
+	 * - tclass > policy but we do not allow unknowns
+	 */
+	if (unlikely(!tclass))
+		goto inval_class;
+	if (unlikely(tclass > policydb.p_classes.nprim))
+		if (tclass > kdefs->cts_len ||
+		    !kdefs->class_to_string[tclass - 1] ||
+		    !policydb.allow_unknown)
+			goto inval_class;
+
+	/*
+	 * Kernel class and we allow unknown so pad the allow decision
+	 * the pad will be all 1 for unknown classes.
+	 */
+	if (tclass <= kdefs->cts_len && policydb.allow_unknown)
+		avd->allowed = policydb.undefined_perms[tclass - 1];
+
+	/*
+	 * Not in policy. Since decision is completed (all 1 or all 0) return.
+	 */
+	if (unlikely(tclass > policydb.p_classes.nprim))
+		return 0;
+
+	tclass_datum = policydb.class_val_to_struct[tclass - 1];
+
+	/*
 	 * If a specific type enforcement rule was defined for
 	 * this permission check, then use it.
 	 */
@@ -309,12 +353,8 @@ static int context_struct_compute_av(struct context *scontext,
 	avkey.specified = AVTAB_AV;
 	sattr = &policydb.type_attr_map[scontext->type - 1];
 	tattr = &policydb.type_attr_map[tcontext->type - 1];
-	ebitmap_for_each_bit(sattr, snode, i) {
-		if (!ebitmap_node_get_bit(snode, i))
-			continue;
-		ebitmap_for_each_bit(tattr, tnode, j) {
-			if (!ebitmap_node_get_bit(tnode, j))
-				continue;
+	ebitmap_for_each_positive_bit(sattr, snode, i) {
+		ebitmap_for_each_positive_bit(tattr, tnode, j) {
 			avkey.source_type = i + 1;
 			avkey.target_type = j + 1;
 			for (node = avtab_search_node(&policydb.te_avtab, &avkey);
@@ -367,6 +407,10 @@ static int context_struct_compute_av(struct context *scontext,
 	}
 
 	return 0;
+
+inval_class:
+	printk(KERN_ERR "%s:  unrecognized class %d\n", __FUNCTION__, tclass);
+	return -EINVAL;
 }
 
 static int security_validtrans_handle_fail(struct context *ocontext,
@@ -573,6 +617,13 @@ static int context_struct_to_string(struct context *context, char **scontext, u3
 
 #include "initial_sid_to_string.h"
 
+const char *security_get_initial_sid_context(u32 sid)
+{
+	if (unlikely(sid > SECINITSID_NUM))
+		return NULL;
+	return initial_sid_to_string[sid];
+}
+
 /**
  * security_sid_to_context - Obtain a context for a given SID.
  * @sid: security identifier, SID
@@ -587,6 +638,9 @@ int security_sid_to_context(u32 sid, char **scontext, u32 *scontext_len)
 {
 	struct context *context;
 	int rc = 0;
+
+	*scontext = NULL;
+	*scontext_len  = 0;
 
 	if (!ss_initialized) {
 		if (sid <= SECINITSID_NUM) {
@@ -762,7 +816,7 @@ int security_context_to_sid(char *scontext, u32 scontext_len, u32 *sid)
  * @scontext: security context
  * @scontext_len: length in bytes
  * @sid: security identifier, SID
- * @def_sid: default SID to assign on errror
+ * @def_sid: default SID to assign on error
  *
  * Obtains a SID associated with the security context that
  * has the string representation specified by @scontext.
@@ -1010,86 +1064,133 @@ int security_change_sid(u32 ssid,
 }
 
 /*
- * Verify that each permission that is defined under the
- * existing policy is still defined with the same value
- * in the new policy.
+ * Verify that each kernel class that is defined in the
+ * policy is correct
  */
-static int validate_perm(void *key, void *datum, void *p)
+static int validate_classes(struct policydb *p)
 {
-	struct hashtab *h;
-	struct perm_datum *perdatum, *perdatum2;
-	int rc = 0;
+	int i, j;
+	struct class_datum *cladatum;
+	struct perm_datum *perdatum;
+	u32 nprim, tmp, common_pts_len, perm_val, pol_val;
+	u16 class_val;
+	const struct selinux_class_perm *kdefs = &selinux_class_perm;
+	const char *def_class, *def_perm, *pol_class;
+	struct symtab *perms;
 
-
-	h = p;
-	perdatum = datum;
-
-	perdatum2 = hashtab_search(h, key);
-	if (!perdatum2) {
-		printk(KERN_ERR "security:  permission %s disappeared",
-		       (char *)key);
-		rc = -ENOENT;
-		goto out;
+	if (p->allow_unknown) {
+		u32 num_classes = kdefs->cts_len;
+		p->undefined_perms = kcalloc(num_classes, sizeof(u32), GFP_KERNEL);
+		if (!p->undefined_perms)
+			return -ENOMEM;
 	}
-	if (perdatum->value != perdatum2->value) {
-		printk(KERN_ERR "security:  the value of permission %s changed",
-		       (char *)key);
-		rc = -EINVAL;
-	}
-out:
-	return rc;
-}
 
-/*
- * Verify that each class that is defined under the
- * existing policy is still defined with the same
- * attributes in the new policy.
- */
-static int validate_class(void *key, void *datum, void *p)
-{
-	struct policydb *newp;
-	struct class_datum *cladatum, *cladatum2;
-	int rc;
-
-	newp = p;
-	cladatum = datum;
-
-	cladatum2 = hashtab_search(newp->p_classes.table, key);
-	if (!cladatum2) {
-		printk(KERN_ERR "security:  class %s disappeared\n",
-		       (char *)key);
-		rc = -ENOENT;
-		goto out;
-	}
-	if (cladatum->value != cladatum2->value) {
-		printk(KERN_ERR "security:  the value of class %s changed\n",
-		       (char *)key);
-		rc = -EINVAL;
-		goto out;
-	}
-	if ((cladatum->comdatum && !cladatum2->comdatum) ||
-	    (!cladatum->comdatum && cladatum2->comdatum)) {
-		printk(KERN_ERR "security:  the inherits clause for the access "
-		       "vector definition for class %s changed\n", (char *)key);
-		rc = -EINVAL;
-		goto out;
-	}
-	if (cladatum->comdatum) {
-		rc = hashtab_map(cladatum->comdatum->permissions.table, validate_perm,
-		                 cladatum2->comdatum->permissions.table);
-		if (rc) {
-			printk(" in the access vector definition for class "
-			       "%s\n", (char *)key);
-			goto out;
+	for (i = 1; i < kdefs->cts_len; i++) {
+		def_class = kdefs->class_to_string[i];
+		if (!def_class)
+			continue;
+		if (i > p->p_classes.nprim) {
+			printk(KERN_INFO
+			       "security:  class %s not defined in policy\n",
+			       def_class);
+			if (p->reject_unknown)
+				return -EINVAL;
+			if (p->allow_unknown)
+				p->undefined_perms[i-1] = ~0U;
+			continue;
+		}
+		pol_class = p->p_class_val_to_name[i-1];
+		if (strcmp(pol_class, def_class)) {
+			printk(KERN_ERR
+			       "security:  class %d is incorrect, found %s but should be %s\n",
+			       i, pol_class, def_class);
+			return -EINVAL;
 		}
 	}
-	rc = hashtab_map(cladatum->permissions.table, validate_perm,
-	                 cladatum2->permissions.table);
-	if (rc)
-		printk(" in access vector definition for class %s\n",
-		       (char *)key);
-out:
-	return rc;
+	for (i = 0; i < kdefs->av_pts_len; i++) {
+		class_val = kdefs->av_perm_to_string[i].tclass;
+		perm_val = kdefs->av_perm_to_string[i].value;
+		def_perm = kdefs->av_perm_to_string[i].name;
+		if (class_val > p->p_classes.nprim)
+			continue;
+		pol_class = p->p_class_val_to_name[class_val-1];
+		cladatum = hashtab_search(p->p_classes.table, pol_class);
+		BUG_ON(!cladatum);
+		perms = &cladatum->permissions;
+		nprim = 1 << (perms->nprim - 1);
+		if (perm_val > nprim) {
+			printk(KERN_INFO
+			       "security:  permission %s in class %s not defined in policy\n",
+			       def_perm, pol_class);
+			if (p->reject_unknown)
+				return -EINVAL;
+			if (p->allow_unknown)
+				p->undefined_perms[class_val-1] |= perm_val;
+			continue;
+		}
+		perdatum = hashtab_search(perms->table, def_perm);
+		if (perdatum == NULL) {
+			printk(KERN_ERR
+			       "security:  permission %s in class %s not found in policy, bad policy\n",
+			       def_perm, pol_class);
+			return -EINVAL;
+		}
+		pol_val = 1 << (perdatum->value - 1);
+		if (pol_val != perm_val) {
+			printk(KERN_ERR
+			       "security:  permission %s in class %s has incorrect value\n",
+			       def_perm, pol_class);
+			return -EINVAL;
+		}
+	}
+	for (i = 0; i < kdefs->av_inherit_len; i++) {
+		class_val = kdefs->av_inherit[i].tclass;
+		if (class_val > p->p_classes.nprim)
+			continue;
+		pol_class = p->p_class_val_to_name[class_val-1];
+		cladatum = hashtab_search(p->p_classes.table, pol_class);
+		BUG_ON(!cladatum);
+		if (!cladatum->comdatum) {
+			printk(KERN_ERR
+			       "security:  class %s should have an inherits clause but does not\n",
+			       pol_class);
+			return -EINVAL;
+		}
+		tmp = kdefs->av_inherit[i].common_base;
+		common_pts_len = 0;
+		while (!(tmp & 0x01)) {
+			common_pts_len++;
+			tmp >>= 1;
+		}
+		perms = &cladatum->comdatum->permissions;
+		for (j = 0; j < common_pts_len; j++) {
+			def_perm = kdefs->av_inherit[i].common_pts[j];
+			if (j >= perms->nprim) {
+				printk(KERN_INFO
+				       "security:  permission %s in class %s not defined in policy\n",
+				       def_perm, pol_class);
+				if (p->reject_unknown)
+					return -EINVAL;
+				if (p->allow_unknown)
+					p->undefined_perms[class_val-1] |= (1 << j);
+				continue;
+			}
+			perdatum = hashtab_search(perms->table, def_perm);
+			if (perdatum == NULL) {
+				printk(KERN_ERR
+				       "security:  permission %s in class %s not found in policy, bad policy\n",
+				       def_perm, pol_class);
+				return -EINVAL;
+			}
+			if (perdatum->value != j + 1) {
+				printk(KERN_ERR
+				       "security:  permission %s in class %s has incorrect value\n",
+				       def_perm, pol_class);
+				return -EINVAL;
+			}
+		}
+	}
+	return 0;
 }
 
 /* Clone the SID into the new SID table. */
@@ -1199,6 +1300,7 @@ bad:
 }
 
 extern void selinux_complete_init(void);
+static int security_preserve_bools(struct policydb *p);
 
 /**
  * security_load_policy - Load a security policy configuration.
@@ -1234,6 +1336,16 @@ int security_load_policy(void *data, size_t len)
 			avtab_cache_destroy();
 			return -EINVAL;
 		}
+		/* Verify that the kernel defined classes are correct. */
+		if (validate_classes(&policydb)) {
+			printk(KERN_ERR
+			       "security:  the definition of a class is incorrect\n");
+			LOAD_UNLOCK;
+			sidtab_destroy(&sidtab);
+			policydb_destroy(&policydb);
+			avtab_cache_destroy();
+			return -EINVAL;
+		}
 		policydb_loaded_version = policydb.policyvers;
 		ss_initialized = 1;
 		seqno = ++latest_granting;
@@ -1241,6 +1353,8 @@ int security_load_policy(void *data, size_t len)
 		selinux_complete_init();
 		avc_ss_reset(seqno);
 		selnl_notify_policyload(seqno);
+		selinux_netlbl_cache_invalidate();
+		selinux_xfrm_notify_policyload();
 		return 0;
 	}
 
@@ -1255,11 +1369,17 @@ int security_load_policy(void *data, size_t len)
 
 	sidtab_init(&newsidtab);
 
-	/* Verify that the existing classes did not change. */
-	if (hashtab_map(policydb.p_classes.table, validate_class, &newpolicydb)) {
-		printk(KERN_ERR "security:  the definition of an existing "
-		       "class changed\n");
+	/* Verify that the kernel defined classes are correct. */
+	if (validate_classes(&newpolicydb)) {
+		printk(KERN_ERR
+		       "security:  the definition of a class is incorrect\n");
 		rc = -EINVAL;
+		goto err;
+	}
+
+	rc = security_preserve_bools(&newpolicydb);
+	if (rc) {
+		printk(KERN_ERR "security:  unable to preserve booleans\n");
 		goto err;
 	}
 
@@ -1295,6 +1415,8 @@ int security_load_policy(void *data, size_t len)
 
 	avc_ss_reset(seqno);
 	selnl_notify_policyload(seqno);
+	selinux_netlbl_cache_invalidate();
+	selinux_xfrm_notify_policyload();
 
 	return 0;
 
@@ -1508,19 +1630,18 @@ int security_get_user_sids(u32 fromsid,
 			   u32 *nel)
 {
 	struct context *fromcon, usercon;
-	u32 *mysids, *mysids2, sid;
+	u32 *mysids = NULL, *mysids2, sid;
 	u32 mynel = 0, maxnel = SIDS_NEL;
 	struct user_datum *user;
 	struct role_datum *role;
-	struct av_decision avd;
 	struct ebitmap_node *rnode, *tnode;
 	int rc = 0, i, j;
 
-	if (!ss_initialized) {
-		*sids = NULL;
-		*nel = 0;
+	*sids = NULL;
+	*nel = 0;
+
+	if (!ss_initialized)
 		goto out;
-	}
 
 	POLICY_RDLOCK;
 
@@ -1543,30 +1664,18 @@ int security_get_user_sids(u32 fromsid,
 		goto out_unlock;
 	}
 
-	ebitmap_for_each_bit(&user->roles, rnode, i) {
-		if (!ebitmap_node_get_bit(rnode, i))
-			continue;
+	ebitmap_for_each_positive_bit(&user->roles, rnode, i) {
 		role = policydb.role_val_to_struct[i];
 		usercon.role = i+1;
-		ebitmap_for_each_bit(&role->types, tnode, j) {
-			if (!ebitmap_node_get_bit(tnode, j))
-				continue;
+		ebitmap_for_each_positive_bit(&role->types, tnode, j) {
 			usercon.type = j+1;
 
 			if (mls_setup_user_range(fromcon, user, &usercon))
 				continue;
 
-			rc = context_struct_compute_av(fromcon, &usercon,
-						       SECCLASS_PROCESS,
-						       PROCESS__TRANSITION,
-						       &avd);
-			if (rc ||  !(avd.allowed & PROCESS__TRANSITION))
-				continue;
 			rc = sidtab_context_to_sid(&sidtab, &usercon, &sid);
-			if (rc) {
-				kfree(mysids);
+			if (rc)
 				goto out_unlock;
-			}
 			if (mynel < maxnel) {
 				mysids[mynel++] = sid;
 			} else {
@@ -1574,7 +1683,6 @@ int security_get_user_sids(u32 fromsid,
 				mysids2 = kcalloc(maxnel, sizeof(*mysids2), GFP_ATOMIC);
 				if (!mysids2) {
 					rc = -ENOMEM;
-					kfree(mysids);
 					goto out_unlock;
 				}
 				memcpy(mysids2, mysids, mynel * sizeof(*mysids2));
@@ -1585,11 +1693,32 @@ int security_get_user_sids(u32 fromsid,
 		}
 	}
 
-	*sids = mysids;
-	*nel = mynel;
-
 out_unlock:
 	POLICY_RDUNLOCK;
+	if (rc || !mynel) {
+		kfree(mysids);
+		goto out;
+	}
+
+	mysids2 = kcalloc(mynel, sizeof(*mysids2), GFP_KERNEL);
+	if (!mysids2) {
+		rc = -ENOMEM;
+		kfree(mysids);
+		goto out;
+	}
+	for (i = 0, j = 0; i < mynel; i++) {
+		rc = avc_has_perm_noaudit(fromsid, mysids[i],
+					  SECCLASS_PROCESS,
+					  PROCESS__TRANSITION, AVC_STRICT,
+					  NULL);
+		if (!rc)
+			mysids2[j++] = mysids[i];
+		cond_resched();
+	}
+	rc = 0;
+	kfree(mysids);
+	*sids = mysids2;
+	*nel = j;
 out:
 	return rc;
 }
@@ -1794,6 +1923,7 @@ out:
 	if (!rc) {
 		avc_ss_reset(seqno);
 		selnl_notify_policyload(seqno);
+		selinux_xfrm_notify_policyload();
 	}
 	return rc;
 }
@@ -1815,6 +1945,210 @@ int security_get_bool_value(int bool)
 out:
 	POLICY_RDUNLOCK;
 	return rc;
+}
+
+static int security_preserve_bools(struct policydb *p)
+{
+	int rc, nbools = 0, *bvalues = NULL, i;
+	char **bnames = NULL;
+	struct cond_bool_datum *booldatum;
+	struct cond_node *cur;
+
+	rc = security_get_bools(&nbools, &bnames, &bvalues);
+	if (rc)
+		goto out;
+	for (i = 0; i < nbools; i++) {
+		booldatum = hashtab_search(p->p_bools.table, bnames[i]);
+		if (booldatum)
+			booldatum->state = bvalues[i];
+	}
+	for (cur = p->cond_list; cur != NULL; cur = cur->next) {
+		rc = evaluate_cond_node(p, cur);
+		if (rc)
+			goto out;
+	}
+
+out:
+	if (bnames) {
+		for (i = 0; i < nbools; i++)
+			kfree(bnames[i]);
+	}
+	kfree(bnames);
+	kfree(bvalues);
+	return rc;
+}
+
+/*
+ * security_sid_mls_copy() - computes a new sid based on the given
+ * sid and the mls portion of mls_sid.
+ */
+int security_sid_mls_copy(u32 sid, u32 mls_sid, u32 *new_sid)
+{
+	struct context *context1;
+	struct context *context2;
+	struct context newcon;
+	char *s;
+	u32 len;
+	int rc = 0;
+
+	if (!ss_initialized || !selinux_mls_enabled) {
+		*new_sid = sid;
+		goto out;
+	}
+
+	context_init(&newcon);
+
+	POLICY_RDLOCK;
+	context1 = sidtab_search(&sidtab, sid);
+	if (!context1) {
+		printk(KERN_ERR "security_sid_mls_copy:  unrecognized SID "
+		       "%d\n", sid);
+		rc = -EINVAL;
+		goto out_unlock;
+	}
+
+	context2 = sidtab_search(&sidtab, mls_sid);
+	if (!context2) {
+		printk(KERN_ERR "security_sid_mls_copy:  unrecognized SID "
+		       "%d\n", mls_sid);
+		rc = -EINVAL;
+		goto out_unlock;
+	}
+
+	newcon.user = context1->user;
+	newcon.role = context1->role;
+	newcon.type = context1->type;
+	rc = mls_context_cpy(&newcon, context2);
+	if (rc)
+		goto out_unlock;
+
+	/* Check the validity of the new context. */
+	if (!policydb_context_isvalid(&policydb, &newcon)) {
+		rc = convert_context_handle_invalid_context(&newcon);
+		if (rc)
+			goto bad;
+	}
+
+	rc = sidtab_context_to_sid(&sidtab, &newcon, new_sid);
+	goto out_unlock;
+
+bad:
+	if (!context_struct_to_string(&newcon, &s, &len)) {
+		audit_log(current->audit_context, GFP_ATOMIC, AUDIT_SELINUX_ERR,
+			  "security_sid_mls_copy: invalid context %s", s);
+		kfree(s);
+	}
+
+out_unlock:
+	POLICY_RDUNLOCK;
+	context_destroy(&newcon);
+out:
+	return rc;
+}
+
+static int get_classes_callback(void *k, void *d, void *args)
+{
+	struct class_datum *datum = d;
+	char *name = k, **classes = args;
+	int value = datum->value - 1;
+
+	classes[value] = kstrdup(name, GFP_ATOMIC);
+	if (!classes[value])
+		return -ENOMEM;
+
+	return 0;
+}
+
+int security_get_classes(char ***classes, int *nclasses)
+{
+	int rc = -ENOMEM;
+
+	POLICY_RDLOCK;
+
+	*nclasses = policydb.p_classes.nprim;
+	*classes = kcalloc(*nclasses, sizeof(*classes), GFP_ATOMIC);
+	if (!*classes)
+		goto out;
+
+	rc = hashtab_map(policydb.p_classes.table, get_classes_callback,
+			*classes);
+	if (rc < 0) {
+		int i;
+		for (i = 0; i < *nclasses; i++)
+			kfree((*classes)[i]);
+		kfree(*classes);
+	}
+
+out:
+	POLICY_RDUNLOCK;
+	return rc;
+}
+
+static int get_permissions_callback(void *k, void *d, void *args)
+{
+	struct perm_datum *datum = d;
+	char *name = k, **perms = args;
+	int value = datum->value - 1;
+
+	perms[value] = kstrdup(name, GFP_ATOMIC);
+	if (!perms[value])
+		return -ENOMEM;
+
+	return 0;
+}
+
+int security_get_permissions(char *class, char ***perms, int *nperms)
+{
+	int rc = -ENOMEM, i;
+	struct class_datum *match;
+
+	POLICY_RDLOCK;
+
+	match = hashtab_search(policydb.p_classes.table, class);
+	if (!match) {
+		printk(KERN_ERR "%s:  unrecognized class %s\n",
+			__FUNCTION__, class);
+		rc = -EINVAL;
+		goto out;
+	}
+
+	*nperms = match->permissions.nprim;
+	*perms = kcalloc(*nperms, sizeof(*perms), GFP_ATOMIC);
+	if (!*perms)
+		goto out;
+
+	if (match->comdatum) {
+		rc = hashtab_map(match->comdatum->permissions.table,
+				get_permissions_callback, *perms);
+		if (rc < 0)
+			goto err;
+	}
+
+	rc = hashtab_map(match->permissions.table, get_permissions_callback,
+			*perms);
+	if (rc < 0)
+		goto err;
+
+out:
+	POLICY_RDUNLOCK;
+	return rc;
+
+err:
+	POLICY_RDUNLOCK;
+	for (i = 0; i < *nperms; i++)
+		kfree((*perms)[i]);
+	kfree(*perms);
+	return rc;
+}
+
+int security_get_reject_unknown(void)
+{
+	return policydb.reject_unknown;
+}
+
+int security_get_allow_unknown(void)
+{
+	return policydb.allow_unknown;
 }
 
 struct selinux_audit_rule {
@@ -1842,7 +2176,7 @@ int selinux_audit_rule_init(u32 field, u32 op, char *rulestr,
 	*rule = NULL;
 
 	if (!ss_initialized)
-		return -ENOTSUPP;
+		return -EOPNOTSUPP;
 
 	switch (field) {
 	case AUDIT_SUBJ_USER:
@@ -1923,7 +2257,7 @@ int selinux_audit_rule_init(u32 field, u32 op, char *rulestr,
 	return rc;
 }
 
-int selinux_audit_rule_match(u32 ctxid, u32 field, u32 op,
+int selinux_audit_rule_match(u32 sid, u32 field, u32 op,
                              struct selinux_audit_rule *rule,
                              struct audit_context *actx)
 {
@@ -1946,11 +2280,11 @@ int selinux_audit_rule_match(u32 ctxid, u32 field, u32 op,
 		goto out;
 	}
 
-	ctxt = sidtab_search(&sidtab, ctxid);
+	ctxt = sidtab_search(&sidtab, sid);
 	if (!ctxt) {
 		audit_log(actx, GFP_ATOMIC, AUDIT_SELINUX_ERR,
 		          "selinux_audit_rule_match: unrecognized SID %d\n",
-		          ctxid);
+		          sid);
 		match = -ENOENT;
 		goto out;
 	}
@@ -2064,3 +2398,235 @@ void selinux_audit_set_callback(int (*callback)(void))
 {
 	aurule_callback = callback;
 }
+
+#ifdef CONFIG_NETLABEL
+/*
+ * NetLabel cache structure
+ */
+#define NETLBL_CACHE(x)           ((struct selinux_netlbl_cache *)(x))
+#define NETLBL_CACHE_T_NONE       0
+#define NETLBL_CACHE_T_SID        1
+#define NETLBL_CACHE_T_MLS        2
+struct selinux_netlbl_cache {
+	u32 type;
+	union {
+		u32 sid;
+		struct mls_range mls_label;
+	} data;
+};
+
+/**
+ * security_netlbl_cache_free - Free the NetLabel cached data
+ * @data: the data to free
+ *
+ * Description:
+ * This function is intended to be used as the free() callback inside the
+ * netlbl_lsm_cache structure.
+ *
+ */
+static void security_netlbl_cache_free(const void *data)
+{
+	struct selinux_netlbl_cache *cache;
+
+	if (data == NULL)
+		return;
+
+	cache = NETLBL_CACHE(data);
+	switch (cache->type) {
+	case NETLBL_CACHE_T_MLS:
+		ebitmap_destroy(&cache->data.mls_label.level[0].cat);
+		break;
+	}
+	kfree(data);
+}
+
+/**
+ * security_netlbl_cache_add - Add an entry to the NetLabel cache
+ * @secattr: the NetLabel packet security attributes
+ * @ctx: the SELinux context
+ *
+ * Description:
+ * Attempt to cache the context in @ctx, which was derived from the packet in
+ * @skb, in the NetLabel subsystem cache.  This function assumes @secattr has
+ * already been initialized.
+ *
+ */
+static void security_netlbl_cache_add(struct netlbl_lsm_secattr *secattr,
+				      struct context *ctx)
+{
+	struct selinux_netlbl_cache *cache = NULL;
+
+	secattr->cache = netlbl_secattr_cache_alloc(GFP_ATOMIC);
+	if (secattr->cache == NULL)
+		return;
+
+	cache = kzalloc(sizeof(*cache),	GFP_ATOMIC);
+	if (cache == NULL)
+		return;
+
+	cache->type = NETLBL_CACHE_T_MLS;
+	if (ebitmap_cpy(&cache->data.mls_label.level[0].cat,
+			&ctx->range.level[0].cat) != 0) {
+		kfree(cache);
+		return;
+	}
+	cache->data.mls_label.level[1].cat.highbit =
+		cache->data.mls_label.level[0].cat.highbit;
+	cache->data.mls_label.level[1].cat.node =
+		cache->data.mls_label.level[0].cat.node;
+	cache->data.mls_label.level[0].sens = ctx->range.level[0].sens;
+	cache->data.mls_label.level[1].sens = ctx->range.level[0].sens;
+
+	secattr->cache->free = security_netlbl_cache_free;
+	secattr->cache->data = (void *)cache;
+	secattr->flags |= NETLBL_SECATTR_CACHE;
+}
+
+/**
+ * security_netlbl_secattr_to_sid - Convert a NetLabel secattr to a SELinux SID
+ * @secattr: the NetLabel packet security attributes
+ * @base_sid: the SELinux SID to use as a context for MLS only attributes
+ * @sid: the SELinux SID
+ *
+ * Description:
+ * Convert the given NetLabel security attributes in @secattr into a
+ * SELinux SID.  If the @secattr field does not contain a full SELinux
+ * SID/context then use the context in @base_sid as the foundation.  If
+ * possibile the 'cache' field of @secattr is set and the CACHE flag is set;
+ * this is to allow the @secattr to be used by NetLabel to cache the secattr to
+ * SID conversion for future lookups.  Returns zero on success, negative
+ * values on failure.
+ *
+ */
+int security_netlbl_secattr_to_sid(struct netlbl_lsm_secattr *secattr,
+				   u32 base_sid,
+				   u32 *sid)
+{
+	int rc = -EIDRM;
+	struct context *ctx;
+	struct context ctx_new;
+	struct selinux_netlbl_cache *cache;
+
+	if (!ss_initialized) {
+		*sid = SECSID_NULL;
+		return 0;
+	}
+
+	POLICY_RDLOCK;
+
+	if (secattr->flags & NETLBL_SECATTR_CACHE) {
+		cache = NETLBL_CACHE(secattr->cache->data);
+		switch (cache->type) {
+		case NETLBL_CACHE_T_SID:
+			*sid = cache->data.sid;
+			rc = 0;
+			break;
+		case NETLBL_CACHE_T_MLS:
+			ctx = sidtab_search(&sidtab, base_sid);
+			if (ctx == NULL)
+				goto netlbl_secattr_to_sid_return;
+
+			ctx_new.user = ctx->user;
+			ctx_new.role = ctx->role;
+			ctx_new.type = ctx->type;
+			ctx_new.range.level[0].sens =
+				cache->data.mls_label.level[0].sens;
+			ctx_new.range.level[0].cat.highbit =
+				cache->data.mls_label.level[0].cat.highbit;
+			ctx_new.range.level[0].cat.node =
+				cache->data.mls_label.level[0].cat.node;
+			ctx_new.range.level[1].sens =
+				cache->data.mls_label.level[1].sens;
+			ctx_new.range.level[1].cat.highbit =
+				cache->data.mls_label.level[1].cat.highbit;
+			ctx_new.range.level[1].cat.node =
+				cache->data.mls_label.level[1].cat.node;
+
+			rc = sidtab_context_to_sid(&sidtab, &ctx_new, sid);
+			break;
+		default:
+			goto netlbl_secattr_to_sid_return;
+		}
+	} else if (secattr->flags & NETLBL_SECATTR_MLS_LVL) {
+		ctx = sidtab_search(&sidtab, base_sid);
+		if (ctx == NULL)
+			goto netlbl_secattr_to_sid_return;
+
+		ctx_new.user = ctx->user;
+		ctx_new.role = ctx->role;
+		ctx_new.type = ctx->type;
+		mls_import_netlbl_lvl(&ctx_new, secattr);
+		if (secattr->flags & NETLBL_SECATTR_MLS_CAT) {
+			if (ebitmap_netlbl_import(&ctx_new.range.level[0].cat,
+						  secattr->mls_cat) != 0)
+				goto netlbl_secattr_to_sid_return;
+			ctx_new.range.level[1].cat.highbit =
+				ctx_new.range.level[0].cat.highbit;
+			ctx_new.range.level[1].cat.node =
+				ctx_new.range.level[0].cat.node;
+		} else {
+			ebitmap_init(&ctx_new.range.level[0].cat);
+			ebitmap_init(&ctx_new.range.level[1].cat);
+		}
+		if (mls_context_isvalid(&policydb, &ctx_new) != 1)
+			goto netlbl_secattr_to_sid_return_cleanup;
+
+		rc = sidtab_context_to_sid(&sidtab, &ctx_new, sid);
+		if (rc != 0)
+			goto netlbl_secattr_to_sid_return_cleanup;
+
+		security_netlbl_cache_add(secattr, &ctx_new);
+
+		ebitmap_destroy(&ctx_new.range.level[0].cat);
+	} else {
+		*sid = SECSID_NULL;
+		rc = 0;
+	}
+
+netlbl_secattr_to_sid_return:
+	POLICY_RDUNLOCK;
+	return rc;
+netlbl_secattr_to_sid_return_cleanup:
+	ebitmap_destroy(&ctx_new.range.level[0].cat);
+	goto netlbl_secattr_to_sid_return;
+}
+
+/**
+ * security_netlbl_sid_to_secattr - Convert a SELinux SID to a NetLabel secattr
+ * @sid: the SELinux SID
+ * @secattr: the NetLabel packet security attributes
+ *
+ * Description:
+ * Convert the given SELinux SID in @sid into a NetLabel security attribute.
+ * Returns zero on success, negative values on failure.
+ *
+ */
+int security_netlbl_sid_to_secattr(u32 sid, struct netlbl_lsm_secattr *secattr)
+{
+	int rc = -ENOENT;
+	struct context *ctx;
+
+	if (!ss_initialized)
+		return 0;
+
+	POLICY_RDLOCK;
+	ctx = sidtab_search(&sidtab, sid);
+	if (ctx == NULL)
+		goto netlbl_sid_to_secattr_failure;
+	secattr->domain = kstrdup(policydb.p_type_val_to_name[ctx->type - 1],
+				  GFP_ATOMIC);
+	secattr->flags |= NETLBL_SECATTR_DOMAIN;
+	mls_export_netlbl_lvl(ctx, secattr);
+	rc = mls_export_netlbl_cat(ctx, secattr);
+	if (rc != 0)
+		goto netlbl_sid_to_secattr_failure;
+	POLICY_RDUNLOCK;
+
+	return 0;
+
+netlbl_sid_to_secattr_failure:
+	POLICY_RDUNLOCK;
+	netlbl_secattr_destroy(secattr);
+	return rc;
+}
+#endif /* CONFIG_NETLABEL */

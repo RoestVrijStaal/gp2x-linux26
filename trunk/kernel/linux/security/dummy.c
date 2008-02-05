@@ -15,7 +15,6 @@
 #undef DEBUG
 
 #include <linux/capability.h>
-#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/mman.h>
 #include <linux/pagemap.h>
@@ -38,15 +37,13 @@ static int dummy_capget (struct task_struct *target, kernel_cap_t * effective,
 			 kernel_cap_t * inheritable, kernel_cap_t * permitted)
 {
 	*effective = *inheritable = *permitted = 0;
-	if (!issecure(SECURE_NOROOT)) {
-		if (target->euid == 0) {
-			*permitted |= (~0 & ~CAP_FS_MASK);
-			*effective |= (~0 & ~CAP_TO_MASK(CAP_SETPCAP) & ~CAP_FS_MASK);
-		}
-		if (target->fsuid == 0) {
-			*permitted |= CAP_FS_MASK;
-			*effective |= CAP_FS_MASK;
-		}
+	if (target->euid == 0) {
+		*permitted |= (~0 & ~CAP_FS_MASK);
+		*effective |= (~0 & ~CAP_TO_MASK(CAP_SETPCAP) & ~CAP_FS_MASK);
+	}
+	if (target->fsuid == 0) {
+		*permitted |= CAP_FS_MASK;
+		*effective |= CAP_FS_MASK;
 	}
 	return 0;
 }
@@ -108,13 +105,13 @@ static int dummy_settime(struct timespec *ts, struct timezone *tz)
 	return 0;
 }
 
-static int dummy_vm_enough_memory(long pages)
+static int dummy_vm_enough_memory(struct mm_struct *mm, long pages)
 {
 	int cap_sys_admin = 0;
 
 	if (dummy_capable(current, CAP_SYS_ADMIN) == 0)
 		cap_sys_admin = 1;
-	return __vm_enough_memory(pages, cap_sys_admin);
+	return __vm_enough_memory(mm, pages, cap_sys_admin);
 }
 
 static int dummy_bprm_alloc_security (struct linux_binprm *bprm)
@@ -130,7 +127,7 @@ static void dummy_bprm_free_security (struct linux_binprm *bprm)
 static void dummy_bprm_apply_creds (struct linux_binprm *bprm, int unsafe)
 {
 	if (bprm->e_uid != current->uid || bprm->e_gid != current->gid) {
-		current->mm->dumpable = suid_dumpable;
+		set_dumpable(current->mm, suid_dumpable);
 
 		if ((unsafe & ~LSM_UNSAFE_PTRACE_CAP) && !capable(CAP_SETUID)) {
 			bprm->e_uid = current->uid;
@@ -377,6 +374,16 @@ static int dummy_inode_removexattr (struct dentry *dentry, char *name)
 	return 0;
 }
 
+static int dummy_inode_need_killpriv(struct dentry *dentry)
+{
+	return 0;
+}
+
+static int dummy_inode_killpriv(struct dentry *dentry)
+{
+	return 0;
+}
+
 static int dummy_inode_getsecurity(const struct inode *inode, const char *name, void *buffer, size_t size, int err)
 {
 	return -EOPNOTSUPP;
@@ -390,11 +397,6 @@ static int dummy_inode_setsecurity(struct inode *inode, const char *name, const 
 static int dummy_inode_listsecurity(struct inode *inode, char *buffer, size_t buffer_size)
 {
 	return 0;
-}
-
-static const char *dummy_inode_xattr_getsuffix(void)
-{
-	return NULL;
 }
 
 static int dummy_file_permission (struct file *file, int mask)
@@ -420,8 +422,12 @@ static int dummy_file_ioctl (struct file *file, unsigned int command,
 
 static int dummy_file_mmap (struct file *file, unsigned long reqprot,
 			    unsigned long prot,
-			    unsigned long flags)
+			    unsigned long flags,
+			    unsigned long addr,
+			    unsigned long addr_only)
 {
+	if ((addr < mmap_min_addr) && !capable(CAP_SYS_RAWIO))
+		return -EACCES;
 	return 0;
 }
 
@@ -455,6 +461,11 @@ static int dummy_file_send_sigiotask (struct task_struct *tsk,
 }
 
 static int dummy_file_receive (struct file *file)
+{
+	return 0;
+}
+
+static int dummy_dentry_open (struct file *file)
 {
 	return 0;
 }
@@ -709,10 +720,10 @@ static int dummy_socket_create (int family, int type,
 	return 0;
 }
 
-static void dummy_socket_post_create (struct socket *sock, int family, int type,
-				      int protocol, int kern)
+static int dummy_socket_post_create (struct socket *sock, int family, int type,
+				     int protocol, int kern)
 {
-	return;
+	return 0;
 }
 
 static int dummy_socket_bind (struct socket *sock, struct sockaddr *address,
@@ -805,14 +816,43 @@ static inline void dummy_sk_free_security (struct sock *sk)
 {
 }
 
-static unsigned int dummy_sk_getsid(struct sock *sk, struct flowi *fl, u8 dir)
+static inline void dummy_sk_clone_security (const struct sock *sk, struct sock *newsk)
+{
+}
+
+static inline void dummy_sk_getsecid(struct sock *sk, u32 *secid)
+{
+}
+
+static inline void dummy_sock_graft(struct sock* sk, struct socket *parent)
+{
+}
+
+static inline int dummy_inet_conn_request(struct sock *sk,
+			struct sk_buff *skb, struct request_sock *req)
 {
 	return 0;
+}
+
+static inline void dummy_inet_csk_clone(struct sock *newsk,
+			const struct request_sock *req)
+{
+}
+
+static inline void dummy_inet_conn_established(struct sock *sk,
+			struct sk_buff *skb)
+{
+}
+
+static inline void dummy_req_classify_flow(const struct request_sock *req,
+			struct flowi *fl)
+{
 }
 #endif	/* CONFIG_SECURITY_NETWORK */
 
 #ifdef CONFIG_SECURITY_NETWORK_XFRM
-static int dummy_xfrm_policy_alloc_security(struct xfrm_policy *xp, struct xfrm_user_sec_ctx *sec_ctx)
+static int dummy_xfrm_policy_alloc_security(struct xfrm_policy *xp,
+		struct xfrm_user_sec_ctx *sec_ctx)
 {
 	return 0;
 }
@@ -831,7 +871,8 @@ static int dummy_xfrm_policy_delete_security(struct xfrm_policy *xp)
 	return 0;
 }
 
-static int dummy_xfrm_state_alloc_security(struct xfrm_state *x, struct xfrm_user_sec_ctx *sec_ctx)
+static int dummy_xfrm_state_alloc_security(struct xfrm_state *x,
+	struct xfrm_user_sec_ctx *sec_ctx, u32 secid)
 {
 	return 0;
 }
@@ -849,13 +890,20 @@ static int dummy_xfrm_policy_lookup(struct xfrm_policy *xp, u32 sk_sid, u8 dir)
 {
 	return 0;
 }
-#endif /* CONFIG_SECURITY_NETWORK_XFRM */
-static int dummy_register_security (const char *name, struct security_operations *ops)
+
+static int dummy_xfrm_state_pol_flow_match(struct xfrm_state *x,
+				struct xfrm_policy *xp, struct flowi *fl)
 {
-	return -EINVAL;
+	return 1;
 }
 
-static int dummy_unregister_security (const char *name, struct security_operations *ops)
+static int dummy_xfrm_decode_session(struct sk_buff *skb, u32 *fl, int ckall)
+{
+	return 0;
+}
+
+#endif /* CONFIG_SECURITY_NETWORK_XFRM */
+static int dummy_register_security (const char *name, struct security_operations *ops)
 {
 	return -EINVAL;
 }
@@ -865,7 +913,7 @@ static void dummy_d_instantiate (struct dentry *dentry, struct inode *inode)
 	return;
 }
 
-static int dummy_getprocattr(struct task_struct *p, char *name, void *value, size_t size)
+static int dummy_getprocattr(struct task_struct *p, char *name, char **value)
 {
 	return -EINVAL;
 }
@@ -972,7 +1020,8 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, inode_getxattr);
 	set_to_dummy_if_null(ops, inode_listxattr);
 	set_to_dummy_if_null(ops, inode_removexattr);
-	set_to_dummy_if_null(ops, inode_xattr_getsuffix);
+	set_to_dummy_if_null(ops, inode_need_killpriv);
+	set_to_dummy_if_null(ops, inode_killpriv);
 	set_to_dummy_if_null(ops, inode_getsecurity);
 	set_to_dummy_if_null(ops, inode_setsecurity);
 	set_to_dummy_if_null(ops, inode_listsecurity);
@@ -987,6 +1036,7 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, file_set_fowner);
 	set_to_dummy_if_null(ops, file_send_sigiotask);
 	set_to_dummy_if_null(ops, file_receive);
+	set_to_dummy_if_null(ops, dentry_open);
 	set_to_dummy_if_null(ops, task_create);
 	set_to_dummy_if_null(ops, task_alloc_security);
 	set_to_dummy_if_null(ops, task_free_security);
@@ -1032,7 +1082,6 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, netlink_send);
 	set_to_dummy_if_null(ops, netlink_recv);
 	set_to_dummy_if_null(ops, register_security);
-	set_to_dummy_if_null(ops, unregister_security);
 	set_to_dummy_if_null(ops, d_instantiate);
  	set_to_dummy_if_null(ops, getprocattr);
  	set_to_dummy_if_null(ops, setprocattr);
@@ -1060,7 +1109,13 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, socket_getpeersec_dgram);
 	set_to_dummy_if_null(ops, sk_alloc_security);
 	set_to_dummy_if_null(ops, sk_free_security);
-	set_to_dummy_if_null(ops, sk_getsid);
+	set_to_dummy_if_null(ops, sk_clone_security);
+	set_to_dummy_if_null(ops, sk_getsecid);
+	set_to_dummy_if_null(ops, sock_graft);
+	set_to_dummy_if_null(ops, inet_conn_request);
+	set_to_dummy_if_null(ops, inet_csk_clone);
+	set_to_dummy_if_null(ops, inet_conn_established);
+	set_to_dummy_if_null(ops, req_classify_flow);
  #endif	/* CONFIG_SECURITY_NETWORK */
 #ifdef  CONFIG_SECURITY_NETWORK_XFRM
 	set_to_dummy_if_null(ops, xfrm_policy_alloc_security);
@@ -1071,6 +1126,8 @@ void security_fixup_ops (struct security_operations *ops)
 	set_to_dummy_if_null(ops, xfrm_state_free_security);
 	set_to_dummy_if_null(ops, xfrm_state_delete_security);
 	set_to_dummy_if_null(ops, xfrm_policy_lookup);
+	set_to_dummy_if_null(ops, xfrm_state_pol_flow_match);
+	set_to_dummy_if_null(ops, xfrm_decode_session);
 #endif	/* CONFIG_SECURITY_NETWORK_XFRM */
 #ifdef CONFIG_KEYS
 	set_to_dummy_if_null(ops, key_alloc);
