@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Routines for control of ESS ES1688/688/488 chip
  *
  *
@@ -32,7 +32,7 @@
 #include <asm/io.h>
 #include <asm/dma.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("ESS ESx688 lowlevel module");
 MODULE_LICENSE("GPL");
 
@@ -479,7 +479,7 @@ static int snd_es1688_capture_trigger(struct snd_pcm_substream *substream,
 	return snd_es1688_trigger(chip, cmd, 0x0f);
 }
 
-static irqreturn_t snd_es1688_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_es1688_interrupt(int irq, void *dev_id)
 {
 	struct snd_es1688 *chip = dev_id;
 

@@ -22,7 +22,6 @@
 
 #include <sound/driver.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <sound/core.h>
@@ -208,7 +207,7 @@ odev_poll(struct file *file, poll_table * wait)
  * registration of sequencer minor device
  */
 
-static struct file_operations seq_oss_f_ops =
+static const struct file_operations seq_oss_f_ops =
 {
 	.owner =	THIS_MODULE,
 	.read =		odev_read,
@@ -303,8 +302,7 @@ register_proc(void)
 static void
 unregister_proc(void)
 {
-	if (info_entry)
-		snd_info_unregister(info_entry);
+	snd_info_free_entry(info_entry);
 	info_entry = NULL;
 }
 #endif /* CONFIG_PROC_FS */
