@@ -66,7 +66,7 @@ struct inet_hashinfo;
 struct inet_timewait_death_row {
 	/* Short-time timewait calendar */
 	int			twcal_hand;
-	int			twcal_jiffie;
+	unsigned long		twcal_jiffie;
 	struct timer_list	twcal_timer;
 	struct hlist_head	twcal_row[INET_TWDR_RECYCLE_SLOTS];
 
@@ -84,7 +84,7 @@ struct inet_timewait_death_row {
 };
 
 extern void inet_twdr_hangman(unsigned long data);
-extern void inet_twdr_twkill_work(void *data);
+extern void inet_twdr_twkill_work(struct work_struct *work);
 extern void inet_twdr_twcal_tick(unsigned long data);
 
 #if (BITS_PER_LONG == 64)
@@ -115,15 +115,16 @@ struct inet_timewait_sock {
 #define tw_refcnt		__tw_common.skc_refcnt
 #define tw_hash			__tw_common.skc_hash
 #define tw_prot			__tw_common.skc_prot
+#define tw_net			__tw_common.skc_net
 	volatile unsigned char	tw_substate;
 	/* 3 bits hole, try to pack */
 	unsigned char		tw_rcv_wscale;
 	/* Socket demultiplex comparisons on incoming packets. */
 	/* these five are in inet_sock */
-	__u16			tw_sport;
-	__u32			tw_daddr __attribute__((aligned(INET_TIMEWAIT_ADDRCMP_ALIGN_BYTES)));
-	__u32			tw_rcv_saddr;
-	__u16			tw_dport;
+	__be16			tw_sport;
+	__be32			tw_daddr __attribute__((aligned(INET_TIMEWAIT_ADDRCMP_ALIGN_BYTES)));
+	__be32			tw_rcv_saddr;
+	__be16			tw_dport;
 	__u16			tw_num;
 	/* And these are ours. */
 	__u8			tw_ipv6only:1;
@@ -186,7 +187,7 @@ static inline struct inet_timewait_sock *inet_twsk(const struct sock *sk)
 	return (struct inet_timewait_sock *)sk;
 }
 
-static inline u32 inet_rcv_saddr(const struct sock *sk)
+static inline __be32 inet_rcv_saddr(const struct sock *sk)
 {
 	return likely(sk->sk_state != TCP_TIME_WAIT) ?
 		inet_sk(sk)->rcv_saddr : inet_twsk(sk)->tw_rcv_saddr;
@@ -196,6 +197,7 @@ static inline void inet_twsk_put(struct inet_timewait_sock *tw)
 {
 	if (atomic_dec_and_test(&tw->tw_refcnt)) {
 		struct module *owner = tw->tw_prot->owner;
+		twsk_destructor((struct sock *)tw);
 #ifdef SOCK_REFCNT_DEBUG
 		printk(KERN_DEBUG "%s timewait_sock %p released\n",
 		       tw->tw_prot->name, tw);
@@ -207,9 +209,6 @@ static inline void inet_twsk_put(struct inet_timewait_sock *tw)
 
 extern struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk,
 						  const int state);
-
-extern void __inet_twsk_kill(struct inet_timewait_sock *tw,
-			     struct inet_hashinfo *hashinfo);
 
 extern void __inet_twsk_hashdance(struct inet_timewait_sock *tw,
 				  struct sock *sk,

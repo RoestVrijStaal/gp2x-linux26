@@ -6,8 +6,8 @@
  * LAN access point) driver for Intersil Prism2/2.5/3.
  *
  * Copyright (c) 2001-2002, SSH Communications Security Corp and Jouni Malinen
- * <jkmaline@cc.hut.fi>
- * Copyright (c) 2002-2003, Jouni Malinen <jkmaline@cc.hut.fi>
+ * <j@w1.fi>
+ * Copyright (c) 2002-2003, Jouni Malinen <j@w1.fi>
  *
  * Adaption to a generic IEEE 802.11 stack by James Ketrenos
  * <jketreno@linux.intel.com>
@@ -115,14 +115,17 @@ extern u32 ieee80211_debug_level;
 do { if (ieee80211_debug_level & (level)) \
   printk(KERN_DEBUG "ieee80211: %c %s " fmt, \
          in_interrupt() ? 'I' : 'U', __FUNCTION__ , ## args); } while (0)
+static inline bool ieee80211_ratelimit_debug(u32 level)
+{
+	return (ieee80211_debug_level & level) && net_ratelimit();
+}
 #else
 #define IEEE80211_DEBUG(level, fmt, args...) do {} while (0)
+static inline bool ieee80211_ratelimit_debug(u32 level)
+{
+	return false;
+}
 #endif				/* CONFIG_IEEE80211_DEBUG */
-
-/* debug macros not dependent on CONFIG_IEEE80211_DEBUG */
-
-#define MAC_FMT "%02x:%02x:%02x:%02x:%02x:%02x"
-#define MAC_ARG(x) ((u8*)(x))[0],((u8*)(x))[1],((u8*)(x))[2],((u8*)(x))[3],((u8*)(x))[4],((u8*)(x))[5]
 
 /* escape_essid() is intended to be used in debug (and possibly error)
  * messages. It should never be used for passing essid to user space. */
@@ -218,7 +221,7 @@ struct ieee80211_snap_hdr {
 #define WLAN_FC_GET_STYPE(fc) ((fc) & IEEE80211_FCTL_STYPE)
 
 #define WLAN_GET_SEQ_FRAG(seq) ((seq) & IEEE80211_SCTL_FRAG)
-#define WLAN_GET_SEQ_SEQ(seq)  ((seq) & IEEE80211_SCTL_SEQ)
+#define WLAN_GET_SEQ_SEQ(seq)  (((seq) & IEEE80211_SCTL_SEQ) >> 4)
 
 /* Authentication algorithms */
 #define WLAN_AUTH_OPEN 0
@@ -239,6 +242,11 @@ struct ieee80211_snap_hdr {
 #define WLAN_CAPABILITY_QOS (1<<9)
 #define WLAN_CAPABILITY_SHORT_SLOT_TIME (1<<10)
 #define WLAN_CAPABILITY_DSSS_OFDM (1<<13)
+
+/* 802.11g ERP information element */
+#define WLAN_ERP_NON_ERP_PRESENT (1<<0)
+#define WLAN_ERP_USE_PROTECTION (1<<1)
+#define WLAN_ERP_BARKER_PREAMBLE (1<<2)
 
 /* Status codes */
 enum ieee80211_statuscode {
@@ -747,6 +755,8 @@ struct ieee80211_txb {
 #define NETWORK_HAS_IBSS_DFS            (1<<8)
 #define NETWORK_HAS_TPC_REPORT          (1<<9)
 
+#define NETWORK_HAS_ERP_VALUE           (1<<10)
+
 #define QOS_QUEUE_NUM                   4
 #define QOS_OUI_LEN                     3
 #define QOS_OUI_TYPE                    2
@@ -1030,6 +1040,10 @@ struct ieee80211_device {
 	/* host performs multicast decryption */
 	int host_mc_decrypt;
 
+	/* host should strip IV and ICV from protected frames */
+	/* meaningful only when hardware decryption is being used */
+	int host_strip_iv_icv;
+
 	int host_open_frag;
 	int host_build_iv;
 	int ieee802_1x;		/* is IEEE 802.1X used */
@@ -1068,6 +1082,8 @@ struct ieee80211_device {
 
 	int perfect_rssi;
 	int worst_rssi;
+
+	u16 prev_seq_ctl;	/* used to drop duplicate frames */
 
 	/* Callback functions */
 	void (*set_security) (struct net_device * dev,
@@ -1252,6 +1268,8 @@ extern int ieee80211_tx_frame(struct ieee80211_device *ieee,
 			      int total_len, int encrypt_mpdu);
 
 /* ieee80211_rx.c */
+extern void ieee80211_rx_any(struct ieee80211_device *ieee,
+		     struct sk_buff *skb, struct ieee80211_rx_stats *stats);
 extern int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 			struct ieee80211_rx_stats *rx_stats);
 /* make sure to set stats->len */
@@ -1276,6 +1294,8 @@ extern u8 ieee80211_get_channel_flags(struct ieee80211_device *ieee,
 extern const struct ieee80211_channel *ieee80211_get_channel(struct
 							     ieee80211_device
 							     *ieee, u8 channel);
+extern u32 ieee80211_channel_to_freq(struct ieee80211_device * ieee,
+				      u8 channel);
 
 /* ieee80211_wx.c */
 extern int ieee80211_wx_get_scan(struct ieee80211_device *ieee,

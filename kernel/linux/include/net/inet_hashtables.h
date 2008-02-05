@@ -23,10 +23,10 @@
 #include <linux/spinlock.h>
 #include <linux/types.h>
 #include <linux/wait.h>
+#include <linux/vmalloc.h>
 
 #include <net/inet_connection_sock.h>
 #include <net/inet_sock.h>
-#include <net/route.h>
 #include <net/sock.h>
 #include <net/tcp_states.h>
 
@@ -34,12 +34,12 @@
 #include <asm/byteorder.h>
 
 /* This is for all connections with a full identity, no wildcards.
- * New scheme, half the table is for TIME_WAIT, the other half is
- * for the rest.  I'll experiment with dynamic table growth later.
+ * One chain is dedicated to TIME_WAIT sockets.
+ * I'll experiment with dynamic table growth later.
  */
 struct inet_ehash_bucket {
-	rwlock_t	  lock;
 	struct hlist_head chain;
+	struct hlist_head twchain;
 };
 
 /* There are a few simple rules, which allow for local port reuse by
@@ -97,18 +97,20 @@ struct inet_hashinfo {
 	 *
 	 *          TCP_ESTABLISHED <= sk->sk_state < TCP_CLOSE
 	 *
-	 * First half of the table is for sockets not in TIME_WAIT, second half
-	 * is for TIME_WAIT sockets only.
+	 * TIME_WAIT sockets use a separate chain (twchain).
 	 */
 	struct inet_ehash_bucket	*ehash;
+	rwlock_t			*ehash_locks;
+	unsigned int			ehash_size;
+	unsigned int			ehash_locks_mask;
 
 	/* Ok, let's try this, I give up, we do need a local binding
 	 * TCP hash as well as the others for fast bind/connect.
 	 */
 	struct inet_bind_hashbucket	*bhash;
 
-	int				bhash_size;
-	unsigned int			ehash_size;
+	unsigned int			bhash_size;
+	/* Note : 4 bytes padding on 64 bit arches */
 
 	/* All sockets in TCP_LISTEN state will be in here.  This is the only
 	 * table where wildcard'd TCP sockets can exist.  Hash function here
@@ -125,7 +127,7 @@ struct inet_hashinfo {
 	rwlock_t			lhash_lock ____cacheline_aligned;
 	atomic_t			lhash_users;
 	wait_queue_head_t		lhash_wait;
-	kmem_cache_t			*bind_bucket_cachep;
+	struct kmem_cache			*bind_bucket_cachep;
 };
 
 static inline struct inet_ehash_bucket *inet_ehash_bucket(
@@ -135,11 +137,66 @@ static inline struct inet_ehash_bucket *inet_ehash_bucket(
 	return &hashinfo->ehash[hash & (hashinfo->ehash_size - 1)];
 }
 
+static inline rwlock_t *inet_ehash_lockp(
+	struct inet_hashinfo *hashinfo,
+	unsigned int hash)
+{
+	return &hashinfo->ehash_locks[hash & hashinfo->ehash_locks_mask];
+}
+
+static inline int inet_ehash_locks_alloc(struct inet_hashinfo *hashinfo)
+{
+	unsigned int i, size = 256;
+#if defined(CONFIG_PROVE_LOCKING)
+	unsigned int nr_pcpus = 2;
+#else
+	unsigned int nr_pcpus = num_possible_cpus();
+#endif
+	if (nr_pcpus >= 4)
+		size = 512;
+	if (nr_pcpus >= 8)
+		size = 1024;
+	if (nr_pcpus >= 16)
+		size = 2048;
+	if (nr_pcpus >= 32)
+		size = 4096;
+	if (sizeof(rwlock_t) != 0) {
+#ifdef CONFIG_NUMA
+		if (size * sizeof(rwlock_t) > PAGE_SIZE)
+			hashinfo->ehash_locks = vmalloc(size * sizeof(rwlock_t));
+		else
+#endif
+		hashinfo->ehash_locks =	kmalloc(size * sizeof(rwlock_t),
+						GFP_KERNEL);
+		if (!hashinfo->ehash_locks)
+			return ENOMEM;
+		for (i = 0; i < size; i++)
+			rwlock_init(&hashinfo->ehash_locks[i]);
+	}
+	hashinfo->ehash_locks_mask = size - 1;
+	return 0;
+}
+
+static inline void inet_ehash_locks_free(struct inet_hashinfo *hashinfo)
+{
+	if (hashinfo->ehash_locks) {
+#ifdef CONFIG_NUMA
+		unsigned int size = (hashinfo->ehash_locks_mask + 1) *
+							sizeof(rwlock_t);
+		if (size > PAGE_SIZE)
+			vfree(hashinfo->ehash_locks);
+		else
+#endif
+		kfree(hashinfo->ehash_locks);
+		hashinfo->ehash_locks = NULL;
+	}
+}
+
 extern struct inet_bind_bucket *
-		    inet_bind_bucket_create(kmem_cache_t *cachep,
+		    inet_bind_bucket_create(struct kmem_cache *cachep,
 					    struct inet_bind_hashbucket *head,
 					    const unsigned short snum);
-extern void inet_bind_bucket_destroy(kmem_cache_t *cachep,
+extern void inet_bind_bucket_destroy(struct kmem_cache *cachep,
 				     struct inet_bind_bucket *tb);
 
 static inline int inet_bhashfn(const __u16 lport, const int bhash_size)
@@ -223,7 +280,7 @@ static inline void __inet_hash(struct inet_hashinfo *hashinfo,
 		sk->sk_hash = inet_sk_ehashfn(sk);
 		head = inet_ehash_bucket(hashinfo, sk->sk_hash);
 		list = &head->chain;
-		lock = &head->lock;
+		lock = inet_ehash_lockp(hashinfo, sk->sk_hash);
 		write_lock(lock);
 	}
 	__sk_add_node(sk, list);
@@ -254,7 +311,7 @@ static inline void inet_unhash(struct inet_hashinfo *hashinfo, struct sock *sk)
 		inet_listen_wlock(hashinfo);
 		lock = &hashinfo->lhash_lock;
 	} else {
-		lock = &inet_ehash_bucket(hashinfo, sk->sk_hash)->lock;
+		lock = inet_ehash_lockp(hashinfo, sk->sk_hash);
 		write_lock_bh(lock);
 	}
 
@@ -266,71 +323,57 @@ out:
 		wake_up(&hashinfo->lhash_wait);
 }
 
-static inline int inet_iif(const struct sk_buff *skb)
-{
-	return ((struct rtable *)skb->dst)->rt_iif;
-}
-
-extern struct sock *__inet_lookup_listener(const struct hlist_head *head,
-					   const u32 daddr,
+extern struct sock *__inet_lookup_listener(struct inet_hashinfo *hashinfo,
+					   const __be32 daddr,
 					   const unsigned short hnum,
 					   const int dif);
 
-/* Optimize the common listener case. */
-static inline struct sock *
-		inet_lookup_listener(struct inet_hashinfo *hashinfo,
-				     const u32 daddr,
-				     const unsigned short hnum, const int dif)
+static inline struct sock *inet_lookup_listener(struct inet_hashinfo *hashinfo,
+						__be32 daddr, __be16 dport, int dif)
 {
-	struct sock *sk = NULL;
-	const struct hlist_head *head;
-
-	read_lock(&hashinfo->lhash_lock);
-	head = &hashinfo->listening_hash[inet_lhashfn(hnum)];
-	if (!hlist_empty(head)) {
-		const struct inet_sock *inet = inet_sk((sk = __sk_head(head)));
-
-		if (inet->num == hnum && !sk->sk_node.next &&
-		    (!inet->rcv_saddr || inet->rcv_saddr == daddr) &&
-		    (sk->sk_family == PF_INET || !ipv6_only_sock(sk)) &&
-		    !sk->sk_bound_dev_if)
-			goto sherry_cache;
-		sk = __inet_lookup_listener(head, daddr, hnum, dif);
-	}
-	if (sk) {
-sherry_cache:
-		sock_hold(sk);
-	}
-	read_unlock(&hashinfo->lhash_lock);
-	return sk;
+	return __inet_lookup_listener(hashinfo, daddr, ntohs(dport), dif);
 }
 
 /* Socket demux engine toys. */
+/* What happens here is ugly; there's a pair of adjacent fields in
+   struct inet_sock; __be16 dport followed by __u16 num.  We want to
+   search by pair, so we combine the keys into a single 32bit value
+   and compare with 32bit value read from &...->dport.  Let's at least
+   make sure that it's not mixed with anything else...
+   On 64bit targets we combine comparisons with pair of adjacent __be32
+   fields in the same way.
+*/
+typedef __u32 __bitwise __portpair;
 #ifdef __BIG_ENDIAN
 #define INET_COMBINED_PORTS(__sport, __dport) \
-	(((__u32)(__sport) << 16) | (__u32)(__dport))
+	((__force __portpair)(((__force __u32)(__be16)(__sport) << 16) | (__u32)(__dport)))
 #else /* __LITTLE_ENDIAN */
 #define INET_COMBINED_PORTS(__sport, __dport) \
-	(((__u32)(__dport) << 16) | (__u32)(__sport))
+	((__force __portpair)(((__u32)(__dport) << 16) | (__force __u32)(__be16)(__sport)))
 #endif
 
 #if (BITS_PER_LONG == 64)
+typedef __u64 __bitwise __addrpair;
 #ifdef __BIG_ENDIAN
 #define INET_ADDR_COOKIE(__name, __saddr, __daddr) \
-	const __u64 __name = (((__u64)(__saddr)) << 32) | ((__u64)(__daddr));
+	const __addrpair __name = (__force __addrpair) ( \
+				   (((__force __u64)(__be32)(__saddr)) << 32) | \
+				   ((__force __u64)(__be32)(__daddr)));
 #else /* __LITTLE_ENDIAN */
 #define INET_ADDR_COOKIE(__name, __saddr, __daddr) \
-	const __u64 __name = (((__u64)(__daddr)) << 32) | ((__u64)(__saddr));
+	const __addrpair __name = (__force __addrpair) ( \
+				   (((__force __u64)(__be32)(__daddr)) << 32) | \
+				   ((__force __u64)(__be32)(__saddr)));
 #endif /* __BIG_ENDIAN */
 #define INET_MATCH(__sk, __hash, __cookie, __saddr, __daddr, __ports, __dif)\
 	(((__sk)->sk_hash == (__hash))				&&	\
-	 ((*((__u64 *)&(inet_sk(__sk)->daddr))) == (__cookie))	&&	\
-	 ((*((__u32 *)&(inet_sk(__sk)->dport))) == (__ports))	&&	\
+	 ((*((__addrpair *)&(inet_sk(__sk)->daddr))) == (__cookie))	&&	\
+	 ((*((__portpair *)&(inet_sk(__sk)->dport))) == (__ports))	&&	\
 	 (!((__sk)->sk_bound_dev_if) || ((__sk)->sk_bound_dev_if == (__dif))))
 #define INET_TW_MATCH(__sk, __hash, __cookie, __saddr, __daddr, __ports, __dif)\
 	(((__sk)->sk_hash == (__hash))				&&	\
-	 ((*((__u64 *)&(inet_twsk(__sk)->tw_daddr))) == (__cookie)) &&	\
-	 ((*((__u32 *)&(inet_twsk(__sk)->tw_dport))) == (__ports)) &&	\
+	 ((*((__addrpair *)&(inet_twsk(__sk)->tw_daddr))) == (__cookie)) &&	\
+	 ((*((__portpair *)&(inet_twsk(__sk)->tw_dport))) == (__ports)) &&	\
 	 (!((__sk)->sk_bound_dev_if) || ((__sk)->sk_bound_dev_if == (__dif))))
 #else /* 32-bit arch */
 #define INET_ADDR_COOKIE(__name, __saddr, __daddr)
@@ -338,13 +381,13 @@ sherry_cache:
 	(((__sk)->sk_hash == (__hash))				&&	\
 	 (inet_sk(__sk)->daddr		== (__saddr))		&&	\
 	 (inet_sk(__sk)->rcv_saddr	== (__daddr))		&&	\
-	 ((*((__u32 *)&(inet_sk(__sk)->dport))) == (__ports))	&&	\
+	 ((*((__portpair *)&(inet_sk(__sk)->dport))) == (__ports))	&&	\
 	 (!((__sk)->sk_bound_dev_if) || ((__sk)->sk_bound_dev_if == (__dif))))
 #define INET_TW_MATCH(__sk, __hash,__cookie, __saddr, __daddr, __ports, __dif)	\
 	(((__sk)->sk_hash == (__hash))				&&	\
 	 (inet_twsk(__sk)->tw_daddr	== (__saddr))		&&	\
 	 (inet_twsk(__sk)->tw_rcv_saddr	== (__daddr))		&&	\
-	 ((*((__u32 *)&(inet_twsk(__sk)->tw_dport))) == (__ports)) &&	\
+	 ((*((__portpair *)&(inet_twsk(__sk)->tw_dport))) == (__ports)) &&	\
 	 (!((__sk)->sk_bound_dev_if) || ((__sk)->sk_bound_dev_if == (__dif))))
 #endif /* 64-bit arch */
 
@@ -356,12 +399,12 @@ sherry_cache:
  */
 static inline struct sock *
 	__inet_lookup_established(struct inet_hashinfo *hashinfo,
-				  const u32 saddr, const u16 sport,
-				  const u32 daddr, const u16 hnum,
+				  const __be32 saddr, const __be16 sport,
+				  const __be32 daddr, const u16 hnum,
 				  const int dif)
 {
 	INET_ADDR_COOKIE(acookie, saddr, daddr)
-	const __u32 ports = INET_COMBINED_PORTS(sport, hnum);
+	const __portpair ports = INET_COMBINED_PORTS(sport, hnum);
 	struct sock *sk;
 	const struct hlist_node *node;
 	/* Optimize here for direct hit, only listening connections can
@@ -369,47 +412,59 @@ static inline struct sock *
 	 */
 	unsigned int hash = inet_ehashfn(daddr, hnum, saddr, sport);
 	struct inet_ehash_bucket *head = inet_ehash_bucket(hashinfo, hash);
+	rwlock_t *lock = inet_ehash_lockp(hashinfo, hash);
 
 	prefetch(head->chain.first);
-	read_lock(&head->lock);
+	read_lock(lock);
 	sk_for_each(sk, node, &head->chain) {
 		if (INET_MATCH(sk, hash, acookie, saddr, daddr, ports, dif))
 			goto hit; /* You sunk my battleship! */
 	}
 
 	/* Must check for a TIME_WAIT'er before going to listener hash. */
-	sk_for_each(sk, node, &(head + hashinfo->ehash_size)->chain) {
+	sk_for_each(sk, node, &head->twchain) {
 		if (INET_TW_MATCH(sk, hash, acookie, saddr, daddr, ports, dif))
 			goto hit;
 	}
 	sk = NULL;
 out:
-	read_unlock(&head->lock);
+	read_unlock(lock);
 	return sk;
 hit:
 	sock_hold(sk);
 	goto out;
 }
 
+static inline struct sock *
+	inet_lookup_established(struct inet_hashinfo *hashinfo,
+				const __be32 saddr, const __be16 sport,
+				const __be32 daddr, const __be16 dport,
+				const int dif)
+{
+	return __inet_lookup_established(hashinfo, saddr, sport, daddr,
+					 ntohs(dport), dif);
+}
+
 static inline struct sock *__inet_lookup(struct inet_hashinfo *hashinfo,
-					 const u32 saddr, const u16 sport,
-					 const u32 daddr, const u16 hnum,
+					 const __be32 saddr, const __be16 sport,
+					 const __be32 daddr, const __be16 dport,
 					 const int dif)
 {
+	u16 hnum = ntohs(dport);
 	struct sock *sk = __inet_lookup_established(hashinfo, saddr, sport, daddr,
 						    hnum, dif);
-	return sk ? : inet_lookup_listener(hashinfo, daddr, hnum, dif);
+	return sk ? : __inet_lookup_listener(hashinfo, daddr, hnum, dif);
 }
 
 static inline struct sock *inet_lookup(struct inet_hashinfo *hashinfo,
-				       const u32 saddr, const u16 sport,
-				       const u32 daddr, const u16 dport,
+				       const __be32 saddr, const __be16 sport,
+				       const __be32 daddr, const __be16 dport,
 				       const int dif)
 {
 	struct sock *sk;
 
 	local_bh_disable();
-	sk = __inet_lookup(hashinfo, saddr, sport, daddr, ntohs(dport), dif);
+	sk = __inet_lookup(hashinfo, saddr, sport, daddr, dport, dif);
 	local_bh_enable();
 
 	return sk;

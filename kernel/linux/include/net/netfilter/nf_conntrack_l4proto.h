@@ -1,5 +1,5 @@
 /*
- * Header for use in defining a given protocol for connection tracking.
+ * Header for use in defining a given L4 protocol for connection tracking.
  *
  * 16 Dec 2003: Yasuyuki Kozakai @USAGI <yasuyuki.kozakai@toshiba.co.jp>
  *	- generalized L3 protocol dependent part.
@@ -7,23 +7,21 @@
  * Derived from include/linux/netfiter_ipv4/ip_conntrack_protcol.h
  */
 
-#ifndef _NF_CONNTRACK_PROTOCOL_H
-#define _NF_CONNTRACK_PROTOCOL_H
+#ifndef _NF_CONNTRACK_L4PROTO_H
+#define _NF_CONNTRACK_L4PROTO_H
+#include <linux/netlink.h>
+#include <net/netlink.h>
 #include <net/netfilter/nf_conntrack.h>
 
 struct seq_file;
-struct nfattr;
 
-struct nf_conntrack_protocol
+struct nf_conntrack_l4proto
 {
-	/* Next pointer. */
-	struct list_head list;
-
 	/* L3 Protocol number. */
 	u_int16_t l3proto;
 
-	/* Protocol number. */
-	u_int8_t proto;
+	/* L4 Protocol number. */
+	u_int8_t l4proto;
 
 	/* Protocol name */
 	const char *name;
@@ -68,47 +66,58 @@ struct nf_conntrack_protocol
 		     int pf, unsigned int hooknum);
 
 	/* convert protoinfo to nfnetink attributes */
-	int (*to_nfattr)(struct sk_buff *skb, struct nfattr *nfa,
+	int (*to_nlattr)(struct sk_buff *skb, struct nlattr *nla,
 			 const struct nf_conn *ct);
 
 	/* convert nfnetlink attributes to protoinfo */
-	int (*from_nfattr)(struct nfattr *tb[], struct nf_conn *ct);
+	int (*from_nlattr)(struct nlattr *tb[], struct nf_conn *ct);
 
-	int (*tuple_to_nfattr)(struct sk_buff *skb,
+	int (*tuple_to_nlattr)(struct sk_buff *skb,
 			       const struct nf_conntrack_tuple *t);
-	int (*nfattr_to_tuple)(struct nfattr *tb[],
+	int (*nlattr_to_tuple)(struct nlattr *tb[],
 			       struct nf_conntrack_tuple *t);
+	const struct nla_policy *nla_policy;
+
+#ifdef CONFIG_SYSCTL
+	struct ctl_table_header	**ctl_table_header;
+	struct ctl_table	*ctl_table;
+	unsigned int		*ctl_table_users;
+#ifdef CONFIG_NF_CONNTRACK_PROC_COMPAT
+	struct ctl_table_header	*ctl_compat_table_header;
+	struct ctl_table	*ctl_compat_table;
+#endif
+#endif
 
 	/* Module (if any) which this is connected to. */
 	struct module *me;
 };
 
 /* Existing built-in protocols */
-extern struct nf_conntrack_protocol nf_conntrack_protocol_tcp6;
-extern struct nf_conntrack_protocol nf_conntrack_protocol_udp4;
-extern struct nf_conntrack_protocol nf_conntrack_protocol_udp6;
-extern struct nf_conntrack_protocol nf_conntrack_generic_protocol;
+extern struct nf_conntrack_l4proto nf_conntrack_l4proto_tcp6;
+extern struct nf_conntrack_l4proto nf_conntrack_l4proto_udp4;
+extern struct nf_conntrack_l4proto nf_conntrack_l4proto_udp6;
+extern struct nf_conntrack_l4proto nf_conntrack_l4proto_generic;
 
 #define MAX_NF_CT_PROTO 256
-extern struct nf_conntrack_protocol **nf_ct_protos[PF_MAX];
 
-extern struct nf_conntrack_protocol *
-__nf_ct_proto_find(u_int16_t l3proto, u_int8_t protocol);
+extern struct nf_conntrack_l4proto *
+__nf_ct_l4proto_find(u_int16_t l3proto, u_int8_t l4proto);
 
-extern struct nf_conntrack_protocol *
-nf_ct_proto_find_get(u_int16_t l3proto, u_int8_t protocol);
+extern struct nf_conntrack_l4proto *
+nf_ct_l4proto_find_get(u_int16_t l3proto, u_int8_t protocol);
 
-extern void nf_ct_proto_put(struct nf_conntrack_protocol *p);
+extern void nf_ct_l4proto_put(struct nf_conntrack_l4proto *p);
 
 /* Protocol registration. */
-extern int nf_conntrack_protocol_register(struct nf_conntrack_protocol *proto);
-extern void nf_conntrack_protocol_unregister(struct nf_conntrack_protocol *proto);
+extern int nf_conntrack_l4proto_register(struct nf_conntrack_l4proto *proto);
+extern void nf_conntrack_l4proto_unregister(struct nf_conntrack_l4proto *proto);
 
 /* Generic netlink helpers */
-extern int nf_ct_port_tuple_to_nfattr(struct sk_buff *skb,
+extern int nf_ct_port_tuple_to_nlattr(struct sk_buff *skb,
 				      const struct nf_conntrack_tuple *tuple);
-extern int nf_ct_port_nfattr_to_tuple(struct nfattr *tb[],
+extern int nf_ct_port_nlattr_to_tuple(struct nlattr *tb[],
 				      struct nf_conntrack_tuple *t);
+extern const struct nla_policy nf_ct_port_nla_policy[];
 
 /* Log invalid packets */
 extern unsigned int nf_ct_log_invalid;

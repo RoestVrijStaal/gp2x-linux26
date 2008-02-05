@@ -71,10 +71,17 @@ struct hci_dev {
 	__u16		id;
 	__u8		type;
 	bdaddr_t	bdaddr;
+	__u8		dev_name[248];
+	__u8		dev_class[3];
 	__u8		features[8];
+	__u8		commands[64];
+	__u8		hci_ver;
+	__u16		hci_rev;
+	__u16		manufacturer;
 	__u16		voice_setting;
 
 	__u16		pkt_type;
+	__u16		esco_type;
 	__u16		link_policy;
 	__u16		link_mode;
 
@@ -106,6 +113,7 @@ struct hci_dev {
 	struct sk_buff_head	cmd_q;
 
 	struct sk_buff		*sent_cmd;
+	struct sk_buff		*reassembly[3];
 
 	struct semaphore	req_lock;
 	wait_queue_head_t	req_wait_q;
@@ -150,6 +158,7 @@ struct hci_conn {
 	__u8             mode;
 	__u8		 type;
 	__u8		 out;
+	__u8		 attempt;
 	__u8		 dev_class[3];
 	__u8             features[8];
 	__u16            interval;
@@ -164,6 +173,10 @@ struct hci_conn {
 
 	struct timer_list disc_timer;
 	struct timer_list idle_timer;
+
+	struct work_struct work;
+
+	struct device	dev;
 
 	struct hci_dev	*hdev;
 	void		*l2cap_data;
@@ -282,12 +295,30 @@ static inline struct hci_conn *hci_conn_hash_lookup_ba(struct hci_dev *hdev,
 	return NULL;
 }
 
+static inline struct hci_conn *hci_conn_hash_lookup_state(struct hci_dev *hdev,
+					__u8 type, __u16 state)
+{
+	struct hci_conn_hash *h = &hdev->conn_hash;
+	struct list_head *p;
+	struct hci_conn  *c;
+
+	list_for_each(p, &h->list) {
+		c = list_entry(p, struct hci_conn, list);
+		if (c->type == type && c->state == state)
+			return c;
+	}
+	return NULL;
+}
+
+void hci_acl_connect(struct hci_conn *conn);
 void hci_acl_disconn(struct hci_conn *conn, __u8 reason);
 void hci_add_sco(struct hci_conn *conn, __u16 handle);
+void hci_setup_sync(struct hci_conn *conn, __u16 handle);
 
 struct hci_conn *hci_conn_add(struct hci_dev *hdev, int type, bdaddr_t *dst);
-int    hci_conn_del(struct hci_conn *conn);
-void   hci_conn_hash_flush(struct hci_dev *hdev);
+int hci_conn_del(struct hci_conn *conn);
+void hci_conn_hash_flush(struct hci_dev *hdev);
+void hci_conn_check_pending(struct hci_dev *hdev);
 
 struct hci_conn *hci_connect(struct hci_dev *hdev, int type, bdaddr_t *src);
 int hci_conn_auth(struct hci_conn *conn);
@@ -309,10 +340,13 @@ static inline void hci_conn_put(struct hci_conn *conn)
 	if (atomic_dec_and_test(&conn->refcnt)) {
 		unsigned long timeo;
 		if (conn->type == ACL_LINK) {
-			timeo = msecs_to_jiffies(HCI_DISCONN_TIMEOUT);
-			if (!conn->out)
-				timeo *= 2;
 			del_timer(&conn->idle_timer);
+			if (conn->state == BT_CONNECTED) {
+				timeo = msecs_to_jiffies(HCI_DISCONN_TIMEOUT);
+				if (!conn->out)
+					timeo *= 2;
+			} else
+				timeo = msecs_to_jiffies(10);
 		} else
 			timeo = msecs_to_jiffies(10);
 		mod_timer(&conn->disc_timer, jiffies + timeo);
@@ -410,8 +444,12 @@ static inline int hci_recv_frame(struct sk_buff *skb)
 	return 0;
 }
 
+int hci_recv_fragment(struct hci_dev *hdev, int type, void *data, int count);
+
 int hci_register_sysfs(struct hci_dev *hdev);
 void hci_unregister_sysfs(struct hci_dev *hdev);
+void hci_conn_add_sysfs(struct hci_conn *conn);
+void hci_conn_del_sysfs(struct hci_conn *conn);
 
 #define SET_HCIDEV_DEV(hdev, pdev) ((hdev)->parent = (pdev))
 
@@ -420,6 +458,7 @@ void hci_unregister_sysfs(struct hci_dev *hdev);
 #define lmp_encrypt_capable(dev)   ((dev)->features[0] & LMP_ENCRYPT)
 #define lmp_sniff_capable(dev)     ((dev)->features[0] & LMP_SNIFF)
 #define lmp_sniffsubr_capable(dev) ((dev)->features[5] & LMP_SNIFF_SUBR)
+#define lmp_esco_capable(dev)      ((dev)->features[3] & LMP_ESCO)
 
 /* ----- HCI protocols ----- */
 struct hci_proto {
@@ -583,11 +622,11 @@ int hci_unregister_cb(struct hci_cb *hcb);
 int hci_register_notifier(struct notifier_block *nb);
 int hci_unregister_notifier(struct notifier_block *nb);
 
-int hci_send_cmd(struct hci_dev *hdev, __u16 ogf, __u16 ocf, __u32 plen, void *param);
+int hci_send_cmd(struct hci_dev *hdev, __u16 opcode, __u32 plen, void *param);
 int hci_send_acl(struct hci_conn *conn, struct sk_buff *skb, __u16 flags);
 int hci_send_sco(struct hci_conn *conn, struct sk_buff *skb);
 
-void *hci_sent_cmd_data(struct hci_dev *hdev, __u16 ogf, __u16 ocf);
+void *hci_sent_cmd_data(struct hci_dev *hdev, __u16 opcode);
 
 void hci_si_event(struct hci_dev *hdev, int type, int dlen, void *data);
 
