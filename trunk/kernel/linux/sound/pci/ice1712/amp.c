@@ -3,7 +3,7 @@
  *
  *   Lowlevel functions for Advanced Micro Peripherals Ltd AUDIO2000
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -42,7 +42,7 @@ static void wm_put(struct snd_ice1712 *ice, int reg, unsigned short val)
 
 static int __devinit snd_vt1724_amp_init(struct snd_ice1712 *ice)
 {
-	static unsigned short wm_inits[] = {
+	static const unsigned short wm_inits[] = {
 		WM_ATTEN_L,	0x0000,	/* 0 db */
 		WM_ATTEN_R,	0x0000,	/* 0 db */
 		WM_DAC_CTRL,	0x0008,	/* 24bit I2S */

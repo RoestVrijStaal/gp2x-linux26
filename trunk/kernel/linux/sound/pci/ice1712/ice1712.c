@@ -1,7 +1,7 @@
 /*
  *   ALSA driver for ICEnsemble ICE1712 (Envy24)
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -62,6 +62,7 @@
 #include <sound/cs8427.h>
 #include <sound/info.h>
 #include <sound/initval.h>
+#include <sound/tlv.h>
 
 #include <sound/asoundef.h>
 
@@ -72,7 +73,7 @@
 #include "ews.h"
 #include "hoontech.h"
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("ICEnsemble ICE1712 (Envy24)");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{"
@@ -106,7 +107,7 @@ module_param_array(dxr_enable, int, NULL, 0444);
 MODULE_PARM_DESC(dxr_enable, "Enable DXR support for Terratec DMX6FIRE.");
 
 
-static struct pci_device_id snd_ice1712_ids[] = {
+static const struct pci_device_id snd_ice1712_ids[] = {
 	{ PCI_VENDOR_ID_ICE, PCI_DEVICE_ID_ICE_1712, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0 },   /* ICE1712 */
 	{ 0, }
 };
@@ -255,14 +256,7 @@ static unsigned short snd_ice1712_pro_ac97_read(struct snd_ac97 *ac97,
 /*
  * consumer ac97 digital mix
  */
-static int snd_ice1712_digmix_route_ac97_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_digmix_route_ac97_info	snd_ctl_boolean_mono_info
 
 static int snd_ice1712_digmix_route_ac97_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -419,7 +413,7 @@ static void snd_ice1712_set_input_clock_source(struct snd_ice1712 *ice, int spdi
  *  Interrupt handler
  */
 
-static irqreturn_t snd_ice1712_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_ice1712_interrupt(int irq, void *dev_id)
 {
 	struct snd_ice1712 *ice = dev_id;
 	unsigned char status;
@@ -432,7 +426,7 @@ static irqreturn_t snd_ice1712_interrupt(int irq, void *dev_id, struct pt_regs *
 		handled = 1;
 		if (status & ICE1712_IRQ_MPU1) {
 			if (ice->rmidi[0])
-				snd_mpu401_uart_interrupt(irq, ice->rmidi[0]->private_data, regs);
+				snd_mpu401_uart_interrupt(irq, ice->rmidi[0]->private_data);
 			outb(ICE1712_IRQ_MPU1, ICEREG(ice, IRQSTAT));
 			status &= ~ICE1712_IRQ_MPU1;
 		}
@@ -440,7 +434,7 @@ static irqreturn_t snd_ice1712_interrupt(int irq, void *dev_id, struct pt_regs *
 			outb(ICE1712_IRQ_TIMER, ICEREG(ice, IRQSTAT));
 		if (status & ICE1712_IRQ_MPU2) {
 			if (ice->rmidi[1])
-				snd_mpu401_uart_interrupt(irq, ice->rmidi[1]->private_data, regs);
+				snd_mpu401_uart_interrupt(irq, ice->rmidi[1]->private_data);
 			outb(ICE1712_IRQ_MPU2, ICEREG(ice, IRQSTAT));
 			status &= ~ICE1712_IRQ_MPU2;
 		}
@@ -718,7 +712,7 @@ static snd_pcm_uframes_t snd_ice1712_capture_pointer(struct snd_pcm_substream *s
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static struct snd_pcm_hardware snd_ice1712_playback =
+static const struct snd_pcm_hardware snd_ice1712_playback =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -738,7 +732,7 @@ static struct snd_pcm_hardware snd_ice1712_playback =
 	.fifo_size =		0,
 };
 
-static struct snd_pcm_hardware snd_ice1712_playback_ds =
+static const struct snd_pcm_hardware snd_ice1712_playback_ds =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -758,7 +752,7 @@ static struct snd_pcm_hardware snd_ice1712_playback_ds =
 	.fifo_size =		0,
 };
 
-static struct snd_pcm_hardware snd_ice1712_capture =
+static const struct snd_pcm_hardware snd_ice1712_capture =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -976,11 +970,9 @@ static int snd_ice1712_pro_trigger(struct snd_pcm_substream *substream,
 	{
 		unsigned int what = 0;
 		unsigned int old;
-		struct list_head *pos;
 		struct snd_pcm_substream *s;
 
-		snd_pcm_group_for_each(pos, substream) {
-			s = snd_pcm_group_substream_entry(pos);
+		snd_pcm_group_for_each_entry(s, substream) {
 			if (s == ice->playback_pro_substream) {
 				what |= ICE1712_PLAYBACK_START;
 				snd_pcm_trigger_done(s, substream);
@@ -1132,7 +1124,7 @@ static snd_pcm_uframes_t snd_ice1712_capture_pro_pointer(struct snd_pcm_substrea
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static struct snd_pcm_hardware snd_ice1712_playback_pro =
+static const struct snd_pcm_hardware snd_ice1712_playback_pro =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -1152,7 +1144,7 @@ static struct snd_pcm_hardware snd_ice1712_playback_pro =
 	.fifo_size =		0,
 };
 
-static struct snd_pcm_hardware snd_ice1712_capture_pro =
+static const struct snd_pcm_hardware snd_ice1712_capture_pro =
 {
 	.info =			(SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
 				 SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -1301,14 +1293,7 @@ static void snd_ice1712_update_volume(struct snd_ice1712 *ice, int index)
 	outw(val, ICEMT(ice, MONITOR_VOLUME));
 }
 
-static int snd_ice1712_pro_mixer_switch_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_pro_mixer_switch_info	snd_ctl_boolean_stereo_info
 
 static int snd_ice1712_pro_mixer_switch_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1377,6 +1362,7 @@ static int snd_ice1712_pro_mixer_volume_put(struct snd_kcontrol *kcontrol, struc
 	return change;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_playback, -14400, 150, 0);
 
 static struct snd_kcontrol_new snd_ice1712_multi_playback_ctrls[] __devinitdata = {
 	{
@@ -1390,12 +1376,15 @@ static struct snd_kcontrol_new snd_ice1712_multi_playback_ctrls[] __devinitdata 
 	},
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 		.name = "Multi Playback Volume",
 		.info = snd_ice1712_pro_mixer_volume_info,
 		.get = snd_ice1712_pro_mixer_volume_get,
 		.put = snd_ice1712_pro_mixer_volume_put,
 		.private_value = 0,
 		.count = 10,
+		.tlv = { .p = db_scale_playback }
 	},
 };
 
@@ -1420,11 +1409,14 @@ static struct snd_kcontrol_new snd_ice1712_multi_capture_spdif_switch __devinitd
 
 static struct snd_kcontrol_new snd_ice1712_multi_capture_analog_volume __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access = (SNDRV_CTL_ELEM_ACCESS_READWRITE |
+		   SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	.name = "H/W Multi Capture Volume",
 	.info = snd_ice1712_pro_mixer_volume_info,
 	.get = snd_ice1712_pro_mixer_volume_get,
 	.put = snd_ice1712_pro_mixer_volume_put,
 	.private_value = 10,
+	.tlv = { .p = db_scale_playback }
 };
 
 static struct snd_kcontrol_new snd_ice1712_multi_capture_spdif_volume __devinitdata = {
@@ -1753,16 +1745,6 @@ static struct snd_kcontrol_new snd_ice1712_spdif_stream __devinitdata =
 	.put =		snd_ice1712_spdif_stream_put
 };
 
-int snd_ice1712_gpio_info(struct snd_kcontrol *kcontrol,
-			  struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
-
 int snd_ice1712_gpio_get(struct snd_kcontrol *kcontrol,
 			 struct snd_ctl_elem_value *ucontrol)
 {
@@ -1803,7 +1785,7 @@ int snd_ice1712_gpio_put(struct snd_kcontrol *kcontrol,
 static int snd_ice1712_pro_internal_clock_info(struct snd_kcontrol *kcontrol,
 					       struct snd_ctl_elem_info *uinfo)
 {
-	static char *texts[] = {
+	static const char * const texts[] = {
 		"8000",		/* 0: 6 */
 		"9600",		/* 1: 3 */
 		"11025",	/* 2: 10 */
@@ -1832,7 +1814,7 @@ static int snd_ice1712_pro_internal_clock_get(struct snd_kcontrol *kcontrol,
 					      struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_ice1712 *ice = snd_kcontrol_chip(kcontrol);
-	static unsigned char xlate[16] = {
+	static const unsigned char xlate[16] = {
 		9, 6, 3, 1, 7, 4, 0, 12, 8, 5, 2, 11, 255, 255, 255, 10
 	};
 	unsigned char val;
@@ -1856,8 +1838,8 @@ static int snd_ice1712_pro_internal_clock_put(struct snd_kcontrol *kcontrol,
 					      struct snd_ctl_elem_value *ucontrol)
 {
 	struct snd_ice1712 *ice = snd_kcontrol_chip(kcontrol);
-	static unsigned int xrate[13] = {
-		8000, 9600, 11025, 12000, 1600, 22050, 24000,
+	static const unsigned int xrate[13] = {
+		8000, 9600, 11025, 12000, 16000, 22050, 24000,
 		32000, 44100, 48000, 64000, 88200, 96000
 	};
 	unsigned char oval;
@@ -1894,7 +1876,7 @@ static struct snd_kcontrol_new snd_ice1712_pro_internal_clock __devinitdata = {
 static int snd_ice1712_pro_internal_clock_default_info(struct snd_kcontrol *kcontrol,
 						       struct snd_ctl_elem_info *uinfo)
 {
-	static char *texts[] = {
+	static const char * const texts[] = {
 		"8000",		/* 0: 6 */
 		"9600",		/* 1: 3 */
 		"11025",	/* 2: 10 */
@@ -1923,8 +1905,8 @@ static int snd_ice1712_pro_internal_clock_default_get(struct snd_kcontrol *kcont
 						      struct snd_ctl_elem_value *ucontrol)
 {
 	int val;
-	static unsigned int xrate[13] = {
-		8000, 9600, 11025, 12000, 1600, 22050, 24000,
+	static const unsigned int xrate[13] = {
+		8000, 9600, 11025, 12000, 16000, 22050, 24000,
 		32000, 44100, 48000, 64000, 88200, 96000
 	};
 
@@ -1940,8 +1922,8 @@ static int snd_ice1712_pro_internal_clock_default_get(struct snd_kcontrol *kcont
 static int snd_ice1712_pro_internal_clock_default_put(struct snd_kcontrol *kcontrol,
 						      struct snd_ctl_elem_value *ucontrol)
 {
-	static unsigned int xrate[13] = {
-		8000, 9600, 11025, 12000, 1600, 22050, 24000,
+	static const unsigned int xrate[13] = {
+		8000, 9600, 11025, 12000, 16000, 22050, 24000,
 		32000, 44100, 48000, 64000, 88200, 96000
 	};
 	unsigned char oval;
@@ -1962,15 +1944,7 @@ static struct snd_kcontrol_new snd_ice1712_pro_internal_clock_default __devinitd
 	.put = snd_ice1712_pro_internal_clock_default_put
 };
 
-static int snd_ice1712_pro_rate_locking_info(struct snd_kcontrol *kcontrol,
-					     struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_pro_rate_locking_info	snd_ctl_boolean_mono_info
 
 static int snd_ice1712_pro_rate_locking_get(struct snd_kcontrol *kcontrol,
 					    struct snd_ctl_elem_value *ucontrol)
@@ -2001,15 +1975,7 @@ static struct snd_kcontrol_new snd_ice1712_pro_rate_locking __devinitdata = {
 	.put = snd_ice1712_pro_rate_locking_put
 };
 
-static int snd_ice1712_pro_rate_reset_info(struct snd_kcontrol *kcontrol,
-					   struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_ice1712_pro_rate_reset_info		snd_ctl_boolean_mono_info
 
 static int snd_ice1712_pro_rate_reset_get(struct snd_kcontrol *kcontrol,
 					  struct snd_ctl_elem_value *ucontrol)
@@ -2046,7 +2012,7 @@ static struct snd_kcontrol_new snd_ice1712_pro_rate_reset __devinitdata = {
 static int snd_ice1712_pro_route_info(struct snd_kcontrol *kcontrol,
 				      struct snd_ctl_elem_info *uinfo)
 {
-	static char *texts[] = {
+	static const char * const texts[] = {
 		"PCM Out", /* 0 */
 		"H/W In 0", "H/W In 1", "H/W In 2", "H/W In 3", /* 1-4 */
 		"H/W In 4", "H/W In 5", "H/W In 6", "H/W In 7", /* 5-8 */
@@ -2321,7 +2287,7 @@ static int __devinit snd_ice1712_read_eeprom(struct snd_ice1712 *ice,
 {
 	int dev = 0xa0;		/* EEPROM device address */
 	unsigned int i, size;
-	struct snd_ice1712_card_info **tbl, *c;
+	struct snd_ice1712_card_info * const *tbl, *c;
 
 	if (! modelname || ! *modelname) {
 		ice->eeprom.subvendor = 0;
@@ -2606,7 +2572,7 @@ static int __devinit snd_ice1712_create(struct snd_card *card,
 	ice->dmapath_port = pci_resource_start(pci, 2);
 	ice->profi_port = pci_resource_start(pci, 3);
 
-	if (request_irq(pci->irq, snd_ice1712_interrupt, IRQF_DISABLED|IRQF_SHARED,
+	if (request_irq(pci->irq, snd_ice1712_interrupt, IRQF_SHARED,
 			"ICE1712", ice)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_ice1712_free(ice);
@@ -2659,7 +2625,7 @@ static int __devinit snd_ice1712_probe(struct pci_dev *pci,
 	struct snd_card *card;
 	struct snd_ice1712 *ice;
 	int pcm_dev = 0, err;
-	struct snd_ice1712_card_info **tbl, *c;
+	struct snd_ice1712_card_info * const *tbl, *c;
 
 	if (dev >= SNDRV_CARDS)
 		return -ENODEV;

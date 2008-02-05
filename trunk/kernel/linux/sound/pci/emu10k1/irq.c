@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *                   Creative Labs, Inc.
  *  Routines for IRQ control of EMU10K1 chips
  *
@@ -30,7 +30,7 @@
 #include <sound/core.h>
 #include <sound/emu10k1.h>
 
-irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t snd_emu10k1_interrupt(int irq, void *dev_id)
 {
 	struct snd_emu10k1 *emu = dev_id;
 	unsigned int status, status2, orig_status, orig_status2;

@@ -235,7 +235,7 @@ struct emu10k1x {
 	struct resource *res_port;
 	int irq;
 
-	unsigned int revision;		/* chip revision */
+	unsigned char revision;		/* chip revision */
 	unsigned int serial;            /* serial number */
 	unsigned short model;		/* subsystem id */
 
@@ -460,7 +460,7 @@ static int snd_emu10k1x_pcm_prepare(struct snd_pcm_substream *substream)
 	u32 period_size_bytes = frames_to_bytes(runtime, runtime->period_size);
 	int i;
 	
-	for(i=0; i < runtime->periods; i++) {
+	for(i = 0; i < runtime->periods; i++) {
 		*table_base++=runtime->dma_addr+(i*period_size_bytes);
 		*table_base++=period_size_bytes<<16;
 	}
@@ -760,7 +760,7 @@ static int snd_emu10k1x_free(struct emu10k1x *chip)
 
 	// release the irq
 	if (chip->irq >= 0)
-		free_irq(chip->irq, (void *)chip);
+		free_irq(chip->irq, chip);
 
 	// release the DMA
 	if (chip->dma_buffer.area) {
@@ -780,8 +780,7 @@ static int snd_emu10k1x_dev_free(struct snd_device *device)
 	return snd_emu10k1x_free(chip);
 }
 
-static irqreturn_t snd_emu10k1x_interrupt(int irq, void *dev_id,
-					  struct pt_regs *regs)
+static irqreturn_t snd_emu10k1x_interrupt(int irq, void *dev_id)
 {
 	unsigned int status;
 
@@ -928,8 +927,7 @@ static int __devinit snd_emu10k1x_create(struct snd_card *card,
 	}
 
 	if (request_irq(pci->irq, snd_emu10k1x_interrupt,
-			IRQF_DISABLED|IRQF_SHARED, "EMU10K1X",
-			(void *)chip)) {
+			IRQF_SHARED, "EMU10K1X", chip)) {
 		snd_printk(KERN_ERR "emu10k1x: cannot grab irq %d\n", pci->irq);
 		snd_emu10k1x_free(chip);
 		return -EBUSY;
@@ -944,7 +942,7 @@ static int __devinit snd_emu10k1x_create(struct snd_card *card,
 
 	pci_set_master(pci);
 	/* read revision & serial */
-	pci_read_config_byte(pci, PCI_REVISION_ID, (char *)&chip->revision);
+	chip->revision = pci->revision;
 	pci_read_config_dword(pci, PCI_SUBSYSTEM_VENDOR_ID, &chip->serial);
 	pci_read_config_word(pci, PCI_SUBSYSTEM_ID, &chip->model);
 	snd_printk(KERN_INFO "Model %04x Rev %08x Serial %08x\n", chip->model,
@@ -1044,8 +1042,8 @@ static void snd_emu10k1x_proc_reg_write(struct snd_info_entry *entry,
 		if (sscanf(line, "%x %x %x", &reg, &channel_id, &val) != 3)
 			continue;
 
-		if ((reg < 0x49) && (reg >=0) && (val <= 0xffffffff) 
-		    && (channel_id >=0) && (channel_id <= 2) )
+		if ((reg < 0x49) && (reg >= 0) && (val <= 0xffffffff) 
+		    && (channel_id >= 0) && (channel_id <= 2) )
 			snd_emu10k1x_ptr_write(emu, reg, channel_id, val);
 	}
 }
@@ -1064,14 +1062,7 @@ static int __devinit snd_emu10k1x_proc_init(struct emu10k1x * emu)
 	return 0;
 }
 
-static int snd_emu10k1x_shared_spdif_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_emu10k1x_shared_spdif_info	snd_ctl_boolean_mono_info
 
 static int snd_emu10k1x_shared_spdif_get(struct snd_kcontrol *kcontrol,
 					 struct snd_ctl_elem_value *ucontrol)
@@ -1626,12 +1617,7 @@ static struct pci_driver driver = {
 // initialization of the module
 static int __init alsa_card_emu10k1x_init(void)
 {
-	int err;
-
-	if ((err = pci_register_driver(&driver)) > 0)
-		return err;
-
-	return 0;
+	return pci_register_driver(&driver);
 }
 
 // clean up the module

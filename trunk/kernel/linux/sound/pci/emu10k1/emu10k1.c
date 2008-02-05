@@ -1,6 +1,6 @@
 /*
  *  The driver for the EMU10K1 (SB Live!) based soundcards
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *
  *  Copyright (c) by James Courtier-Dutton <James@superbug.demon.co.uk>
  *      Added support for Audigy 2 Value.
@@ -32,7 +32,7 @@
 #include <sound/emu10k1.h>
 #include <sound/initval.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("EMU10K1");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{Creative Labs,SB Live!/PCI512/E-mu APS},"
@@ -226,22 +226,27 @@ static int snd_emu10k1_suspend(struct pci_dev *pci, pm_message_t state)
 
 	snd_emu10k1_done(emu);
 
-	pci_set_power_state(pci, PCI_D3hot);
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
-int snd_emu10k1_resume(struct pci_dev *pci)
+static int snd_emu10k1_resume(struct pci_dev *pci)
 {
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct snd_emu10k1 *emu = card->private_data;
 
-	pci_restore_state(pci);
-	pci_enable_device(pci);
 	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "emu10k1: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
-	
+
 	snd_emu10k1_resume_init(emu);
 	snd_emu10k1_efx_resume(emu);
 	snd_ac97_resume(emu->ac97);

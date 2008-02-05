@@ -3,7 +3,7 @@
  *
  *   VT82C686A/B/C, VT8233A/C, VT8235
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *	                   Tjeerd.Mulder <Tjeerd.Mulder@fujitsu-siemens.com>
  *                    2002 Takashi Iwai <tiwai@suse.de>
  *
@@ -50,7 +50,7 @@
 #define POINTER_DEBUG
 #endif
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("VIA VT82xx modem");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{VIA,VT82C686A/B/C modem,pci}}");
@@ -475,7 +475,7 @@ static void snd_via82xx_channel_reset(struct via82xx_modem *chip, struct viadev 
  *  Interrupt handler
  */
 
-static irqreturn_t snd_via82xx_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_via82xx_interrupt(int irq, void *dev_id)
 {
 	struct via82xx_modem *chip = dev_id;
 	unsigned int status;
@@ -900,7 +900,7 @@ static int __devinit snd_via82xx_mixer_new(struct via82xx_modem *chip)
 	ac97.private_data = chip;
 	ac97.private_free = snd_via82xx_mixer_free_ac97;
 	ac97.pci = chip->pci;
-	ac97.scaps = AC97_SCAP_SKIP_AUDIO;
+	ac97.scaps = AC97_SCAP_SKIP_AUDIO | AC97_SCAP_POWER_SAVE;
 	ac97.num = chip->ac97_secondary;
 
 	if ((err = snd_ac97_mixer(chip->ac97_bus, &ac97, &chip->ac97)) < 0)
@@ -1001,7 +1001,7 @@ static int snd_via82xx_chip_init(struct via82xx_modem *chip)
 			chip->ac97_secondary = 1;
 			goto __ac97_ok2;
 		}
-		schedule_timeout_interruptible(1);
+		schedule_timeout_uninterruptible(1);
 	} while (time_before(jiffies, end_time));
 	/* This is ok, the most of motherboards have only one codec */
 
@@ -1032,9 +1032,10 @@ static int snd_via82xx_suspend(struct pci_dev *pci, pm_message_t state)
 		snd_via82xx_channel_reset(chip, &chip->devs[i]);
 	synchronize_irq(chip->irq);
 	snd_ac97_suspend(chip->ac97);
-	pci_set_power_state(pci, PCI_D3hot);
+
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -1044,9 +1045,14 @@ static int snd_via82xx_resume(struct pci_dev *pci)
 	struct via82xx_modem *chip = card->private_data;
 	int i;
 
-	pci_restore_state(pci);
-	pci_enable_device(pci);
 	pci_set_power_state(pci, PCI_D0);
+	pci_restore_state(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "via82xx-modem: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
 
 	snd_via82xx_chip_init(chip);
@@ -1118,7 +1124,7 @@ static int __devinit snd_via82xx_create(struct snd_card *card,
 		return err;
 	}
 	chip->port = pci_resource_start(pci, 0);
-	if (request_irq(pci->irq, snd_via82xx_interrupt, IRQF_DISABLED|IRQF_SHARED,
+	if (request_irq(pci->irq, snd_via82xx_interrupt, IRQF_SHARED,
 			card->driver, chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_via82xx_free(chip);
@@ -1156,7 +1162,6 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 {
 	struct snd_card *card;
 	struct via82xx_modem *chip;
-	unsigned char revision;
 	int chip_type = 0, card_type;
 	unsigned int i;
 	int err;
@@ -1166,7 +1171,6 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		return -ENOMEM;
 
 	card_type = pci_id->driver_data;
-	pci_read_config_byte(pci, PCI_REVISION_ID, &revision);
 	switch (card_type) {
 	case TYPE_CARD_VIA82XX_MODEM:
 		strcpy(card->driver, "VIA82XX-MODEM");
@@ -1178,7 +1182,7 @@ static int __devinit snd_via82xx_probe(struct pci_dev *pci,
 		goto __error;
 	}
 		
-	if ((err = snd_via82xx_create(card, pci, chip_type, revision,
+	if ((err = snd_via82xx_create(card, pci, chip_type, pci->revision,
 				      ac97_clock, &chip)) < 0)
 		goto __error;
 	card->private_data = chip;

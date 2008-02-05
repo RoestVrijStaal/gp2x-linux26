@@ -472,7 +472,7 @@ static int snd_mixart_prepare(struct snd_pcm_substream *subs)
 	struct snd_mixart *chip = snd_pcm_substream_chip(subs);
 	struct mixart_stream *stream = subs->runtime->private_data;
 
-	/* TODO de façon non bloquante, réappliquer les hw_params (rate, bits, codec) */
+	/* TODO de faÃ§on non bloquante, rÃ©appliquer les hw_params (rate, bits, codec) */
 
 	snd_printdd("snd_mixart_prepare\n");
 
@@ -652,7 +652,7 @@ static int snd_mixart_hw_free(struct snd_pcm_substream *subs)
 static struct snd_pcm_hardware snd_mixart_analog_caps =
 {
 	.info             = ( SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
-			      SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
+			      SNDRV_PCM_INFO_MMAP_VALID |
 			      SNDRV_PCM_INFO_PAUSE),
 	.formats	  = ( SNDRV_PCM_FMTBIT_U8 |
 			      SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |
@@ -673,7 +673,7 @@ static struct snd_pcm_hardware snd_mixart_analog_caps =
 static struct snd_pcm_hardware snd_mixart_digital_caps =
 {
 	.info             = ( SNDRV_PCM_INFO_MMAP | SNDRV_PCM_INFO_INTERLEAVED |
-			      SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_SYNC_START |
+			      SNDRV_PCM_INFO_MMAP_VALID |
 			      SNDRV_PCM_INFO_PAUSE),
 	.formats	  = ( SNDRV_PCM_FMTBIT_U8 |
 			      SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S16_BE |
@@ -1066,7 +1066,7 @@ static int snd_mixart_free(struct mixart_mgr *mgr)
 
 	/* release irq  */
 	if (mgr->irq >= 0)
-		free_irq(mgr->irq, (void *)mgr);
+		free_irq(mgr->irq, mgr);
 
 	/* reset board if some firmware was loaded */
 	if(mgr->dsp_loaded) {
@@ -1109,13 +1109,13 @@ static long long snd_mixart_BA0_llseek(struct snd_info_entry *entry,
 	offset = offset & ~3; /* 4 bytes aligned */
 
 	switch(orig) {
-	case 0:  /* SEEK_SET */
+	case SEEK_SET:
 		file->f_pos = offset;
 		break;
-	case 1:  /* SEEK_CUR */
+	case SEEK_CUR:
 		file->f_pos += offset;
 		break;
-	case 2:  /* SEEK_END, offset is negative */
+	case SEEK_END: /* offset is negative */
 		file->f_pos = MIXART_BA0_SIZE + offset;
 		break;
 	default:
@@ -1135,13 +1135,13 @@ static long long snd_mixart_BA1_llseek(struct snd_info_entry *entry,
 	offset = offset & ~3; /* 4 bytes aligned */
 
 	switch(orig) {
-	case 0:  /* SEEK_SET */
+	case SEEK_SET:
 		file->f_pos = offset;
 		break;
-	case 1:  /* SEEK_CUR */
+	case SEEK_CUR:
 		file->f_pos += offset;
 		break;
-	case 2: /* SEEK_END, offset is negative */
+	case SEEK_END: /* offset is negative */
 		file->f_pos = MIXART_BA1_SIZE + offset;
 		break;
 	default:
@@ -1317,9 +1317,16 @@ static int __devinit snd_mixart_probe(struct pci_dev *pci,
 		mgr->mem[i].phys = pci_resource_start(pci, i);
 		mgr->mem[i].virt = ioremap_nocache(mgr->mem[i].phys,
 						   pci_resource_len(pci, i));
+		if (!mgr->mem[i].virt) {
+		        printk(KERN_ERR "unable to remap resource 0x%lx\n",
+			       mgr->mem[i].phys);
+			snd_mixart_free(mgr);
+			return -EBUSY;
+		}
 	}
 
-	if (request_irq(pci->irq, snd_mixart_interrupt, IRQF_DISABLED|IRQF_SHARED, CARD_NAME, (void *)mgr)) {
+	if (request_irq(pci->irq, snd_mixart_interrupt, IRQF_SHARED,
+			CARD_NAME, mgr)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_mixart_free(mgr);
 		return -EBUSY;

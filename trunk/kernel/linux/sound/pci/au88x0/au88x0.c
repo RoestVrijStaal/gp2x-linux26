@@ -128,6 +128,7 @@ static int snd_vortex_dev_free(struct snd_device *device)
 	// Take down PCI interface.
 	synchronize_irq(vortex->irq);
 	free_irq(vortex->irq, vortex);
+	iounmap(vortex->mmio);
 	pci_release_regions(vortex->pci_dev);
 	pci_disable_device(vortex->pci_dev);
 	kfree(vortex);
@@ -190,14 +191,14 @@ snd_vortex_create(struct snd_card *card, struct pci_dev *pci, vortex_t ** rchip)
 
 	/* Init audio core.
 	 * This must be done before we do request_irq otherwise we can get spurious
-	 * interupts that we do not handle properly and make a mess of things */
+	 * interrupts that we do not handle properly and make a mess of things */
 	if ((err = vortex_core_init(chip)) != 0) {
 		printk(KERN_ERR "hw core init failed\n");
 		goto core_out;
 	}
 
 	if ((err = request_irq(pci->irq, vortex_interrupt,
-	                       IRQF_DISABLED | IRQF_SHARED, CARD_NAME_SHORT,
+	                       IRQF_SHARED, CARD_NAME_SHORT,
 	                       chip)) != 0) {
 		printk(KERN_ERR "cannot grab irq\n");
 		goto irq_out;
@@ -231,6 +232,7 @@ snd_vortex_create(struct snd_card *card, struct pci_dev *pci, vortex_t ** rchip)
 	pci_disable_device(chip->pci_dev);
 	//FIXME: this not the right place to unregister the gameport
 	vortex_gameport_unregister(chip);
+	kfree(chip);
 	return err;
 }
 
@@ -340,11 +342,7 @@ snd_vortex_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 		snd_card_free(card);
 		return err;
 	}
-	if ((err = pci_read_config_byte(pci, PCI_REVISION_ID,
-				  &(chip->rev))) < 0) {
-		snd_card_free(card);
-		return err;
-	}
+	chip->rev = pci->revision;
 #ifdef CHIP_AU8830
 	if ((chip->rev) != 0xfe && (chip->rev) != 0xfa) {
 		printk(KERN_ALERT

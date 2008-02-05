@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Universal interface for Audio Codec '97
  *
  *  For more details look to AC '97 component specification revision 2.2
@@ -236,10 +236,14 @@ static void snd_ac97_proc_read_main(struct snd_ac97 *ac97, struct snd_info_buffe
 		val = snd_ac97_read(ac97, AC97_PCM_MIC_ADC_RATE);
 		snd_iprintf(buffer, "PCM MIC ADC      : %iHz\n", val);
 	}
-	if ((ext & AC97_EI_SPDIF) || (ac97->flags & AC97_CS_SPDIF)) {
+	if ((ext & AC97_EI_SPDIF) || (ac97->flags & AC97_CS_SPDIF) ||
+	    (ac97->id == AC97_ID_YMF743)) {
 	        if (ac97->flags & AC97_CS_SPDIF)
 			val = snd_ac97_read(ac97, AC97_CSR_SPDIF);
-		else
+		else if (ac97->id == AC97_ID_YMF743) {
+			val = snd_ac97_read(ac97, AC97_YMF7X3_DIT_CTRL);
+			val = 0x2000 | (val & 0xff00) >> 4 | (val & 0x38) >> 2;
+		} else
 			val = snd_ac97_read(ac97, AC97_SPDIF);
 
 		snd_iprintf(buffer, "SPDIF Control    :%s%s%s%s Category=0x%x Generation=%i%s%s%s\n",
@@ -457,14 +461,10 @@ void snd_ac97_proc_init(struct snd_ac97 * ac97)
 
 void snd_ac97_proc_done(struct snd_ac97 * ac97)
 {
-	if (ac97->proc_regs) {
-		snd_info_unregister(ac97->proc_regs);
-		ac97->proc_regs = NULL;
-	}
-	if (ac97->proc) {
-		snd_info_unregister(ac97->proc);
-		ac97->proc = NULL;
-	}
+	snd_info_free_entry(ac97->proc_regs);
+	ac97->proc_regs = NULL;
+	snd_info_free_entry(ac97->proc);
+	ac97->proc = NULL;
 }
 
 void snd_ac97_bus_proc_init(struct snd_ac97_bus * bus)
@@ -485,8 +485,6 @@ void snd_ac97_bus_proc_init(struct snd_ac97_bus * bus)
 
 void snd_ac97_bus_proc_done(struct snd_ac97_bus * bus)
 {
-	if (bus->proc) {
-		snd_info_unregister(bus->proc);
-		bus->proc = NULL;
-	}
+	snd_info_free_entry(bus->proc);
+	bus->proc = NULL;
 }

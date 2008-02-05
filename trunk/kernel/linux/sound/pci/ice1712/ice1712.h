@@ -4,7 +4,7 @@
 /*
  *   ALSA driver for ICEnsemble ICE1712 (Envy24)
  *
- *	Copyright (c) 2000 Jaroslav Kysela <perex@suse.cz>
+ *	Copyright (c) 2000 Jaroslav Kysela <perex@perex.cz>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@
 #include <sound/i2c.h>
 #include <sound/ak4xxx-adda.h>
 #include <sound/ak4114.h>
+#include <sound/pt2258.h>
 #include <sound/pcm.h>
 #include <sound/mpu401.h>
 
@@ -381,6 +382,11 @@ struct snd_ice1712 {
 			unsigned short master[2];
 			unsigned short vol[8];
 		} phase28;
+		/* a non-standard I2C device for revo51 */
+		struct revo51_spec {
+			struct snd_i2c_device *dev;
+			struct snd_pt2258 *pt2258;
+		} revo51;
 		/* Hoontech-specific setting */
 		struct hoontech_spec {
 			unsigned char boxbits[4];
@@ -391,6 +397,9 @@ struct snd_ice1712 {
 			struct ak4114 *ak4114;
 			unsigned int analog: 1;
 		} juli;
+		struct {
+			struct ak4114 *ak4114;
+		} prodigy192;
 	} spec;
 
 };
@@ -442,11 +451,10 @@ static inline void snd_ice1712_restore_gpio_status(struct snd_ice1712 *ice)
 
 /* for bit controls */
 #define ICE1712_GPIO(xiface, xname, xindex, mask, invert, xaccess) \
-{ .iface = xiface, .name = xname, .access = xaccess, .info = snd_ice1712_gpio_info, \
+{ .iface = xiface, .name = xname, .access = xaccess, .info = snd_ctl_boolean_mono_info, \
   .get = snd_ice1712_gpio_get, .put = snd_ice1712_gpio_put, \
   .private_value = mask | (invert << 24) }
 
-int snd_ice1712_gpio_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo);
 int snd_ice1712_gpio_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
 int snd_ice1712_gpio_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol);
 
@@ -460,6 +468,14 @@ static inline void snd_ice1712_gpio_write_bits(struct snd_ice1712 *ice,
 	snd_ice1712_gpio_set_dir(ice, ice->gpio.direction);
 	snd_ice1712_gpio_set_mask(ice, ~mask);
 	snd_ice1712_gpio_write(ice, mask & bits);
+}
+
+static inline int snd_ice1712_gpio_read_bits(struct snd_ice1712 *ice,
+					      unsigned int mask)
+{
+	ice->gpio.direction &= ~mask;
+	snd_ice1712_gpio_set_dir(ice, ice->gpio.direction);
+	return  (snd_ice1712_gpio_read(ice) & mask);
 }
 
 int snd_ice1712_spdif_build_controls(struct snd_ice1712 *ice);
@@ -500,8 +516,8 @@ struct snd_ice1712_card_info {
 	unsigned int mpu401_2_info_flags;
 	const char *mpu401_1_name;
 	const char *mpu401_2_name;
-	unsigned int eeprom_size;
-	unsigned char *eeprom_data;
+	const unsigned int eeprom_size;
+	const unsigned char *eeprom_data;
 };
 
 

@@ -406,7 +406,7 @@ static snd_pcm_uframes_t rme9652_hw_pointer(struct snd_rme9652 *rme9652)
 		} else if (!frag)
 			return 0;
 		offset -= rme9652->max_jitter;
-		if (offset < 0)
+		if ((int)offset < 0)
 			offset += period_size * 2;
 	} else {
 		if (offset > period_size + rme9652->max_jitter) {
@@ -1067,14 +1067,7 @@ static int rme9652_set_spdif_output(struct snd_rme9652 *rme9652, int out)
 	return 0;
 }
 
-static int snd_rme9652_info_spdif_out(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_rme9652_info_spdif_out	snd_ctl_boolean_mono_info
 
 static int snd_rme9652_get_spdif_out(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1338,14 +1331,7 @@ static int snd_rme9652_put_thru(struct snd_kcontrol *kcontrol, struct snd_ctl_el
   .put = snd_rme9652_put_passthru, \
   .get = snd_rme9652_get_passthru }
 
-static int snd_rme9652_info_passthru(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_rme9652_info_passthru	snd_ctl_boolean_mono_info
 
 static int snd_rme9652_get_passthru(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1445,14 +1431,7 @@ static int snd_rme9652_get_adat_sync(struct snd_kcontrol *kcontrol, struct snd_c
   .info = snd_rme9652_info_tc_valid, \
   .get = snd_rme9652_get_tc_valid }
 
-static int snd_rme9652_info_tc_valid(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define snd_rme9652_info_tc_valid	snd_ctl_boolean_mono_info
 
 static int snd_rme9652_get_tc_valid(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -1827,8 +1806,8 @@ static int __devinit snd_rme9652_initialize_memory(struct snd_rme9652 *rme9652)
 
 	/* Align to bus-space 64K boundary */
 
-	cb_bus = (rme9652->capture_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
-	pb_bus = (rme9652->playback_dma_buf.addr + 0xFFFF) & ~0xFFFFl;
+	cb_bus = ALIGN(rme9652->capture_dma_buf.addr, 0x10000ul);
+	pb_bus = ALIGN(rme9652->playback_dma_buf.addr, 0x10000ul);
 
 	/* Tell the card where it is */
 
@@ -1882,7 +1861,7 @@ static void snd_rme9652_set_defaults(struct snd_rme9652 *rme9652)
 	rme9652_set_rate(rme9652, 48000);
 }
 
-static irqreturn_t snd_rme9652_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_rme9652_interrupt(int irq, void *dev_id)
 {
 	struct snd_rme9652 *rme9652 = (struct snd_rme9652 *) dev_id;
 
@@ -1992,11 +1971,9 @@ static int snd_rme9652_reset(struct snd_pcm_substream *substream)
 	else
 		runtime->status->hw_ptr = 0;
 	if (other) {
-		struct list_head *pos;
 		struct snd_pcm_substream *s;
 		struct snd_pcm_runtime *oruntime = other->runtime;
-		snd_pcm_group_for_each(pos, substream) {
-			s = snd_pcm_group_substream_entry(pos);
+		snd_pcm_group_for_each_entry(s, substream) {
 			if (s == other) {
 				oruntime->status->hw_ptr = runtime->status->hw_ptr;
 				break;
@@ -2140,10 +2117,8 @@ static int snd_rme9652_trigger(struct snd_pcm_substream *substream,
 		other = rme9652->playback_substream;
 
 	if (other) {
-		struct list_head *pos;
 		struct snd_pcm_substream *s;
-		snd_pcm_group_for_each(pos, substream) {
-			s = snd_pcm_group_substream_entry(pos);
+		snd_pcm_group_for_each_entry(s, substream) {
 			if (s == other) {
 				snd_pcm_trigger_done(s, substream);
 				if (cmd == SNDRV_PCM_TRIGGER_START)
@@ -2500,7 +2475,8 @@ static int __devinit snd_rme9652_create(struct snd_card *card,
 		return -EBUSY;
 	}
 	
-	if (request_irq(pci->irq, snd_rme9652_interrupt, IRQF_DISABLED|IRQF_SHARED, "rme9652", (void *)rme9652)) {
+	if (request_irq(pci->irq, snd_rme9652_interrupt, IRQF_SHARED,
+			"rme9652", rme9652)) {
 		snd_printk(KERN_ERR "unable to request IRQ %d\n", pci->irq);
 		return -EBUSY;
 	}

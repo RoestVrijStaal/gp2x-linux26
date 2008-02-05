@@ -432,46 +432,6 @@ MODULE_PARM_DESC(joystick, "Enable joystick.");
 #define ESM_MODE_PLAY		0
 #define ESM_MODE_CAPTURE	1
 
-/* acpi states */
-enum {
-	ACPI_D0=0,
-	ACPI_D1,
-	ACPI_D2,
-	ACPI_D3
-};
-
-/* bits in the acpi masks */
-#define ACPI_12MHZ	( 1 << 15)
-#define ACPI_24MHZ	( 1 << 14)
-#define ACPI_978	( 1 << 13)
-#define ACPI_SPDIF	( 1 << 12)
-#define ACPI_GLUE	( 1 << 11)
-#define ACPI__10	( 1 << 10) /* reserved */
-#define ACPI_PCIINT	( 1 << 9)
-#define ACPI_HV		( 1 << 8) /* hardware volume */
-#define ACPI_GPIO	( 1 << 7)
-#define ACPI_ASSP	( 1 << 6)
-#define ACPI_SB		( 1 << 5) /* sb emul */
-#define ACPI_FM		( 1 << 4) /* fm emul */
-#define ACPI_RB		( 1 << 3) /* ringbus / aclink */
-#define ACPI_MIDI	( 1 << 2) 
-#define ACPI_GP		( 1 << 1) /* game port */
-#define ACPI_WP		( 1 << 0) /* wave processor */
-
-#define ACPI_ALL	(0xffff)
-#define ACPI_SLEEP	(~(ACPI_SPDIF|ACPI_ASSP|ACPI_SB|ACPI_FM| \
-			ACPI_MIDI|ACPI_GP|ACPI_WP))
-#define ACPI_NONE	(ACPI__10)
-
-/* these masks indicate which units we care about at
-	which states */
-static u16 acpi_state_mask[] = {
-	[ACPI_D0] = ACPI_ALL,
-	[ACPI_D1] = ACPI_SLEEP,
-	[ACPI_D2] = ACPI_SLEEP,
-	[ACPI_D3] = ACPI_NONE
-};
-
 
 /* APU use in the driver */
 enum snd_enum_apu_type {
@@ -590,7 +550,7 @@ struct es1968 {
 #endif
 };
 
-static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id);
 
 static struct pci_device_id snd_es1968_ids[] = {
 	/* Maestro 1 */
@@ -883,10 +843,9 @@ static void snd_es1968_bob_dec(struct es1968 *chip)
 		snd_es1968_bob_stop(chip);
 	else if (chip->bob_freq > ESM_BOB_FREQ) {
 		/* check reduction of timer frequency */
-		struct list_head *p;
 		int max_freq = ESM_BOB_FREQ;
-		list_for_each(p, &chip->substream_list) {
-			struct esschan *es = list_entry(p, struct esschan, list);
+		struct esschan *es;
+		list_for_each_entry(es, &chip->substream_list, list) {
 			if (max_freq < es->bob_freq)
 				max_freq = es->bob_freq;
 		}
@@ -1356,12 +1315,11 @@ static struct snd_pcm_hardware snd_es1968_capture = {
 
 static int calc_available_memory_size(struct es1968 *chip)
 {
-	struct list_head *p;
 	int max_size = 0;
-	
+	struct esm_memory *buf;
+
 	mutex_lock(&chip->memory_mutex);
-	list_for_each(p, &chip->buf_list) {
-		struct esm_memory *buf = list_entry(p, struct esm_memory, list);
+	list_for_each_entry(buf, &chip->buf_list, list) {
 		if (buf->empty && buf->buf.bytes > max_size)
 			max_size = buf->buf.bytes;
 	}
@@ -1375,12 +1333,10 @@ static int calc_available_memory_size(struct es1968 *chip)
 static struct esm_memory *snd_es1968_new_memory(struct es1968 *chip, int size)
 {
 	struct esm_memory *buf;
-	struct list_head *p;
-	
-	size = ((size + ESM_MEM_ALIGN - 1) / ESM_MEM_ALIGN) * ESM_MEM_ALIGN;
+
+	size = ALIGN(size, ESM_MEM_ALIGN);
 	mutex_lock(&chip->memory_mutex);
-	list_for_each(p, &chip->buf_list) {
-		buf = list_entry(p, struct esm_memory, list);
+	list_for_each_entry(buf, &chip->buf_list, list) {
 		if (buf->empty && buf->buf.bytes >= size)
 			goto __found;
 	}
@@ -1594,10 +1550,7 @@ static int snd_es1968_playback_open(struct snd_pcm_substream *substream)
 	runtime->hw = snd_es1968_playback;
 	runtime->hw.buffer_bytes_max = runtime->hw.period_bytes_max =
 		calc_available_memory_size(chip);
-#if 0
-	snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-				   1024);
-#endif
+
 	spin_lock_irq(&chip->substream_lock);
 	list_add(&es->list, &chip->substream_list);
 	spin_unlock_irq(&chip->substream_lock);
@@ -1653,10 +1606,8 @@ static int snd_es1968_capture_open(struct snd_pcm_substream *substream)
 	runtime->hw = snd_es1968_capture;
 	runtime->hw.buffer_bytes_max = runtime->hw.period_bytes_max =
 		calc_available_memory_size(chip) - 1024; /* keep MIXBUF size */
-#if 0
-	snd_pcm_hw_constraint_step(runtime, 0, SNDRV_PCM_HW_PARAM_BUFFER_BYTES,
-				   1024);
-#endif
+	snd_pcm_hw_constraint_pow2(runtime, 0, SNDRV_PCM_HW_PARAM_BUFFER_BYTES);
+
 	spin_lock_irq(&chip->substream_lock);
 	list_add(&es->list, &chip->substream_list);
 	spin_unlock_irq(&chip->substream_lock);
@@ -1905,7 +1856,7 @@ static void es1968_update_hw_volume(unsigned long private_data)
 	/* Figure out which volume control button was pushed,
 	   based on differences from the default register
 	   values. */
-	x = inb(chip->io_port + 0x1c);
+	x = inb(chip->io_port + 0x1c) & 0xee;
 	/* Reset the volume control registers. */
 	outb(0x88, chip->io_port + 0x1c);
 	outb(0x88, chip->io_port + 0x1d);
@@ -1921,7 +1872,8 @@ static void es1968_update_hw_volume(unsigned long private_data)
 	/* FIXME: we can't call snd_ac97_* functions since here is in tasklet. */
 	spin_lock_irqsave(&chip->ac97_lock, flags);
 	val = chip->ac97->regs[AC97_MASTER];
-	if (x & 1) {
+	switch (x) {
+	case 0x88:
 		/* mute */
 		val ^= 0x8000;
 		chip->ac97->regs[AC97_MASTER] = val;
@@ -1929,26 +1881,31 @@ static void es1968_update_hw_volume(unsigned long private_data)
 		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
 		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 			       &chip->master_switch->id);
-	} else {
-		val &= 0x7fff;
-		if (((x>>1) & 7) > 4) {
-			/* volume up */
-			if ((val & 0xff) > 0)
-				val--;
-			if ((val & 0xff00) > 0)
-				val -= 0x0100;
-		} else {
-			/* volume down */
-			if ((val & 0xff) < 0x1f)
-				val++;
-			if ((val & 0xff00) < 0x1f00)
-				val += 0x0100;
-		}
+		break;
+	case 0xaa:
+		/* volume up */
+		if ((val & 0x7f) > 0)
+			val--;
+		if ((val & 0x7f00) > 0)
+			val -= 0x0100;
 		chip->ac97->regs[AC97_MASTER] = val;
 		outw(val, chip->io_port + ESM_AC97_DATA);
 		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
 		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 			       &chip->master_volume->id);
+		break;
+	case 0x66:
+		/* volume down */
+		if ((val & 0x7f) < 0x1f)
+			val++;
+		if ((val & 0x7f00) < 0x1f00)
+			val += 0x0100;
+		chip->ac97->regs[AC97_MASTER] = val;
+		outw(val, chip->io_port + ESM_AC97_DATA);
+		outb(AC97_MASTER, chip->io_port + ESM_AC97_INDEX);
+		snd_ctl_notify(chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+			       &chip->master_volume->id);
+		break;
 	}
 	spin_unlock_irqrestore(&chip->ac97_lock, flags);
 }
@@ -1956,7 +1913,7 @@ static void es1968_update_hw_volume(unsigned long private_data)
 /*
  * interrupt handler
  */
-static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id)
 {
 	struct es1968 *chip = dev_id;
 	u32 event;
@@ -1973,14 +1930,13 @@ static irqreturn_t snd_es1968_interrupt(int irq, void *dev_id, struct pt_regs *r
 	outb(0xFF, chip->io_port + 0x1A);
 
 	if ((event & ESM_MPU401_IRQ) && chip->rmidi) {
-		snd_mpu401_uart_interrupt(irq, chip->rmidi->private_data, regs);
+		snd_mpu401_uart_interrupt(irq, chip->rmidi->private_data);
 	}
 
 	if (event & ESM_SOUND_IRQ) {
-		struct list_head *p;
+		struct esschan *es;
 		spin_lock(&chip->substream_lock);
-		list_for_each(p, &chip->substream_list) {
-			struct esschan *es = list_entry(p, struct esschan, list);
+		list_for_each_entry(es, &chip->substream_list, list) {
 			if (es->running)
 				snd_es1968_update_pcm(chip, es);
 		}
@@ -2154,21 +2110,6 @@ static void snd_es1968_reset(struct es1968 *chip)
 }
 
 /*
- * power management
- */
-static void snd_es1968_set_acpi(struct es1968 *chip, int state)
-{
-	u16 active_mask = acpi_state_mask[state];
-
-	pci_set_power_state(chip->pci, state);
-	/* make sure the units we care about are on 
-		XXX we might want to do this before state flipping? */
-	pci_write_config_word(chip->pci, 0x54, ~ active_mask);
-	pci_write_config_word(chip->pci, 0x56, ~ active_mask);
-}
-
-
-/*
  * initialize maestro chip
  */
 static void snd_es1968_chip_init(struct es1968 *chip)
@@ -2190,9 +2131,6 @@ static void snd_es1968_chip_init(struct es1968 *chip)
 	 * IRQs.
 	 */
 	
-	/* do config work at full power */
-	snd_es1968_set_acpi(chip, ACPI_D0);
-
 	/* Config Reg A */
 	pci_read_config_word(pci, ESM_CONFIG_A, &w);
 
@@ -2391,9 +2329,10 @@ static int es1968_suspend(struct pci_dev *pci, pm_message_t state)
 	snd_pcm_suspend_all(chip->pcm);
 	snd_ac97_suspend(chip->ac97);
 	snd_es1968_bob_stop(chip);
-	snd_es1968_set_acpi(chip, ACPI_D3);
+
 	pci_disable_device(pci);
 	pci_save_state(pci);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
@@ -2401,15 +2340,22 @@ static int es1968_resume(struct pci_dev *pci)
 {
 	struct snd_card *card = pci_get_drvdata(pci);
 	struct es1968 *chip = card->private_data;
-	struct list_head *p;
+	struct esschan *es;
 
 	if (! chip->do_pm)
 		return 0;
 
 	/* restore all our config */
+	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
-	pci_enable_device(pci);
+	if (pci_enable_device(pci) < 0) {
+		printk(KERN_ERR "es1968: pci_enable_device failed, "
+		       "disabling device\n");
+		snd_card_disconnect(card);
+		return -EIO;
+	}
 	pci_set_master(pci);
+
 	snd_es1968_chip_init(chip);
 
 	/* need to restore the base pointers.. */ 
@@ -2423,8 +2369,7 @@ static int es1968_resume(struct pci_dev *pci)
 	/* restore ac97 state */
 	snd_ac97_resume(chip->ac97);
 
-	list_for_each(p, &chip->substream_list) {
-		struct esschan *es = list_entry(p, struct esschan, list);
+	list_for_each_entry(es, &chip->substream_list, list) {
 		switch (es->mode) {
 		case ESM_MODE_PLAY:
 			snd_es1968_playback_setup(chip, es, es->substream->runtime);
@@ -2506,9 +2451,8 @@ static int snd_es1968_free(struct es1968 *chip)
 	}
 
 	if (chip->irq >= 0)
-		free_irq(chip->irq, (void *)chip);
+		free_irq(chip->irq, chip);
 	snd_es1968_free_gameport(chip);
-	snd_es1968_set_acpi(chip, ACPI_D3);
 	chip->master_switch = NULL;
 	chip->master_volume = NULL;
 	pci_release_regions(chip->pci);
@@ -2597,8 +2541,8 @@ static int __devinit snd_es1968_create(struct snd_card *card,
 		return err;
 	}
 	chip->io_port = pci_resource_start(pci, 0);
-	if (request_irq(pci->irq, snd_es1968_interrupt, IRQF_DISABLED|IRQF_SHARED,
-			"ESS Maestro", (void*)chip)) {
+	if (request_irq(pci->irq, snd_es1968_interrupt, IRQF_SHARED,
+			"ESS Maestro", chip)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_es1968_free(chip);
 		return -EBUSY;

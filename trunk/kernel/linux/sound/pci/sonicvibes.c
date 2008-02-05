@@ -1,6 +1,6 @@
 /*
  *  Driver for S3 SonicVibes soundcard
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *
  *  BUGS:
  *    It looks like 86c617 rev 3 doesn't supports DDMA buffers above 16MB?
@@ -42,7 +42,7 @@
 
 #include <asm/io.h>
 
-MODULE_AUTHOR("Jaroslav Kysela <perex@suse.cz>");
+MODULE_AUTHOR("Jaroslav Kysela <perex@perex.cz>");
 MODULE_DESCRIPTION("S3 SonicVibes PCI");
 MODULE_LICENSE("GPL");
 MODULE_SUPPORTED_DEVICE("{{S3,SonicVibes PCI}}");
@@ -580,7 +580,7 @@ static int snd_sonicvibes_trigger(struct sonicvibes * sonic, int what, int cmd)
 	return result;
 }
 
-static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id)
 {
 	struct sonicvibes *sonic = dev_id;
 	unsigned char status;
@@ -601,7 +601,7 @@ static irqreturn_t snd_sonicvibes_interrupt(int irq, void *dev_id, struct pt_reg
 	}
 	if (sonic->rmidi) {
 		if (status & SV_MIDI_IRQ)
-			snd_mpu401_uart_interrupt(irq, sonic->rmidi->private_data, regs);
+			snd_mpu401_uart_interrupt(irq, sonic->rmidi->private_data);
 	}
 	if (status & SV_UD_IRQ) {
 		unsigned char udreg;
@@ -1195,7 +1195,7 @@ static int snd_sonicvibes_free(struct sonicvibes *sonic)
 	pci_write_config_dword(sonic->pci, 0x40, sonic->dmaa_port);
 	pci_write_config_dword(sonic->pci, 0x48, sonic->dmac_port);
 	if (sonic->irq >= 0)
-		free_irq(sonic->irq, (void *)sonic);
+		free_irq(sonic->irq, sonic);
 	release_and_free_resource(sonic->res_dmaa);
 	release_and_free_resource(sonic->res_dmac);
 	pci_release_regions(sonic->pci);
@@ -1257,7 +1257,8 @@ static int __devinit snd_sonicvibes_create(struct snd_card *card,
 	sonic->midi_port = pci_resource_start(pci, 3);
 	sonic->game_port = pci_resource_start(pci, 4);
 
-	if (request_irq(pci->irq, snd_sonicvibes_interrupt, IRQF_DISABLED|IRQF_SHARED, "S3 SonicVibes", (void *)sonic)) {
+	if (request_irq(pci->irq, snd_sonicvibes_interrupt, IRQF_SHARED,
+			"S3 SonicVibes", sonic)) {
 		snd_printk(KERN_ERR "unable to grab IRQ %d\n", pci->irq);
 		snd_sonicvibes_free(sonic);
 		return -EBUSY;
