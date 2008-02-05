@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  * 
  *  Misc memory accessors
  *
@@ -20,7 +20,6 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>

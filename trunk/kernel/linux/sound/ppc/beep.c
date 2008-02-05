@@ -118,7 +118,7 @@ static int snd_pmac_beep_event(struct input_dev *dev, unsigned int type,
 	default: return -1;
 	}
 
-	chip = dev->private;
+	chip = input_get_drvdata(dev);
 	if (! chip || (beep = chip->beep) == NULL)
 		return -1;
 
@@ -215,15 +215,18 @@ int __init snd_pmac_attach_beep(struct snd_pmac *chip)
 {
 	struct pmac_beep *beep;
 	struct input_dev *input_dev;
+	struct snd_kcontrol *beep_ctl;
 	void *dmabuf;
 	int err = -ENOMEM;
 
 	beep = kzalloc(sizeof(*beep), GFP_KERNEL);
+	if (! beep)
+		return -ENOMEM;
 	dmabuf = dma_alloc_coherent(&chip->pdev->dev, BEEP_BUFLEN * 4,
 				    &beep->addr, GFP_KERNEL);
 	input_dev = input_allocate_device();
-	if (!beep || !dmabuf || !input_dev)
-		goto fail;
+	if (! dmabuf || ! input_dev)
+		goto fail1;
 
 	/* FIXME: set more better values */
 	input_dev->name = "PowerMac Beep";
@@ -233,28 +236,35 @@ int __init snd_pmac_attach_beep(struct snd_pmac *chip)
 	input_dev->id.product = 0x0001;
 	input_dev->id.version = 0x0100;
 
-	input_dev->evbit[0] = BIT(EV_SND);
-	input_dev->sndbit[0] = BIT(SND_BELL) | BIT(SND_TONE);
+	input_dev->evbit[0] = BIT_MASK(EV_SND);
+	input_dev->sndbit[0] = BIT_MASK(SND_BELL) | BIT_MASK(SND_TONE);
 	input_dev->event = snd_pmac_beep_event;
-	input_dev->private = chip;
-	input_dev->cdev.dev = &chip->pdev->dev;
+	input_dev->dev.parent = &chip->pdev->dev;
+	input_set_drvdata(input_dev, chip);
 
 	beep->dev = input_dev;
 	beep->buf = dmabuf;
 	beep->volume = BEEP_VOLUME;
 	beep->running = 0;
 
-	err = snd_ctl_add(chip->card, snd_ctl_new1(&snd_pmac_beep_mixer, chip));
+	beep_ctl = snd_ctl_new1(&snd_pmac_beep_mixer, chip);
+	err = snd_ctl_add(chip->card, beep_ctl);
 	if (err < 0)
-		goto fail;
+		goto fail1;
 
 	chip->beep = beep;
-	input_register_device(beep->dev);
 
-	return 0;
-
- fail:	input_free_device(input_dev);
-	kfree(dmabuf);
+	err = input_register_device(beep->dev);
+	if (err)
+		goto fail2;
+ 
+ 	return 0;
+ 
+ fail2:	snd_ctl_remove(chip->card, beep_ctl);
+ fail1:	input_free_device(input_dev);
+	if (dmabuf)
+		dma_free_coherent(&chip->pdev->dev, BEEP_BUFLEN * 4,
+				  dmabuf, beep->addr);
 	kfree(beep);
 	return err;
 }

@@ -23,6 +23,7 @@
 #include <sound/driver.h>
 #include <sound/core.h>
 #include <sound/control.h>
+#include <sound/tlv.h>
 #include "vxpocket.h"
 
 #define MIC_LEVEL_MIN	0
@@ -63,25 +64,23 @@ static int vx_mic_level_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_v
 	return 0;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_mic, -21, 3, 0);
+
 static struct snd_kcontrol_new vx_control_mic_level = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	.name =		"Mic Capture Volume",
 	.info =		vx_mic_level_info,
 	.get =		vx_mic_level_get,
 	.put =		vx_mic_level_put,
+	.tlv = { .p = db_scale_mic },
 };
 
 /*
  * mic boost level control (for VXP440)
  */
-static int vx_mic_boost_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 1;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define vx_mic_boost_info		snd_ctl_boolean_mono_info
 
 static int vx_mic_boost_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {

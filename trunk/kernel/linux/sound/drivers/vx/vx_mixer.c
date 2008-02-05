@@ -23,6 +23,7 @@
 #include <sound/driver.h>
 #include <sound/core.h>
 #include <sound/control.h>
+#include <sound/tlv.h>
 #include <sound/vx_core.h>
 #include "vx_cmd.h"
 
@@ -455,10 +456,13 @@ static int vx_output_level_put(struct snd_kcontrol *kcontrol, struct snd_ctl_ele
 
 static struct snd_kcontrol_new vx_control_output_level = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	.name =		"Master Playback Volume",
 	.info =		vx_output_level_info,
 	.get =		vx_output_level_get,
 	.put =		vx_output_level_put,
+	/* tlv will be filled later */
 };
 
 /*
@@ -643,14 +647,7 @@ static int vx_audio_monitor_put(struct snd_kcontrol *kcontrol, struct snd_ctl_el
 	return 0;
 }
 
-static int vx_audio_sw_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define vx_audio_sw_info	snd_ctl_boolean_stereo_info
 
 static int vx_audio_sw_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -712,12 +709,17 @@ static int vx_monitor_sw_put(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_
 	return 0;
 }
 
+static const DECLARE_TLV_DB_SCALE(db_scale_audio_gain, -10975, 25, 0);
+
 static struct snd_kcontrol_new vx_control_audio_gain = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
+	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	/* name will be filled later */
 	.info =         vx_audio_gain_info,
 	.get =          vx_audio_gain_get,
-	.put =          vx_audio_gain_put
+	.put =          vx_audio_gain_put,
+	.tlv = { .p = db_scale_audio_gain },
 };
 static struct snd_kcontrol_new vx_control_output_switch = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -729,9 +731,12 @@ static struct snd_kcontrol_new vx_control_output_switch = {
 static struct snd_kcontrol_new vx_control_monitor_gain = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name =         "Monitoring Volume",
+	.access =	(SNDRV_CTL_ELEM_ACCESS_READWRITE |
+			 SNDRV_CTL_ELEM_ACCESS_TLV_READ),
 	.info =         vx_audio_gain_info,	/* shared */
 	.get =          vx_audio_monitor_get,
-	.put =          vx_audio_monitor_put
+	.put =          vx_audio_monitor_put,
+	.tlv = { .p = db_scale_audio_gain },
 };
 static struct snd_kcontrol_new vx_control_monitor_switch = {
 	.iface =	SNDRV_CTL_ELEM_IFACE_MIXER,
@@ -853,14 +858,7 @@ static int vx_peak_meter_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_
 	return 0;
 }
 
-static int vx_saturation_info(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
-	uinfo->count = 2;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 1;
-	return 0;
-}
+#define vx_saturation_info	snd_ctl_boolean_stereo_info
 
 static int vx_saturation_get(struct snd_kcontrol *kcontrol, struct snd_ctl_elem_value *ucontrol)
 {
@@ -918,6 +916,7 @@ int snd_vx_mixer_new(struct vx_core *chip)
 	for (i = 0; i < chip->hw->num_outs; i++) {
 		temp = vx_control_output_level;
 		temp.index = i;
+		temp.tlv.p = chip->hw->output_level_db_scale;
 		if ((err = snd_ctl_add(card, snd_ctl_new1(&temp, chip))) < 0)
 			return err;
 	}
