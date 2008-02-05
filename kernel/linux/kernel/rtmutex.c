@@ -17,12 +17,6 @@
 
 #include "rtmutex_common.h"
 
-#ifdef CONFIG_DEBUG_RT_MUTEXES
-# include "rtmutex-debug.h"
-#else
-# include "rtmutex.h"
-#endif
-
 /*
  * lock->owner state tracking:
  *
@@ -191,7 +185,7 @@ static int rt_mutex_adjust_prio_chain(struct task_struct *task,
 			prev_max = max_lock_depth;
 			printk(KERN_WARNING "Maximum lock depth %d reached "
 			       "task: %s (%d)\n", max_lock_depth,
-			       top_task->comm, top_task->pid);
+			       top_task->comm, task_pid_nr(top_task));
 		}
 		put_task_struct(task);
 
@@ -212,6 +206,19 @@ static int rt_mutex_adjust_prio_chain(struct task_struct *task,
 	if (!waiter || !waiter->task)
 		goto out_unlock_pi;
 
+	/*
+	 * Check the orig_waiter state. After we dropped the locks,
+	 * the previous owner of the lock might have released the lock
+	 * and made us the pending owner:
+	 */
+	if (orig_waiter && !orig_waiter->task)
+		goto out_unlock_pi;
+
+	/*
+	 * Drop out, when the task has no waiters. Note,
+	 * top_waiter can be NULL, when we are in the deboosting
+	 * mode!
+	 */
 	if (top_waiter && (!task_has_pi_waiters(task) ||
 			   top_waiter != task_top_pi_waiter(task)))
 		goto out_unlock_pi;
@@ -251,6 +258,7 @@ static int rt_mutex_adjust_prio_chain(struct task_struct *task,
 
 	/* Grab the next task */
 	task = rt_mutex_owner(lock);
+	get_task_struct(task);
 	spin_lock_irqsave(&task->pi_lock, flags);
 
 	if (waiter == rt_mutex_top_waiter(lock)) {
@@ -269,7 +277,6 @@ static int rt_mutex_adjust_prio_chain(struct task_struct *task,
 		__rt_mutex_adjust_prio(task);
 	}
 
-	get_task_struct(task);
 	spin_unlock_irqrestore(&task->pi_lock, flags);
 
 	top_waiter = rt_mutex_top_waiter(lock);
@@ -409,7 +416,7 @@ static int task_blocks_on_rt_mutex(struct rt_mutex *lock,
 	struct task_struct *owner = rt_mutex_owner(lock);
 	struct rt_mutex_waiter *top_waiter = waiter;
 	unsigned long flags;
-	int boost = 0, res;
+	int chain_walk = 0, res;
 
 	spin_lock_irqsave(&current->pi_lock, flags);
 	__rt_mutex_adjust_prio(current);
@@ -433,24 +440,22 @@ static int task_blocks_on_rt_mutex(struct rt_mutex *lock,
 		plist_add(&waiter->pi_list_entry, &owner->pi_waiters);
 
 		__rt_mutex_adjust_prio(owner);
-		if (owner->pi_blocked_on) {
-			boost = 1;
-			/* gets dropped in rt_mutex_adjust_prio_chain()! */
-			get_task_struct(owner);
-		}
+		if (owner->pi_blocked_on)
+			chain_walk = 1;
 		spin_unlock_irqrestore(&owner->pi_lock, flags);
 	}
-	else if (debug_rt_mutex_detect_deadlock(waiter, detect_deadlock)) {
-		spin_lock_irqsave(&owner->pi_lock, flags);
-		if (owner->pi_blocked_on) {
-			boost = 1;
-			/* gets dropped in rt_mutex_adjust_prio_chain()! */
-			get_task_struct(owner);
-		}
-		spin_unlock_irqrestore(&owner->pi_lock, flags);
-	}
-	if (!boost)
+	else if (debug_rt_mutex_detect_deadlock(waiter, detect_deadlock))
+		chain_walk = 1;
+
+	if (!chain_walk)
 		return 0;
+
+	/*
+	 * The owner can't disappear while holding a lock,
+	 * so the owner struct is protected by wait_lock.
+	 * Gets dropped in rt_mutex_adjust_prio_chain()!
+	 */
+	get_task_struct(owner);
 
 	spin_unlock(&lock->wait_lock);
 
@@ -532,7 +537,7 @@ static void remove_waiter(struct rt_mutex *lock,
 	int first = (waiter == rt_mutex_top_waiter(lock));
 	struct task_struct *owner = rt_mutex_owner(lock);
 	unsigned long flags;
-	int boost = 0;
+	int chain_walk = 0;
 
 	spin_lock_irqsave(&current->pi_lock, flags);
 	plist_del(&waiter->list_entry, &lock->wait_list);
@@ -554,18 +559,19 @@ static void remove_waiter(struct rt_mutex *lock,
 		}
 		__rt_mutex_adjust_prio(owner);
 
-		if (owner->pi_blocked_on) {
-			boost = 1;
-			/* gets dropped in rt_mutex_adjust_prio_chain()! */
-			get_task_struct(owner);
-		}
+		if (owner->pi_blocked_on)
+			chain_walk = 1;
+
 		spin_unlock_irqrestore(&owner->pi_lock, flags);
 	}
 
 	WARN_ON(!plist_node_empty(&waiter->pi_list_entry));
 
-	if (!boost)
+	if (!chain_walk)
 		return;
+
+	/* gets dropped in rt_mutex_adjust_prio_chain()! */
+	get_task_struct(owner);
 
 	spin_unlock(&lock->wait_lock);
 
@@ -592,10 +598,10 @@ void rt_mutex_adjust_pi(struct task_struct *task)
 		return;
 	}
 
-	/* gets dropped in rt_mutex_adjust_prio_chain()! */
-	get_task_struct(task);
 	spin_unlock_irqrestore(&task->pi_lock, flags);
 
+	/* gets dropped in rt_mutex_adjust_prio_chain()! */
+	get_task_struct(task);
 	rt_mutex_adjust_prio_chain(task, 0, NULL, NULL, task);
 }
 
@@ -626,7 +632,7 @@ rt_mutex_slowlock(struct rt_mutex *lock, int state,
 	/* Setup the timer, when timeout != NULL */
 	if (unlikely(timeout))
 		hrtimer_start(&timeout->timer, timeout->timer.expires,
-			      HRTIMER_ABS);
+			      HRTIMER_MODE_ABS);
 
 	for (;;) {
 		/* Try to acquire the lock: */
@@ -660,9 +666,16 @@ rt_mutex_slowlock(struct rt_mutex *lock, int state,
 			 * all over without going into schedule to try
 			 * to get the lock now:
 			 */
-			if (unlikely(!waiter.task))
+			if (unlikely(!waiter.task)) {
+				/*
+				 * Reset the return value. We might
+				 * have returned with -EDEADLK and the
+				 * owner released the lock while we
+				 * were walking the pi chain.
+				 */
+				ret = 0;
 				continue;
-
+			}
 			if (unlikely(ret))
 				break;
 		}

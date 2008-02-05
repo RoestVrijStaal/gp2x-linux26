@@ -143,9 +143,15 @@ int parse_args(const char *name,
 
 	while (*args) {
 		int ret;
+		int irq_was_disabled;
 
 		args = next_arg(args, &param, &val);
+		irq_was_disabled = irqs_disabled();
 		ret = parse_one(param, val, params, num, unknown);
+		if (irq_was_disabled && !irqs_disabled()) {
+			printk(KERN_WARNING "parse_args(): option '%s' enabled "
+					"irq's!\n", param);
+		}
 		switch (ret) {
 		case -ENOENT:
 			printk(KERN_ERR "%s: Unknown parameter `%s'\n",
@@ -246,8 +252,9 @@ int param_get_bool(char *buffer, struct kernel_param *kp)
 int param_set_invbool(const char *val, struct kernel_param *kp)
 {
 	int boolval, ret;
-	struct kernel_param dummy = { .arg = &boolval };
+	struct kernel_param dummy;
 
+	dummy.arg = &boolval;
 	ret = param_set_bool(val, &dummy);
 	if (ret == 0)
 		*(int *)kp->arg = !boolval;
@@ -256,14 +263,10 @@ int param_set_invbool(const char *val, struct kernel_param *kp)
 
 int param_get_invbool(char *buffer, struct kernel_param *kp)
 {
-	int val;
-	struct kernel_param dummy = { .arg = &val };
-
-	val = !*(int *)kp->arg;
-	return param_get_bool(buffer, &dummy);
+	return sprintf(buffer, "%c", (*(int *)kp->arg) ? 'N' : 'Y');
 }
 
-/* We cheat here and temporarily mangle the string. */
+/* We break the rule and mangle the string. */
 static int param_array(const char *name,
 		       const char *val,
 		       unsigned int min, unsigned int max,
@@ -319,7 +322,7 @@ static int param_array(const char *name,
 
 int param_array_set(const char *val, struct kernel_param *kp)
 {
-	struct kparam_array *arr = kp->arg;
+	const struct kparam_array *arr = kp->arr;
 	unsigned int temp_num;
 
 	return param_array(kp->name, val, 1, arr->max, arr->elem,
@@ -329,7 +332,7 @@ int param_array_set(const char *val, struct kernel_param *kp)
 int param_array_get(char *buffer, struct kernel_param *kp)
 {
 	int i, off, ret;
-	struct kparam_array *arr = kp->arg;
+	const struct kparam_array *arr = kp->arr;
 	struct kernel_param p;
 
 	p = *kp;
@@ -348,8 +351,12 @@ int param_array_get(char *buffer, struct kernel_param *kp)
 
 int param_set_copystring(const char *val, struct kernel_param *kp)
 {
-	struct kparam_string *kps = kp->arg;
+	const struct kparam_string *kps = kp->str;
 
+	if (!val) {
+		printk(KERN_ERR "%s: missing param set value\n", kp->name);
+		return -EINVAL;
+	}
 	if (strlen(val)+1 > kps->maxlen) {
 		printk(KERN_ERR "%s: string doesn't fit in %u chars.\n",
 		       kp->name, kps->maxlen-1);
@@ -361,7 +368,7 @@ int param_set_copystring(const char *val, struct kernel_param *kp)
 
 int param_get_string(char *buffer, struct kernel_param *kp)
 {
-	struct kparam_string *kps = kp->arg;
+	const struct kparam_string *kps = kp->str;
 	return strlcpy(buffer, kps->string, kps->maxlen);
 }
 
@@ -383,6 +390,7 @@ struct module_param_attrs
 	struct param_attribute attrs[0];
 };
 
+#ifdef CONFIG_SYSFS
 #define to_param_attr(n) container_of(n, struct param_attribute, mattr);
 
 static ssize_t param_attr_show(struct module_attribute *mattr,
@@ -418,6 +426,7 @@ static ssize_t param_attr_store(struct module_attribute *mattr,
 		return len;
 	return err;
 }
+#endif
 
 #ifdef CONFIG_MODULES
 #define __modinit
@@ -425,6 +434,7 @@ static ssize_t param_attr_store(struct module_attribute *mattr,
 #define __modinit __init
 #endif
 
+#ifdef CONFIG_SYSFS
 /*
  * param_sysfs_setup - setup sysfs support for one module or KBUILD_MODNAME
  * @mk: struct module_kobject (contains parent kobject)
@@ -478,7 +488,6 @@ param_sysfs_setup(struct module_kobject *mk,
 			pattr->mattr.show = param_attr_show;
 			pattr->mattr.store = param_attr_store;
 			pattr->mattr.attr.name = (char *)&kp->name[name_skip];
-			pattr->mattr.attr.owner = mk->mod;
 			pattr->mattr.attr.mode = kp->perm;
 			*(gattr++) = &(pattr++)->mattr.attr;
 		}
@@ -492,9 +501,7 @@ param_sysfs_setup(struct module_kobject *mk,
 	return mp;
 }
 
-
 #ifdef CONFIG_MODULES
-
 /*
  * module_param_sysfs_setup - setup sysfs support for one module
  * @mod: module
@@ -547,6 +554,7 @@ static void __init kernel_param_sysfs_setup(const char *name,
 					    unsigned int name_skip)
 {
 	struct module_kobject *mk;
+	int ret;
 
 	mk = kzalloc(sizeof(struct module_kobject), GFP_KERNEL);
 	BUG_ON(!mk);
@@ -554,13 +562,16 @@ static void __init kernel_param_sysfs_setup(const char *name,
 	mk->mod = THIS_MODULE;
 	kobj_set_kset_s(mk, module_subsys);
 	kobject_set_name(&mk->kobj, name);
-	kobject_register(&mk->kobj);
-
-	/* no need to keep the kobject if no parameter is exported */
-	if (!param_sysfs_setup(mk, kparam, num_params, name_skip)) {
-		kobject_unregister(&mk->kobj);
-		kfree(mk);
+	kobject_init(&mk->kobj);
+	ret = kobject_add(&mk->kobj);
+	if (ret) {
+		printk(KERN_ERR "Module '%s' failed to be added to sysfs, "
+		      "error number %d\n", name, ret);
+		printk(KERN_ERR	"The system will be unstable now.\n");
+		return;
 	}
+	param_sysfs_setup(mk, kparam, num_params, name_skip);
+	kobject_uevent(&mk->kobj, KOBJ_ADD);
 }
 
 /*
@@ -581,13 +592,16 @@ static void __init param_sysfs_builtin(void)
 
 	for (i=0; i < __stop___param - __start___param; i++) {
 		char *dot;
+		size_t max_name_len;
 
 		kp = &__start___param[i];
+		max_name_len =
+			min_t(size_t, MAX_KBUILD_MODNAME, strlen(kp->name));
 
-		/* We do not handle args without periods. */
-		dot = memchr(kp->name, '.', MAX_KBUILD_MODNAME);
+		dot = memchr(kp->name, '.', max_name_len);
 		if (!dot) {
-			DEBUGP("couldn't find period in %s\n", kp->name);
+			DEBUGP("couldn't find period in first %d characters "
+			       "of %s\n", MAX_KBUILD_MODNAME, kp->name);
 			continue;
 		}
 		name_len = dot - kp->name;
@@ -618,7 +632,6 @@ static void __init param_sysfs_builtin(void)
 
 
 /* module-related sysfs stuff */
-#ifdef CONFIG_SYSFS
 
 #define to_module_attr(n) container_of(n, struct module_attribute, attr);
 #define to_module_kobject(n) container_of(n, struct module_kobject, kobj);
@@ -666,31 +679,67 @@ static struct sysfs_ops module_sysfs_ops = {
 	.store = module_attr_store,
 };
 
-#else
-static struct sysfs_ops module_sysfs_ops = {
-	.show = NULL,
-	.store = NULL,
+static struct kobj_type module_ktype;
+
+static int uevent_filter(struct kset *kset, struct kobject *kobj)
+{
+	struct kobj_type *ktype = get_ktype(kobj);
+
+	if (ktype == &module_ktype)
+		return 1;
+	return 0;
+}
+
+static struct kset_uevent_ops module_uevent_ops = {
+	.filter = uevent_filter,
 };
-#endif
+
+decl_subsys(module, &module_ktype, &module_uevent_ops);
+int module_sysfs_initialized;
+
+static void module_release(struct kobject *kobj)
+{
+	/*
+	 * Stupid empty release function to allow the memory for the kobject to
+	 * be properly cleaned up.  This will not need to be present for 2.6.25
+	 * with the upcoming kobject core rework.
+	 */
+}
 
 static struct kobj_type module_ktype = {
 	.sysfs_ops =	&module_sysfs_ops,
+	.release =	module_release,
 };
-
-decl_subsys(module, &module_ktype, NULL);
 
 /*
  * param_sysfs_init - wrapper for built-in params support
  */
 static int __init param_sysfs_init(void)
 {
-	subsystem_register(&module_subsys);
+	int ret;
+
+	ret = subsystem_register(&module_subsys);
+	if (ret < 0) {
+		printk(KERN_WARNING "%s (%d): subsystem_register error: %d\n",
+			__FILE__, __LINE__, ret);
+		return ret;
+	}
+	module_sysfs_initialized = 1;
 
 	param_sysfs_builtin();
 
 	return 0;
 }
-__initcall(param_sysfs_init);
+subsys_initcall(param_sysfs_init);
+
+#else
+#if 0
+static struct sysfs_ops module_sysfs_ops = {
+	.show = NULL,
+	.store = NULL,
+};
+#endif
+#endif
 
 EXPORT_SYMBOL(param_set_byte);
 EXPORT_SYMBOL(param_get_byte);

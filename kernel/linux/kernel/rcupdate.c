@@ -45,9 +45,16 @@
 #include <linux/moduleparam.h>
 #include <linux/percpu.h>
 #include <linux/notifier.h>
-#include <linux/rcupdate.h>
 #include <linux/cpu.h>
 #include <linux/mutex.h>
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+static struct lock_class_key rcu_lock_key;
+struct lockdep_map rcu_lock_map =
+	STATIC_LOCKDEP_MAP_INIT("rcu_read_lock", &rcu_lock_key);
+
+EXPORT_SYMBOL_GPL(rcu_lock_map);
+#endif
 
 /* Definition for rcupdate control block. */
 static struct rcu_ctrlblk rcu_ctrlblk = {
@@ -71,9 +78,6 @@ static DEFINE_PER_CPU(struct tasklet_struct, rcu_tasklet) = {NULL};
 static int blimit = 10;
 static int qhimark = 10000;
 static int qlowmark = 100;
-#ifdef CONFIG_SMP
-static int rsinterval = 1000;
-#endif
 
 static atomic_t rcu_barrier_cpu_count;
 static DEFINE_MUTEX(rcu_barrier_mutex);
@@ -86,8 +90,8 @@ static void force_quiescent_state(struct rcu_data *rdp,
 	int cpu;
 	cpumask_t cpumask;
 	set_need_resched();
-	if (unlikely(rdp->qlen - rdp->last_rs_qlen > rsinterval)) {
-		rdp->last_rs_qlen = rdp->qlen;
+	if (unlikely(!rcp->signaled)) {
+		rcp->signaled = 1;
 		/*
 		 * Don't send IPI to itself. With irqs disabled,
 		 * rdp->cpu is the current cpu.
@@ -238,12 +242,14 @@ static void rcu_do_batch(struct rcu_data *rdp)
 
 	list = rdp->donelist;
 	while (list) {
-		next = rdp->donelist = list->next;
+		next = list->next;
+		prefetch(next);
 		list->func(list);
 		list = next;
 		if (++count >= rdp->blimit)
 			break;
 	}
+	rdp->donelist = list;
 
 	local_irq_disable();
 	rdp->qlen -= count;
@@ -301,6 +307,7 @@ static void rcu_start_batch(struct rcu_ctrlblk *rcp)
 		smp_mb();
 		cpus_andnot(rcp->cpumask, cpu_online_map, nohz_cpu_mask);
 
+		rcp->signaled = 0;
 	}
 }
 
@@ -542,7 +549,7 @@ static void rcu_init_percpu_data(int cpu, struct rcu_ctrlblk *rcp,
 	rdp->blimit = blimit;
 }
 
-static void __devinit rcu_online_cpu(int cpu)
+static void __cpuinit rcu_online_cpu(int cpu)
 {
 	struct rcu_data *rdp = &per_cpu(rcu_data, cpu);
 	struct rcu_data *bh_rdp = &per_cpu(rcu_bh_data, cpu);
@@ -558,9 +565,11 @@ static int __cpuinit rcu_cpu_notify(struct notifier_block *self,
 	long cpu = (long)hcpu;
 	switch (action) {
 	case CPU_UP_PREPARE:
+	case CPU_UP_PREPARE_FROZEN:
 		rcu_online_cpu(cpu);
 		break;
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		rcu_offline_cpu(cpu);
 		break;
 	default:
@@ -628,9 +637,6 @@ void synchronize_rcu(void)
 module_param(blimit, int, 0);
 module_param(qhimark, int, 0);
 module_param(qlowmark, int, 0);
-#ifdef CONFIG_SMP
-module_param(rsinterval, int, 0);
-#endif
 EXPORT_SYMBOL_GPL(rcu_batches_completed);
 EXPORT_SYMBOL_GPL(rcu_batches_completed_bh);
 EXPORT_SYMBOL_GPL(call_rcu);

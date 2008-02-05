@@ -29,14 +29,70 @@
 void synchronize_irq(unsigned int irq)
 {
 	struct irq_desc *desc = irq_desc + irq;
+	unsigned int status;
 
 	if (irq >= NR_IRQS)
 		return;
 
-	while (desc->status & IRQ_INPROGRESS)
-		cpu_relax();
+	do {
+		unsigned long flags;
+
+		/*
+		 * Wait until we're out of the critical section.  This might
+		 * give the wrong answer due to the lack of memory barriers.
+		 */
+		while (desc->status & IRQ_INPROGRESS)
+			cpu_relax();
+
+		/* Ok, that indicated we're done: double-check carefully. */
+		spin_lock_irqsave(&desc->lock, flags);
+		status = desc->status;
+		spin_unlock_irqrestore(&desc->lock, flags);
+
+		/* Oops, that failed? */
+	} while (status & IRQ_INPROGRESS);
 }
 EXPORT_SYMBOL(synchronize_irq);
+
+/**
+ *	irq_can_set_affinity - Check if the affinity of a given irq can be set
+ *	@irq:		Interrupt to check
+ *
+ */
+int irq_can_set_affinity(unsigned int irq)
+{
+	struct irq_desc *desc = irq_desc + irq;
+
+	if (CHECK_IRQ_PER_CPU(desc->status) || !desc->chip ||
+	    !desc->chip->set_affinity)
+		return 0;
+
+	return 1;
+}
+
+/**
+ *	irq_set_affinity - Set the irq affinity of a given irq
+ *	@irq:		Interrupt to set affinity
+ *	@cpumask:	cpumask
+ *
+ */
+int irq_set_affinity(unsigned int irq, cpumask_t cpumask)
+{
+	struct irq_desc *desc = irq_desc + irq;
+
+	if (!desc->chip->set_affinity)
+		return -EINVAL;
+
+	set_balance_irq_affinity(irq, cpumask);
+
+#ifdef CONFIG_GENERIC_PENDING_IRQ
+	set_pending_irq(irq, cpumask);
+#else
+	desc->affinity = cpumask;
+	desc->chip->set_affinity(irq, cpumask);
+#endif
+	return 0;
+}
 
 #endif
 
@@ -216,6 +272,7 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 {
 	struct irq_desc *desc = irq_desc + irq;
 	struct irqaction *old, **p;
+	const char *old_name = NULL;
 	unsigned long flags;
 	int shared = 0;
 
@@ -255,8 +312,10 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 		 * set the trigger type must match.
 		 */
 		if (!((old->flags & new->flags) & IRQF_SHARED) ||
-		    ((old->flags ^ new->flags) & IRQF_TRIGGER_MASK))
+		    ((old->flags ^ new->flags) & IRQF_TRIGGER_MASK)) {
+			old_name = old->name;
 			goto mismatch;
+		}
 
 #if defined(CONFIG_IRQ_PER_CPU)
 		/* All handlers must agree on per-cpuness */
@@ -274,12 +333,18 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 	}
 
 	*p = new;
-#if defined(CONFIG_IRQ_PER_CPU)
-	if (new->flags & IRQF_PERCPU)
-		desc->status |= IRQ_PER_CPU;
-#endif
+
+	/* Exclude IRQ from balancing */
+	if (new->flags & IRQF_NOBALANCING)
+		desc->status |= IRQ_NO_BALANCING;
+
 	if (!shared) {
 		irq_chip_set_defaults(desc->chip);
+
+#if defined(CONFIG_IRQ_PER_CPU)
+		if (new->flags & IRQF_PERCPU)
+			desc->status |= IRQ_PER_CPU;
+#endif
 
 		/* Setup the type (level, edge polarity) if configured: */
 		if (new->flags & IRQF_TRIGGER_MASK) {
@@ -312,6 +377,9 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 			/* Undo nested disables: */
 			desc->depth = 1;
 	}
+	/* Reset broken irq detection when installing new handler */
+	desc->irq_count = 0;
+	desc->irqs_unhandled = 0;
 	spin_unlock_irqrestore(&desc->lock, flags);
 
 	new->irq = irq;
@@ -322,11 +390,15 @@ int setup_irq(unsigned int irq, struct irqaction *new)
 	return 0;
 
 mismatch:
-	spin_unlock_irqrestore(&desc->lock, flags);
+#ifdef CONFIG_DEBUG_SHIRQ
 	if (!(new->flags & IRQF_PROBE_SHARED)) {
 		printk(KERN_ERR "IRQ handler type mismatch for IRQ %d\n", irq);
+		if (old_name)
+			printk(KERN_ERR "current handler: %s\n", old_name);
 		dump_stack();
 	}
+#endif
+	spin_unlock_irqrestore(&desc->lock, flags);
 	return -EBUSY;
 }
 
@@ -388,6 +460,21 @@ void free_irq(unsigned int irq, void *dev_id)
 
 			/* Make sure it's not being used on another CPU */
 			synchronize_irq(irq);
+#ifdef CONFIG_DEBUG_SHIRQ
+			/*
+			 * It's a shared IRQ -- the driver ought to be
+			 * prepared for it to happen even now it's
+			 * being freed, so let's make sure....  We do
+			 * this after actually deregistering it, to
+			 * make sure that a 'real' IRQ doesn't run in
+			 * parallel with our fake
+			 */
+			if (action->flags & IRQF_SHARED) {
+				local_irq_save(flags);
+				action->handler(irq, dev_id);
+				local_irq_restore(flags);
+			}
+#endif
 			kfree(action);
 			return;
 		}
@@ -427,8 +514,7 @@ EXPORT_SYMBOL(free_irq);
  *	IRQF_SAMPLE_RANDOM	The interrupt can be used for entropy
  *
  */
-int request_irq(unsigned int irq,
-		irqreturn_t (*handler)(int, void *, struct pt_regs *),
+int request_irq(unsigned int irq, irq_handler_t handler,
 		unsigned long irqflags, const char *devname, void *dev_id)
 {
 	struct irqaction *action;
@@ -438,7 +524,7 @@ int request_irq(unsigned int irq,
 	/*
 	 * Lockdep wants atomic interrupt handlers:
 	 */
-	irqflags |= SA_INTERRUPT;
+	irqflags |= IRQF_DISABLED;
 #endif
 	/*
 	 * Sanity-check: shared interrupts must pass in a real dev-ID,
@@ -468,6 +554,22 @@ int request_irq(unsigned int irq,
 
 	select_smp_affinity(irq);
 
+#ifdef CONFIG_DEBUG_SHIRQ
+	if (irqflags & IRQF_SHARED) {
+		/*
+		 * It's a shared IRQ -- the driver ought to be prepared for it
+		 * to happen immediately, so let's make sure....
+		 * We do this before actually registering it, to make sure that
+		 * a 'real' IRQ doesn't run in parallel with our fake
+		 */
+		unsigned long flags;
+
+		local_irq_save(flags);
+		handler(irq, dev_id);
+		local_irq_restore(flags);
+	}
+#endif
+
 	retval = setup_irq(irq, action);
 	if (retval)
 		kfree(action);
@@ -475,4 +577,3 @@ int request_irq(unsigned int irq,
 	return retval;
 }
 EXPORT_SYMBOL(request_irq);
-

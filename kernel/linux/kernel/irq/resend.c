@@ -38,7 +38,7 @@ static void resend_irqs(unsigned long arg)
 		clear_bit(irq, irqs_resend);
 		desc = irq_desc + irq;
 		local_irq_disable();
-		desc->handle_irq(irq, desc, NULL);
+		desc->handle_irq(irq, desc);
 		local_irq_enable();
 	}
 }
@@ -62,7 +62,12 @@ void check_irq_resend(struct irq_desc *desc, unsigned int irq)
 	 */
 	desc->chip->enable(irq);
 
-	if ((status & (IRQ_PENDING | IRQ_REPLAY)) == IRQ_PENDING) {
+	/*
+	 * We do not resend level type interrupts. Level type
+	 * interrupts are resent by hardware when they are still
+	 * active.
+	 */
+	if ((status & (IRQ_LEVEL | IRQ_PENDING | IRQ_REPLAY)) == IRQ_PENDING) {
 		desc->status = (status & ~IRQ_PENDING) | IRQ_REPLAY;
 
 		if (!desc->chip || !desc->chip->retrigger ||

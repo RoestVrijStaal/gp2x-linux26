@@ -20,7 +20,7 @@
 #include <linux/delayacct.h>
 
 int delayacct_on __read_mostly = 1;	/* Delay accounting turned on/off */
-kmem_cache_t *delayacct_cache;
+struct kmem_cache *delayacct_cache;
 
 static int __init delayacct_setup_disable(char *str)
 {
@@ -31,17 +31,13 @@ __setup("nodelayacct", delayacct_setup_disable);
 
 void delayacct_init(void)
 {
-	delayacct_cache = kmem_cache_create("delayacct_cache",
-					sizeof(struct task_delay_info),
-					0,
-					SLAB_PANIC,
-					NULL, NULL);
+	delayacct_cache = KMEM_CACHE(task_delay_info, SLAB_PANIC);
 	delayacct_tsk_init(&init_task);
 }
 
 void __delayacct_tsk_init(struct task_struct *tsk)
 {
-	tsk->delays = kmem_cache_zalloc(delayacct_cache, SLAB_KERNEL);
+	tsk->delays = kmem_cache_zalloc(delayacct_cache, GFP_KERNEL);
 	if (tsk->delays)
 		spin_lock_init(&tsk->delays->lock);
 }
@@ -66,6 +62,7 @@ static void delayacct_end(struct timespec *start, struct timespec *end,
 {
 	struct timespec ts;
 	s64 ns;
+	unsigned long flags;
 
 	do_posix_clock_monotonic_gettime(end);
 	ts = timespec_sub(*end, *start);
@@ -73,10 +70,10 @@ static void delayacct_end(struct timespec *start, struct timespec *end,
 	if (ns < 0)
 		return;
 
-	spin_lock(&current->delays->lock);
+	spin_lock_irqsave(&current->delays->lock, flags);
 	*total += ns;
 	(*count)++;
-	spin_unlock(&current->delays->lock);
+	spin_unlock_irqrestore(&current->delays->lock, flags);
 }
 
 void __delayacct_blkio_start(void)
@@ -102,8 +99,10 @@ void __delayacct_blkio_end(void)
 int __delayacct_add_tsk(struct taskstats *d, struct task_struct *tsk)
 {
 	s64 tmp;
+	unsigned long t1;
+	unsigned long long t2, t3;
+	unsigned long flags;
 	struct timespec ts;
-	unsigned long t1,t2,t3;
 
 	/* Though tsk->delays accessed later, early exit avoids
 	 * unnecessary returning of other data
@@ -116,34 +115,39 @@ int __delayacct_add_tsk(struct taskstats *d, struct task_struct *tsk)
 	tmp += timespec_to_ns(&ts);
 	d->cpu_run_real_total = (tmp < (s64)d->cpu_run_real_total) ? 0 : tmp;
 
+	tmp = (s64)d->cpu_scaled_run_real_total;
+	cputime_to_timespec(tsk->utimescaled + tsk->stimescaled, &ts);
+	tmp += timespec_to_ns(&ts);
+	d->cpu_scaled_run_real_total =
+		(tmp < (s64)d->cpu_scaled_run_real_total) ? 0 : tmp;
+
 	/*
 	 * No locking available for sched_info (and too expensive to add one)
 	 * Mitigate by taking snapshot of values
 	 */
-	t1 = tsk->sched_info.pcnt;
+	t1 = tsk->sched_info.pcount;
 	t2 = tsk->sched_info.run_delay;
 	t3 = tsk->sched_info.cpu_time;
 
 	d->cpu_count += t1;
 
-	jiffies_to_timespec(t2, &ts);
-	tmp = (s64)d->cpu_delay_total + timespec_to_ns(&ts);
+	tmp = (s64)d->cpu_delay_total + t2;
 	d->cpu_delay_total = (tmp < (s64)d->cpu_delay_total) ? 0 : tmp;
 
-	tmp = (s64)d->cpu_run_virtual_total + (s64)jiffies_to_usecs(t3) * 1000;
+	tmp = (s64)d->cpu_run_virtual_total + t3;
 	d->cpu_run_virtual_total =
 		(tmp < (s64)d->cpu_run_virtual_total) ?	0 : tmp;
 
 	/* zero XXX_total, non-zero XXX_count implies XXX stat overflowed */
 
-	spin_lock(&tsk->delays->lock);
+	spin_lock_irqsave(&tsk->delays->lock, flags);
 	tmp = d->blkio_delay_total + tsk->delays->blkio_delay;
 	d->blkio_delay_total = (tmp < d->blkio_delay_total) ? 0 : tmp;
 	tmp = d->swapin_delay_total + tsk->delays->swapin_delay;
 	d->swapin_delay_total = (tmp < d->swapin_delay_total) ? 0 : tmp;
 	d->blkio_count += tsk->delays->blkio_count;
 	d->swapin_count += tsk->delays->swapin_count;
-	spin_unlock(&tsk->delays->lock);
+	spin_unlock_irqrestore(&tsk->delays->lock, flags);
 
 done:
 	return 0;
@@ -152,11 +156,12 @@ done:
 __u64 __delayacct_blkio_ticks(struct task_struct *tsk)
 {
 	__u64 ret;
+	unsigned long flags;
 
-	spin_lock(&tsk->delays->lock);
+	spin_lock_irqsave(&tsk->delays->lock, flags);
 	ret = nsec_to_clock_t(tsk->delays->blkio_delay +
 				tsk->delays->swapin_delay);
-	spin_unlock(&tsk->delays->lock);
+	spin_unlock_irqrestore(&tsk->delays->lock, flags);
 	return ret;
 }
 
