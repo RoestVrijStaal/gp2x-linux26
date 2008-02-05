@@ -1,4 +1,4 @@
-/* 
+/*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
 
@@ -12,13 +12,13 @@
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD PARTY RIGHTS.
    IN NO EVENT SHALL THE COPYRIGHT HOLDER(S) AND AUTHOR(S) BE LIABLE FOR ANY
-   CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES 
-   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN 
-   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF 
+   CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES
+   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-   ALL LIABILITY, INCLUDING LIABILITY FOR INFRINGEMENT OF ANY PATENTS, 
-   COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS, RELATING TO USE OF THIS 
+   ALL LIABILITY, INCLUDING LIABILITY FOR INFRINGEMENT OF ANY PATENTS,
+   COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS, RELATING TO USE OF THIS
    SOFTWARE IS DISCLAIMED.
 */
 
@@ -48,41 +48,59 @@
 #define BT_DBG(D...)
 #endif
 
-#define VERSION "2.10"
+#define VERSION "2.11"
 
 /* Bluetooth sockets */
 #define BT_MAX_PROTO	8
 static struct net_proto_family *bt_proto[BT_MAX_PROTO];
+static DEFINE_RWLOCK(bt_proto_lock);
 
 int bt_sock_register(int proto, struct net_proto_family *ops)
 {
+	int err = 0;
+
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
 
-	if (bt_proto[proto])
-		return -EEXIST;
+	write_lock(&bt_proto_lock);
 
-	bt_proto[proto] = ops;
-	return 0;
+	if (bt_proto[proto])
+		err = -EEXIST;
+	else
+		bt_proto[proto] = ops;
+
+	write_unlock(&bt_proto_lock);
+
+	return err;
 }
 EXPORT_SYMBOL(bt_sock_register);
 
 int bt_sock_unregister(int proto)
 {
+	int err = 0;
+
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
 
-	if (!bt_proto[proto])
-		return -ENOENT;
+	write_lock(&bt_proto_lock);
 
-	bt_proto[proto] = NULL;
-	return 0;
+	if (!bt_proto[proto])
+		err = -ENOENT;
+	else
+		bt_proto[proto] = NULL;
+
+	write_unlock(&bt_proto_lock);
+
+	return err;
 }
 EXPORT_SYMBOL(bt_sock_unregister);
 
-static int bt_sock_create(struct socket *sock, int proto)
+static int bt_sock_create(struct net *net, struct socket *sock, int proto)
 {
-	int err = 0;
+	int err;
+
+	if (net != &init_net)
+		return -EAFNOSUPPORT;
 
 	if (proto < 0 || proto >= BT_MAX_PROTO)
 		return -EINVAL;
@@ -92,12 +110,19 @@ static int bt_sock_create(struct socket *sock, int proto)
 		request_module("bt-proto-%d", proto);
 	}
 #endif
+
 	err = -EPROTONOSUPPORT;
+
+	read_lock(&bt_proto_lock);
+
 	if (bt_proto[proto] && try_module_get(bt_proto[proto]->owner)) {
-		err = bt_proto[proto]->create(sock, proto);
+		err = bt_proto[proto]->create(net, sock, proto);
 		module_put(bt_proto[proto]->owner);
 	}
-	return err; 
+
+	read_unlock(&bt_proto_lock);
+
+	return err;
 }
 
 void bt_sock_link(struct bt_sock_list *l, struct sock *sk)
@@ -199,7 +224,7 @@ int bt_sock_recvmsg(struct kiocb *iocb, struct socket *sock,
 		copied = len;
 	}
 
-	skb->h.raw = skb->data;
+	skb_reset_transport_header(skb);
 	err = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
 
 	skb_free_datagram(sk, skb);
@@ -243,7 +268,7 @@ unsigned int bt_sock_poll(struct file * file, struct socket *sock, poll_table *w
 	if (sk->sk_shutdown == SHUTDOWN_MASK)
 		mask |= POLLHUP;
 
-	if (!skb_queue_empty(&sk->sk_receive_queue) || 
+	if (!skb_queue_empty(&sk->sk_receive_queue) ||
 			(sk->sk_shutdown & RCV_SHUTDOWN))
 		mask |= POLLIN | POLLRDNORM;
 
@@ -276,7 +301,7 @@ int bt_sock_wait_state(struct sock *sk, int state, unsigned long timeo)
 		set_current_state(TASK_INTERRUPTIBLE);
 
 		if (!timeo) {
-			err = -EAGAIN;
+			err = -EINPROGRESS;
 			break;
 		}
 

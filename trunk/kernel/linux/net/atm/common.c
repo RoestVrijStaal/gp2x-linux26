@@ -30,13 +30,6 @@
 #include "addr.h"		/* address registry */
 #include "signaling.h"		/* for WAITING and sigd_attach */
 
-
-#if 0
-#define DPRINTK(format,args...) printk(KERN_DEBUG format,##args)
-#else
-#define DPRINTK(format,args...)
-#endif
-
 struct hlist_head vcc_hash[VCC_HTABLE_SIZE];
 DEFINE_RWLOCK(vcc_sklist_lock);
 
@@ -70,13 +63,13 @@ static struct sk_buff *alloc_tx(struct atm_vcc *vcc,unsigned int size)
 	struct sock *sk = sk_atm(vcc);
 
 	if (atomic_read(&sk->sk_wmem_alloc) && !atm_may_send(vcc, size)) {
-		DPRINTK("Sorry: wmem_alloc = %d, size = %d, sndbuf = %d\n",
+		pr_debug("Sorry: wmem_alloc = %d, size = %d, sndbuf = %d\n",
 			atomic_read(&sk->sk_wmem_alloc), size,
 			sk->sk_sndbuf);
 		return NULL;
 	}
 	while (!(skb = alloc_skb(size,GFP_KERNEL))) schedule();
-	DPRINTK("AlTx %d += %d\n", atomic_read(&sk->sk_wmem_alloc),
+	pr_debug("AlTx %d += %d\n", atomic_read(&sk->sk_wmem_alloc),
 		skb->truesize);
 	atomic_add(skb->truesize, &sk->sk_wmem_alloc);
 	return skb;
@@ -109,11 +102,11 @@ static inline int vcc_writable(struct sock *sk)
 	struct atm_vcc *vcc = atm_sk(sk);
 
 	return (vcc->qos.txtp.max_sdu +
-	        atomic_read(&sk->sk_wmem_alloc)) <= sk->sk_sndbuf;
+		atomic_read(&sk->sk_wmem_alloc)) <= sk->sk_sndbuf;
 }
 
 static void vcc_write_space(struct sock *sk)
-{       
+{
 	read_lock(&sk->sk_callback_lock);
 
 	if (vcc_writable(sk)) {
@@ -131,8 +124,8 @@ static struct proto vcc_proto = {
 	.owner	  = THIS_MODULE,
 	.obj_size = sizeof(struct atm_vcc),
 };
- 
-int vcc_create(struct socket *sock, int protocol, int family)
+
+int vcc_create(struct net *net, struct socket *sock, int protocol, int family)
 {
 	struct sock *sk;
 	struct atm_vcc *vcc;
@@ -140,7 +133,7 @@ int vcc_create(struct socket *sock, int protocol, int family)
 	sock->sk = NULL;
 	if (sock->type == SOCK_STREAM)
 		return -EINVAL;
-	sk = sk_alloc(family, GFP_KERNEL, &vcc_proto, 1);
+	sk = sk_alloc(net, family, GFP_KERNEL, &vcc_proto);
 	if (!sk)
 		return -ENOMEM;
 	sock_init_data(sock, sk);
@@ -359,7 +352,7 @@ static int __vcc_connect(struct atm_vcc *vcc, struct atm_dev *dev, short vpi,
 		return error;
 	vcc->dev = dev;
 	write_lock_irq(&vcc_sklist_lock);
-	if (test_bit(ATM_DF_REMOVED, &dev->flags) || 
+	if (test_bit(ATM_DF_REMOVED, &dev->flags) ||
 	    (error = find_ci(vcc, &vpi, &vci))) {
 		write_unlock_irq(&vcc_sklist_lock);
 		goto fail_module_put;
@@ -392,10 +385,10 @@ static int __vcc_connect(struct atm_vcc *vcc, struct atm_dev *dev, short vpi,
 	if (!error) error = adjust_tp(&vcc->qos.rxtp,vcc->qos.aal);
 	if (error)
 		goto fail;
-	DPRINTK("VCC %d.%d, AAL %d\n",vpi,vci,vcc->qos.aal);
-	DPRINTK("  TX: %d, PCR %d..%d, SDU %d\n",vcc->qos.txtp.traffic_class,
+	pr_debug("VCC %d.%d, AAL %d\n",vpi,vci,vcc->qos.aal);
+	pr_debug("  TX: %d, PCR %d..%d, SDU %d\n",vcc->qos.txtp.traffic_class,
 	    vcc->qos.txtp.min_pcr,vcc->qos.txtp.max_pcr,vcc->qos.txtp.max_sdu);
-	DPRINTK("  RX: %d, PCR %d..%d, SDU %d\n",vcc->qos.rxtp.traffic_class,
+	pr_debug("  RX: %d, PCR %d..%d, SDU %d\n",vcc->qos.rxtp.traffic_class,
 	    vcc->qos.rxtp.min_pcr,vcc->qos.rxtp.max_pcr,vcc->qos.rxtp.max_sdu);
 
 	if (dev->ops->open) {
@@ -420,7 +413,7 @@ int vcc_connect(struct socket *sock, int itf, short vpi, int vci)
 	struct atm_vcc *vcc = ATM_SD(sock);
 	int error;
 
-	DPRINTK("vcc_connect (vpi %d, vci %d)\n",vpi,vci);
+	pr_debug("vcc_connect (vpi %d, vci %d)\n",vpi,vci);
 	if (sock->state == SS_CONNECTED)
 		return -EISCONN;
 	if (sock->state != SS_UNCONNECTED)
@@ -433,7 +426,7 @@ int vcc_connect(struct socket *sock, int itf, short vpi, int vci)
 	else
 		if (test_bit(ATM_VF_PARTIAL,&vcc->flags))
 			return -EINVAL;
-	DPRINTK("vcc_connect (TX: cl %d,bw %d-%d,sdu %d; "
+	pr_debug("vcc_connect (TX: cl %d,bw %d-%d,sdu %d; "
 	    "RX: cl %d,bw %d-%d,sdu %d,AAL %s%d)\n",
 	    vcc->qos.txtp.traffic_class,vcc->qos.txtp.min_pcr,
 	    vcc->qos.txtp.max_pcr,vcc->qos.txtp.max_sdu,
@@ -494,20 +487,20 @@ int vcc_recvmsg(struct kiocb *iocb, struct socket *sock, struct msghdr *msg,
 	if (!skb)
 		return error;
 
-	copied = skb->len; 
+	copied = skb->len;
 	if (copied > size) {
-		copied = size; 
+		copied = size;
 		msg->msg_flags |= MSG_TRUNC;
 	}
 
-        error = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
-        if (error)
-                return error;
-        sock_recv_timestamp(msg, sk, skb);
-        DPRINTK("RcvM %d -= %d\n", atomic_read(&sk->rmem_alloc), skb->truesize);
-        atm_return(vcc, skb->truesize);
-        skb_free_datagram(sk, skb);
-        return copied;
+	error = skb_copy_datagram_iovec(skb, 0, msg->msg_iov, copied);
+	if (error)
+		return error;
+	sock_recv_timestamp(msg, sk, skb);
+	pr_debug("RcvM %d -= %d\n", atomic_read(&sk->sk_rmem_alloc), skb->truesize);
+	atm_return(vcc, skb->truesize);
+	skb_free_datagram(sk, skb);
+	return copied;
 }
 
 
@@ -675,7 +668,7 @@ static int check_qos(struct atm_qos *qos)
 	int error;
 
 	if (!qos->txtp.traffic_class && !qos->rxtp.traffic_class)
-                return -EINVAL;
+		return -EINVAL;
 	if (qos->txtp.traffic_class != qos->rxtp.traffic_class &&
 	    qos->txtp.traffic_class && qos->rxtp.traffic_class &&
 	    qos->txtp.traffic_class != ATM_ANYCLASS &&
@@ -786,11 +779,11 @@ static int __init atm_init(void)
 		printk(KERN_ERR "atmsvc_init() failed with %d\n", error);
 		goto out_atmpvc_exit;
 	}
-        if ((error = atm_proc_init()) < 0) {
+	if ((error = atm_proc_init()) < 0) {
 		printk(KERN_ERR "atm_proc_init() failed with %d\n",error);
 		goto out_atmsvc_exit;
 	}
-        if ((error = atm_sysfs_init()) < 0) {
+	if ((error = atm_sysfs_init()) < 0) {
 		printk(KERN_ERR "atm_sysfs_init() failed with %d\n",error);
 		goto out_atmproc_exit;
 	}
@@ -816,7 +809,8 @@ static void __exit atm_exit(void)
 	proto_unregister(&vcc_proto);
 }
 
-module_init(atm_init);
+subsys_initcall(atm_init);
+
 module_exit(atm_exit);
 
 MODULE_LICENSE("GPL");

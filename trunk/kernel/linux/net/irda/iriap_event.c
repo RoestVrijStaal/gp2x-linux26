@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -365,7 +365,7 @@ static void state_r_disconnect(struct iriap_cb *self, IRIAP_EVENT event,
 
 	switch (event) {
 	case IAP_LM_CONNECT_INDICATION:
-		tx_skb = alloc_skb(64, GFP_ATOMIC);
+		tx_skb = alloc_skb(LMP_MAX_HEADER, GFP_ATOMIC);
 		if (tx_skb == NULL) {
 			IRDA_WARNING("%s: unable to malloc!\n", __FUNCTION__);
 			return;

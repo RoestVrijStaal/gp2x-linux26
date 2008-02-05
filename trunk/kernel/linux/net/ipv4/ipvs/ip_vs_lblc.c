@@ -45,6 +45,7 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
+#include <linux/jiffies.h>
 
 /* for sysctl */
 #include <linux/fs.h>
@@ -87,7 +88,7 @@ static int sysctl_ip_vs_lblc_expiration = 24*60*60*HZ;
  */
 struct ip_vs_lblc_entry {
 	struct list_head        list;
-	__u32                   addr;           /* destination IP address */
+	__be32                  addr;           /* destination IP address */
 	struct ip_vs_dest       *dest;          /* real server (cache) */
 	unsigned long           lastuse;        /* last used time */
 };
@@ -113,11 +114,10 @@ struct ip_vs_lblc_table {
 
 static ctl_table vs_vars_table[] = {
 	{
-		.ctl_name	= NET_IPV4_VS_LBLC_EXPIRE,
 		.procname	= "lblc_expiration",
 		.data		= &sysctl_ip_vs_lblc_expiration,
 		.maxlen		= sizeof(int),
-		.mode		= 0644, 
+		.mode		= 0644,
 		.proc_handler	= &proc_dointvec_jiffies,
 	},
 	{ .ctl_name = 0 }
@@ -125,9 +125,8 @@ static ctl_table vs_vars_table[] = {
 
 static ctl_table vs_table[] = {
 	{
-		.ctl_name	= NET_IPV4_VS,
 		.procname	= "vs",
-		.mode		= 0555, 
+		.mode		= 0555,
 		.child		= vs_vars_table
 	},
 	{ .ctl_name = 0 }
@@ -136,7 +135,7 @@ static ctl_table vs_table[] = {
 static ctl_table ipvs_ipv4_table[] = {
 	{
 		.ctl_name	= NET_IPV4,
-		.procname	= "ipv4", 
+		.procname	= "ipv4",
 		.mode		= 0555,
 		.child		= vs_table
 	},
@@ -146,8 +145,8 @@ static ctl_table ipvs_ipv4_table[] = {
 static ctl_table lblc_root_table[] = {
 	{
 		.ctl_name	= CTL_NET,
-		.procname	= "net", 
-		.mode		= 0555, 
+		.procname	= "net",
+		.mode		= 0555,
 		.child		= ipvs_ipv4_table
 	},
 	{ .ctl_name = 0 }
@@ -160,7 +159,7 @@ static struct ctl_table_header * sysctl_header;
  *      IP address to a server.
  */
 static inline struct ip_vs_lblc_entry *
-ip_vs_lblc_new(__u32 daddr, struct ip_vs_dest *dest)
+ip_vs_lblc_new(__be32 daddr, struct ip_vs_dest *dest)
 {
 	struct ip_vs_lblc_entry *en;
 
@@ -195,7 +194,7 @@ static inline void ip_vs_lblc_free(struct ip_vs_lblc_entry *en)
 /*
  *	Returns hash value for IPVS LBLC entry
  */
-static inline unsigned ip_vs_lblc_hashkey(__u32 addr)
+static inline unsigned ip_vs_lblc_hashkey(__be32 addr)
 {
 	return (ntohl(addr)*2654435761UL) & IP_VS_LBLC_TAB_MASK;
 }
@@ -234,7 +233,7 @@ ip_vs_lblc_hash(struct ip_vs_lblc_table *tbl, struct ip_vs_lblc_entry *en)
  *  Get ip_vs_lblc_entry associated with supplied parameters.
  */
 static inline struct ip_vs_lblc_entry *
-ip_vs_lblc_get(struct ip_vs_lblc_table *tbl, __u32 addr)
+ip_vs_lblc_get(struct ip_vs_lblc_table *tbl, __be32 addr)
 {
 	unsigned hash;
 	struct ip_vs_lblc_entry *en;
@@ -287,7 +286,7 @@ static inline void ip_vs_lblc_full_check(struct ip_vs_lblc_table *tbl)
 
 		write_lock(&tbl->lock);
 		list_for_each_entry_safe(en, nxt, &tbl->bucket[j], list) {
-			if (time_before(now, 
+			if (time_before(now,
 					en->lastuse + sysctl_ip_vs_lblc_expiration))
 				continue;
 
@@ -520,7 +519,7 @@ ip_vs_lblc_schedule(struct ip_vs_service *svc, const struct sk_buff *skb)
 	struct ip_vs_dest *dest;
 	struct ip_vs_lblc_table *tbl;
 	struct ip_vs_lblc_entry *en;
-	struct iphdr *iph = skb->nh.iph;
+	struct iphdr *iph = ip_hdr(skb);
 
 	IP_VS_DBG(6, "ip_vs_lblc_schedule(): Scheduling...\n");
 
@@ -581,9 +580,14 @@ static struct ip_vs_scheduler ip_vs_lblc_scheduler =
 
 static int __init ip_vs_lblc_init(void)
 {
+	int ret;
+
 	INIT_LIST_HEAD(&ip_vs_lblc_scheduler.n_list);
-	sysctl_header = register_sysctl_table(lblc_root_table, 0);
-	return register_ip_vs_scheduler(&ip_vs_lblc_scheduler);
+	sysctl_header = register_sysctl_table(lblc_root_table);
+	ret = register_ip_vs_scheduler(&ip_vs_lblc_scheduler);
+	if (ret)
+		unregister_sysctl_table(sysctl_header);
+	return ret;
 }
 
 

@@ -15,7 +15,7 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS("ipt_comment");
 MODULE_ALIAS("ip6t_comment");
 
-static int
+static bool
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
@@ -23,47 +23,38 @@ match(const struct sk_buff *skb,
       const void *matchinfo,
       int offset,
       unsigned int protooff,
-      int *hotdrop)
+      bool *hotdrop)
 {
 	/* We always match */
-	return 1;
+	return true;
 }
 
-static struct xt_match comment_match = {
-	.name		= "comment",
-	.match		= match,
-	.matchsize	= sizeof(struct xt_comment_info),
-	.family		= AF_INET,
-	.me		= THIS_MODULE
-};
-
-static struct xt_match comment6_match = {
-	.name		= "comment",
-	.match		= match,
-	.matchsize	= sizeof(struct xt_comment_info),
-	.family		= AF_INET6,
-	.me		= THIS_MODULE
+static struct xt_match xt_comment_match[] __read_mostly = {
+	{
+		.name		= "comment",
+		.family		= AF_INET,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_comment_info),
+		.me		= THIS_MODULE
+	},
+	{
+		.name		= "comment",
+		.family		= AF_INET6,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_comment_info),
+		.me		= THIS_MODULE
+	},
 };
 
 static int __init xt_comment_init(void)
 {
-	int ret;
-
-	ret = xt_register_match(&comment_match);
-	if (ret)
-		return ret;
-
-	ret = xt_register_match(&comment6_match);
-	if (ret)
-		xt_unregister_match(&comment_match);
-
-	return ret;
+	return xt_register_matches(xt_comment_match,
+				   ARRAY_SIZE(xt_comment_match));
 }
 
 static void __exit xt_comment_fini(void)
 {
-	xt_unregister_match(&comment_match);
-	xt_unregister_match(&comment6_match);
+	xt_unregister_matches(xt_comment_match, ARRAY_SIZE(xt_comment_match));
 }
 
 module_init(xt_comment_init);

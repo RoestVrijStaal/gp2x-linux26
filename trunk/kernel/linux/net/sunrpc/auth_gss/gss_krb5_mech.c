@@ -34,6 +34,7 @@
  *
  */
 
+#include <linux/err.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
@@ -69,19 +70,18 @@ simple_get_netobj(const void *p, const void *end, struct xdr_netobj *res)
 	q = (const void *)((const char *)p + len);
 	if (unlikely(q > end || q < p))
 		return ERR_PTR(-EFAULT);
-	res->data = kmalloc(len, GFP_KERNEL);
+	res->data = kmemdup(p, len, GFP_KERNEL);
 	if (unlikely(res->data == NULL))
 		return ERR_PTR(-ENOMEM);
-	memcpy(res->data, p, len);
 	res->len = len;
 	return q;
 }
 
 static inline const void *
-get_key(const void *p, const void *end, struct crypto_tfm **res)
+get_key(const void *p, const void *end, struct crypto_blkcipher **res)
 {
 	struct xdr_netobj	key;
-	int			alg, alg_mode;
+	int			alg;
 	char			*alg_name;
 
 	p = simple_get_bytes(p, end, &alg, sizeof(alg));
@@ -93,18 +93,19 @@ get_key(const void *p, const void *end, struct crypto_tfm **res)
 
 	switch (alg) {
 		case ENCTYPE_DES_CBC_RAW:
-			alg_name = "des";
-			alg_mode = CRYPTO_TFM_MODE_CBC;
+			alg_name = "cbc(des)";
 			break;
 		default:
 			printk("gss_kerberos_mech: unsupported algorithm %d\n", alg);
 			goto out_err_free_key;
 	}
-	if (!(*res = crypto_alloc_tfm(alg_name, alg_mode))) {
+	*res = crypto_alloc_blkcipher(alg_name, 0, CRYPTO_ALG_ASYNC);
+	if (IS_ERR(*res)) {
 		printk("gss_kerberos_mech: unable to initialize crypto algorithm %s\n", alg_name);
+		*res = NULL;
 		goto out_err_free_key;
 	}
-	if (crypto_cipher_setkey(*res, key.data, key.len)) {
+	if (crypto_blkcipher_setkey(*res, key.data, key.len)) {
 		printk("gss_kerberos_mech: error setting key for crypto algorithm %s\n", alg_name);
 		goto out_err_free_tfm;
 	}
@@ -113,7 +114,7 @@ get_key(const void *p, const void *end, struct crypto_tfm **res)
 	return p;
 
 out_err_free_tfm:
-	crypto_free_tfm(*res);
+	crypto_free_blkcipher(*res);
 out_err_free_key:
 	kfree(key.data);
 	p = ERR_PTR(-EINVAL);
@@ -128,6 +129,7 @@ gss_import_sec_context_kerberos(const void *p,
 {
 	const void *end = (const void *)((const char *)p + len);
 	struct	krb5_ctx *ctx;
+	int tmp;
 
 	if (!(ctx = kzalloc(sizeof(*ctx), GFP_KERNEL)))
 		goto out_err;
@@ -135,18 +137,27 @@ gss_import_sec_context_kerberos(const void *p,
 	p = simple_get_bytes(p, end, &ctx->initiate, sizeof(ctx->initiate));
 	if (IS_ERR(p))
 		goto out_err_free_ctx;
-	p = simple_get_bytes(p, end, &ctx->seed_init, sizeof(ctx->seed_init));
+	/* The downcall format was designed before we completely understood
+	 * the uses of the context fields; so it includes some stuff we
+	 * just give some minimal sanity-checking, and some we ignore
+	 * completely (like the next twenty bytes): */
+	if (unlikely(p + 20 > end || p + 20 < p))
+		goto out_err_free_ctx;
+	p += 20;
+	p = simple_get_bytes(p, end, &tmp, sizeof(tmp));
 	if (IS_ERR(p))
 		goto out_err_free_ctx;
-	p = simple_get_bytes(p, end, ctx->seed, sizeof(ctx->seed));
+	if (tmp != SGN_ALG_DES_MAC_MD5) {
+		p = ERR_PTR(-ENOSYS);
+		goto out_err_free_ctx;
+	}
+	p = simple_get_bytes(p, end, &tmp, sizeof(tmp));
 	if (IS_ERR(p))
 		goto out_err_free_ctx;
-	p = simple_get_bytes(p, end, &ctx->signalg, sizeof(ctx->signalg));
-	if (IS_ERR(p))
+	if (tmp != SEAL_ALG_DES) {
+		p = ERR_PTR(-ENOSYS);
 		goto out_err_free_ctx;
-	p = simple_get_bytes(p, end, &ctx->sealalg, sizeof(ctx->sealalg));
-	if (IS_ERR(p))
-		goto out_err_free_ctx;
+	}
 	p = simple_get_bytes(p, end, &ctx->endtime, sizeof(ctx->endtime));
 	if (IS_ERR(p))
 		goto out_err_free_ctx;
@@ -168,13 +179,14 @@ gss_import_sec_context_kerberos(const void *p,
 	}
 
 	ctx_id->internal_ctx_id = ctx;
-	dprintk("RPC:      Successfully imported new context.\n");
+
+	dprintk("RPC:       Successfully imported new context.\n");
 	return 0;
 
 out_err_free_key2:
-	crypto_free_tfm(ctx->seq);
+	crypto_free_blkcipher(ctx->seq);
 out_err_free_key1:
-	crypto_free_tfm(ctx->enc);
+	crypto_free_blkcipher(ctx->enc);
 out_err_free_mech:
 	kfree(ctx->mech_used.data);
 out_err_free_ctx:
@@ -187,13 +199,13 @@ static void
 gss_delete_sec_context_kerberos(void *internal_ctx) {
 	struct krb5_ctx *kctx = internal_ctx;
 
-	crypto_free_tfm(kctx->seq);
-	crypto_free_tfm(kctx->enc);
+	crypto_free_blkcipher(kctx->seq);
+	crypto_free_blkcipher(kctx->enc);
 	kfree(kctx->mech_used.data);
 	kfree(kctx);
 }
 
-static struct gss_api_ops gss_kerberos_ops = {
+static const struct gss_api_ops gss_kerberos_ops = {
 	.gss_import_sec_context	= gss_import_sec_context_kerberos,
 	.gss_get_mic		= gss_get_mic_kerberos,
 	.gss_verify_mic		= gss_verify_mic_kerberos,
@@ -223,6 +235,7 @@ static struct pf_desc gss_kerberos_pfs[] = {
 static struct gss_api_mech gss_kerberos_mech = {
 	.gm_name	= "krb5",
 	.gm_owner	= THIS_MODULE,
+	.gm_oid		= {9, (void *)"\x2a\x86\x48\x86\xf7\x12\x01\x02\x02"},
 	.gm_ops		= &gss_kerberos_ops,
 	.gm_pf_num	= ARRAY_SIZE(gss_kerberos_pfs),
 	.gm_pfs		= gss_kerberos_pfs,

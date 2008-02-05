@@ -18,7 +18,7 @@
  *     published by the Free Software Foundation; either version 2 of
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is
  *     provided "AS-IS" and at no charge.
  *
@@ -116,7 +116,7 @@ int __init irlmp_init(void)
  *    Remove IrLMP layer
  *
  */
-void __exit irlmp_cleanup(void) 
+void irlmp_cleanup(void)
 {
 	/* Check for main structure */
 	IRDA_ASSERT(irlmp != NULL, return;);
@@ -353,6 +353,7 @@ void irlmp_unregister_link(__u32 saddr)
 		/* Final cleanup */
 		del_timer(&link->idle_timer);
 		link->magic = 0;
+		hashbin_delete(link->lsaps, (FREE_FUNC) __irlmp_close_lsap);
 		kfree(link);
 	}
 }
@@ -392,7 +393,7 @@ int irlmp_connect_request(struct lsap_cb *self, __u8 dlsap_sel,
 
 	/* Any userdata? */
 	if (tx_skb == NULL) {
-		tx_skb = alloc_skb(64, GFP_ATOMIC);
+		tx_skb = alloc_skb(LMP_MAX_HEADER, GFP_ATOMIC);
 		if (!tx_skb)
 			return -ENOMEM;
 
@@ -641,15 +642,13 @@ struct lsap_cb *irlmp_dup(struct lsap_cb *orig, void *instance)
 	}
 
 	/* Allocate a new instance */
-	new = kmalloc(sizeof(struct lsap_cb), GFP_ATOMIC);
+	new = kmemdup(orig, sizeof(*new), GFP_ATOMIC);
 	if (!new)  {
 		IRDA_DEBUG(0, "%s(), unable to kmalloc\n", __FUNCTION__);
 		spin_unlock_irqrestore(&irlmp->unconnected_lsaps->hb_spinlock,
 				       flags);
 		return NULL;
 	}
-	/* Dup */
-	memcpy(new, orig, sizeof(struct lsap_cb));
 	/* new->lap = orig->lap; => done in the memcpy() */
 	/* new->slsap_sel = orig->slsap_sel; => done in the memcpy() */
 	new->conn_skb = NULL;
@@ -894,7 +893,7 @@ void irlmp_discovery_request(int nslots)
 
 	/*
 	 * Start a single discovery operation if discovery is not already
-         * running
+	 * running
 	 */
 	if (!sysctl_discovery) {
 		/* Check if user wants to override the default */
@@ -1530,12 +1529,12 @@ int irlmp_unregister_service(void *handle)
 
 	/* Refresh current hint bits */
 	spin_lock_irqsave(&irlmp->services->hb_spinlock, flags);
-        service = (irlmp_service_t *) hashbin_get_first(irlmp->services);
-        while (service) {
+	service = (irlmp_service_t *) hashbin_get_first(irlmp->services);
+	while (service) {
 		irlmp->hints.word |= service->hints.word;
 
-                service = (irlmp_service_t *)hashbin_get_next(irlmp->services);
-        }
+		service = (irlmp_service_t *)hashbin_get_next(irlmp->services);
+	}
 	spin_unlock_irqrestore(&irlmp->services->hb_spinlock, flags);
 	return 0;
 }
@@ -1678,7 +1677,8 @@ static int irlmp_slsap_inuse(__u8 slsap_sel)
 	 *  every IrLAP connection and check every LSAP associated with each
 	 *  the connection.
 	 */
-	spin_lock_irqsave(&irlmp->links->hb_spinlock, flags);
+	spin_lock_irqsave_nested(&irlmp->links->hb_spinlock, flags,
+			SINGLE_DEPTH_NESTING);
 	lap = (struct lap_cb *) hashbin_get_first(irlmp->links);
 	while (lap != NULL) {
 		IRDA_ASSERT(lap->magic == LMP_LAP_MAGIC, goto errlap;);
@@ -1862,7 +1862,7 @@ static void *irlmp_seq_hb_idx(struct irlmp_iter_state *iter, loff_t *off)
 
 	spin_lock_irq(&iter->hashbin->hb_spinlock);
 	for (element = hashbin_get_first(iter->hashbin);
-	     element != NULL; 
+	     element != NULL;
 	     element = hashbin_get_next(iter->hashbin)) {
 		if (!off || *off-- == 0) {
 			/* NB: hashbin left locked */
@@ -1919,7 +1919,7 @@ static void *irlmp_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	if (v == NULL) {			/* no more in this hash bin */
 		spin_unlock_irq(&iter->hashbin->hb_spinlock);
 
-		if (iter->hashbin == irlmp->unconnected_lsaps) 
+		if (iter->hashbin == irlmp->unconnected_lsaps)
 			v =  LINK_START_TOKEN;
 
 		iter->hashbin = NULL;
@@ -1995,7 +1995,7 @@ static int irlmp_seq_show(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static struct seq_operations irlmp_seq_ops = {
+static const struct seq_operations irlmp_seq_ops = {
 	.start  = irlmp_seq_start,
 	.next   = irlmp_seq_next,
 	.stop   = irlmp_seq_stop,
@@ -2004,30 +2004,13 @@ static struct seq_operations irlmp_seq_ops = {
 
 static int irlmp_seq_open(struct inode *inode, struct file *file)
 {
-	struct seq_file *seq;
-	int rc = -ENOMEM;
-	struct irlmp_iter_state *s;
-
 	IRDA_ASSERT(irlmp != NULL, return -EINVAL;);
 
-	s = kmalloc(sizeof(*s), GFP_KERNEL);
-	if (!s)
-		goto out;
-
-	rc = seq_open(file, &irlmp_seq_ops);
-	if (rc)
-		goto out_kfree;
-
-	seq	     = file->private_data;
-	seq->private = s;
-out:
-	return rc;
-out_kfree:
-	kfree(s);
-	goto out;
+	return seq_open_private(file, &irlmp_seq_ops,
+			sizeof(struct irlmp_iter_state));
 }
 
-struct file_operations irlmp_seq_fops = {
+const struct file_operations irlmp_seq_fops = {
 	.owner		= THIS_MODULE,
 	.open           = irlmp_seq_open,
 	.read           = seq_read,

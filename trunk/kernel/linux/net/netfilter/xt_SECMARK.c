@@ -28,10 +28,10 @@ MODULE_ALIAS("ip6t_SECMARK");
 
 static u8 mode;
 
-static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
+static unsigned int target(struct sk_buff *skb, const struct net_device *in,
 			   const struct net_device *out, unsigned int hooknum,
 			   const struct xt_target *target,
-			   const void *targinfo, void *userinfo)
+			   const void *targinfo)
 {
 	u32 secmark = 0;
 	const struct xt_secmark_target_info *info = targinfo;
@@ -47,17 +47,15 @@ static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
 		BUG();
 	}
 
-	if ((*pskb)->secmark != secmark)
-		(*pskb)->secmark = secmark;
-
+	skb->secmark = secmark;
 	return XT_CONTINUE;
 }
 
-static int checkentry_selinux(struct xt_secmark_target_info *info)
+static bool checkentry_selinux(struct xt_secmark_target_info *info)
 {
 	int err;
 	struct xt_secmark_target_selinux_info *sel = &info->u.sel;
-	
+
 	sel->selctx[SECMARK_SELCTX_MAX - 1] = '\0';
 
 	err = selinux_string_to_sid(sel->selctx, &sel->selsid);
@@ -65,93 +63,82 @@ static int checkentry_selinux(struct xt_secmark_target_info *info)
 		if (err == -EINVAL)
 			printk(KERN_INFO PFX "invalid SELinux context \'%s\'\n",
 			       sel->selctx);
-		return 0;
+		return false;
 	}
 
 	if (!sel->selsid) {
 		printk(KERN_INFO PFX "unable to map SELinux context \'%s\'\n",
 		       sel->selctx);
-		return 0;
+		return false;
 	}
 
 	err = selinux_relabel_packet_permission(sel->selsid);
 	if (err) {
 		printk(KERN_INFO PFX "unable to obtain relabeling permission\n");
-		return 0;
+		return false;
 	}
 
-	return 1;
+	return true;
 }
 
-static int checkentry(const char *tablename, const void *entry,
-		      const struct xt_target *target, void *targinfo,
-		      unsigned int targinfosize, unsigned int hook_mask)
+static bool checkentry(const char *tablename, const void *entry,
+		       const struct xt_target *target, void *targinfo,
+		       unsigned int hook_mask)
 {
 	struct xt_secmark_target_info *info = targinfo;
 
 	if (mode && mode != info->mode) {
 		printk(KERN_INFO PFX "mode already set to %hu cannot mix with "
 		       "rules for mode %hu\n", mode, info->mode);
-		return 0;
+		return false;
 	}
 
 	switch (info->mode) {
 	case SECMARK_MODE_SEL:
 		if (!checkentry_selinux(info))
-			return 0;
+			return false;
 		break;
 
 	default:
 		printk(KERN_INFO PFX "invalid mode: %hu\n", info->mode);
-		return 0;
+		return false;
 	}
 
 	if (!mode)
 		mode = info->mode;
-	return 1;
+	return true;
 }
 
-static struct xt_target ipt_secmark_reg = {
-	.name		= "SECMARK",
-	.target		= target,
-	.targetsize	= sizeof(struct xt_secmark_target_info),
-	.table		= "mangle",
-	.checkentry	= checkentry,
-	.me		= THIS_MODULE,
-	.family		= AF_INET,
-	.revision	= 0,
-};
-
-static struct xt_target ip6t_secmark_reg = {
-	.name		= "SECMARK",
-	.target		= target,
-	.targetsize	= sizeof(struct xt_secmark_target_info),
-	.table		= "mangle",
-	.checkentry	= checkentry,
-	.me		= THIS_MODULE,
-	.family		= AF_INET6,
-	.revision	= 0,
+static struct xt_target xt_secmark_target[] __read_mostly = {
+	{
+		.name		= "SECMARK",
+		.family		= AF_INET,
+		.checkentry	= checkentry,
+		.target		= target,
+		.targetsize	= sizeof(struct xt_secmark_target_info),
+		.table		= "mangle",
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "SECMARK",
+		.family		= AF_INET6,
+		.checkentry	= checkentry,
+		.target		= target,
+		.targetsize	= sizeof(struct xt_secmark_target_info),
+		.table		= "mangle",
+		.me		= THIS_MODULE,
+	},
 };
 
 static int __init xt_secmark_init(void)
 {
-	int err;
-
-	err = xt_register_target(&ipt_secmark_reg);
-	if (err)
-		return err;
-
-	err = xt_register_target(&ip6t_secmark_reg);
-	if (err)
-		xt_unregister_target(&ipt_secmark_reg);
-
-	return err;
+	return xt_register_targets(xt_secmark_target,
+				   ARRAY_SIZE(xt_secmark_target));
 }
 
 static void __exit xt_secmark_fini(void)
 {
-	xt_unregister_target(&ip6t_secmark_reg);
-	xt_unregister_target(&ipt_secmark_reg);
+	xt_unregister_targets(xt_secmark_target, ARRAY_SIZE(xt_secmark_target));
 }
 
 module_init(xt_secmark_init);

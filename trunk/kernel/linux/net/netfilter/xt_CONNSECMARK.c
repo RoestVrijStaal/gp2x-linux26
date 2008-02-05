@@ -19,7 +19,7 @@
 #include <linux/skbuff.h>
 #include <linux/netfilter/x_tables.h>
 #include <linux/netfilter/xt_CONNSECMARK.h>
-#include <net/netfilter/nf_conntrack_compat.h>
+#include <net/netfilter/nf_conntrack.h>
 
 #define PFX "CONNSECMARK: "
 
@@ -33,16 +33,15 @@ MODULE_ALIAS("ip6t_CONNSECMARK");
  * If the packet has a security mark and the connection does not, copy
  * the security mark from the packet to the connection.
  */
-static void secmark_save(struct sk_buff *skb)
+static void secmark_save(const struct sk_buff *skb)
 {
 	if (skb->secmark) {
-		u32 *connsecmark;
+		struct nf_conn *ct;
 		enum ip_conntrack_info ctinfo;
 
-		connsecmark = nf_ct_get_secmark(skb, &ctinfo);
-		if (connsecmark && !*connsecmark)
-			if (*connsecmark != skb->secmark)
-				*connsecmark = skb->secmark;
+		ct = nf_ct_get(skb, &ctinfo);
+		if (ct && !ct->secmark)
+			ct->secmark = skb->secmark;
 	}
 }
 
@@ -53,22 +52,20 @@ static void secmark_save(struct sk_buff *skb)
 static void secmark_restore(struct sk_buff *skb)
 {
 	if (!skb->secmark) {
-		u32 *connsecmark;
+		struct nf_conn *ct;
 		enum ip_conntrack_info ctinfo;
 
-		connsecmark = nf_ct_get_secmark(skb, &ctinfo);
-		if (connsecmark && *connsecmark)
-			if (skb->secmark != *connsecmark)
-				skb->secmark = *connsecmark;
+		ct = nf_ct_get(skb, &ctinfo);
+		if (ct && ct->secmark)
+			skb->secmark = ct->secmark;
 	}
 }
 
-static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
+static unsigned int target(struct sk_buff *skb, const struct net_device *in,
 			   const struct net_device *out, unsigned int hooknum,
 			   const struct xt_target *target,
-			   const void *targinfo, void *userinfo)
+			   const void *targinfo)
 {
-	struct sk_buff *skb = *pskb;
 	const struct xt_connsecmark_target_info *info = targinfo;
 
 	switch (info->mode) {
@@ -87,11 +84,11 @@ static unsigned int target(struct sk_buff **pskb, const struct net_device *in,
 	return XT_CONTINUE;
 }
 
-static int checkentry(const char *tablename, const void *entry,
-		      const struct xt_target *target, void *targinfo,
-		      unsigned int targinfosize, unsigned int hook_mask)
+static bool checkentry(const char *tablename, const void *entry,
+		       const struct xt_target *target, void *targinfo,
+		       unsigned int hook_mask)
 {
-	struct xt_connsecmark_target_info *info = targinfo;
+	const struct xt_connsecmark_target_info *info = targinfo;
 
 	switch (info->mode) {
 	case CONNSECMARK_SAVE:
@@ -100,55 +97,56 @@ static int checkentry(const char *tablename, const void *entry,
 
 	default:
 		printk(KERN_INFO PFX "invalid mode: %hu\n", info->mode);
-		return 0;
+		return false;
 	}
 
-	return 1;
+	if (nf_ct_l3proto_try_module_get(target->family) < 0) {
+		printk(KERN_WARNING "can't load conntrack support for "
+				    "proto=%d\n", target->family);
+		return false;
+	}
+	return true;
 }
 
-static struct xt_target ipt_connsecmark_reg = {
-	.name		= "CONNSECMARK",
-	.target		= target,
-	.targetsize	= sizeof(struct xt_connsecmark_target_info),
-	.table		= "mangle",
-	.checkentry	= checkentry,
-	.me		= THIS_MODULE,
-	.family		= AF_INET,
-	.revision	= 0,
-};
+static void
+destroy(const struct xt_target *target, void *targinfo)
+{
+	nf_ct_l3proto_module_put(target->family);
+}
 
-static struct xt_target ip6t_connsecmark_reg = {
-	.name		= "CONNSECMARK",
-	.target		= target,
-	.targetsize	= sizeof(struct xt_connsecmark_target_info),
-	.table		= "mangle",
-	.checkentry	= checkentry,
-	.me		= THIS_MODULE,
-	.family		= AF_INET6,
-	.revision	= 0,
+static struct xt_target xt_connsecmark_target[] __read_mostly = {
+	{
+		.name		= "CONNSECMARK",
+		.family		= AF_INET,
+		.checkentry	= checkentry,
+		.destroy	= destroy,
+		.target		= target,
+		.targetsize	= sizeof(struct xt_connsecmark_target_info),
+		.table		= "mangle",
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "CONNSECMARK",
+		.family		= AF_INET6,
+		.checkentry	= checkentry,
+		.destroy	= destroy,
+		.target		= target,
+		.targetsize	= sizeof(struct xt_connsecmark_target_info),
+		.table		= "mangle",
+		.me		= THIS_MODULE,
+	},
 };
 
 static int __init xt_connsecmark_init(void)
 {
-	int err;
-
-	need_conntrack();
-
-	err = xt_register_target(&ipt_connsecmark_reg);
-	if (err)
-		return err;
-
-	err = xt_register_target(&ip6t_connsecmark_reg);
-	if (err)
-		xt_unregister_target(&ipt_connsecmark_reg);
-
-	return err;
+	return xt_register_targets(xt_connsecmark_target,
+				   ARRAY_SIZE(xt_connsecmark_target));
 }
 
 static void __exit xt_connsecmark_fini(void)
 {
-	xt_unregister_target(&ip6t_connsecmark_reg);
-	xt_unregister_target(&ipt_connsecmark_reg);
+	xt_unregister_targets(xt_connsecmark_target,
+			      ARRAY_SIZE(xt_connsecmark_target));
 }
 
 module_init(xt_connsecmark_init);

@@ -31,10 +31,10 @@ MODULE_ALIAS("ip6t_esp");
 #endif
 
 /* Returns 1 if the spi is matched by the range, 0 otherwise */
-static inline int
-spi_match(u_int32_t min, u_int32_t max, u_int32_t spi, int invert)
+static inline bool
+spi_match(u_int32_t min, u_int32_t max, u_int32_t spi, bool invert)
 {
-	int r = 0;
+	bool r;
 	duprintf("esp spi_match:%c 0x%x <= 0x%x <= 0x%x", invert ? '!' : ' ',
 		 min, spi, max);
 	r = (spi >= min && spi <= max) ^ invert;
@@ -42,7 +42,7 @@ spi_match(u_int32_t min, u_int32_t max, u_int32_t spi, int invert)
 	return r;
 }
 
-static int
+static bool
 match(const struct sk_buff *skb,
       const struct net_device *in,
       const struct net_device *out,
@@ -50,14 +50,14 @@ match(const struct sk_buff *skb,
       const void *matchinfo,
       int offset,
       unsigned int protoff,
-      int *hotdrop)
+      bool *hotdrop)
 {
 	struct ip_esp_hdr _esp, *eh;
 	const struct xt_esp *espinfo = matchinfo;
 
 	/* Must not be a fragment. */
 	if (offset)
-		return 0;
+		return false;
 
 	eh = skb_header_pointer(skb, protoff, sizeof(_esp), &_esp);
 	if (eh == NULL) {
@@ -65,8 +65,8 @@ match(const struct sk_buff *skb,
 		 * can't.  Hence, no choice but to drop.
 		 */
 		duprintf("Dropping evil ESP tinygram.\n");
-		*hotdrop = 1;
-		return 0;
+		*hotdrop = true;
+		return false;
 	}
 
 	return spi_match(espinfo->spis[0], espinfo->spis[1], ntohl(eh->spi),
@@ -74,62 +74,52 @@ match(const struct sk_buff *skb,
 }
 
 /* Called when user tries to insert an entry of this type. */
-static int
+static bool
 checkentry(const char *tablename,
 	   const void *ip_void,
 	   const struct xt_match *match,
 	   void *matchinfo,
-	   unsigned int matchinfosize,
 	   unsigned int hook_mask)
 {
 	const struct xt_esp *espinfo = matchinfo;
 
 	if (espinfo->invflags & ~XT_ESP_INV_MASK) {
 		duprintf("xt_esp: unknown flags %X\n", espinfo->invflags);
-		return 0;
+		return false;
 	}
 
-	return 1;
+	return true;
 }
 
-static struct xt_match esp_match = {
-	.name		= "esp",
-	.family		= AF_INET,
-	.proto		= IPPROTO_ESP,
-	.match		= &match,
-	.matchsize	= sizeof(struct xt_esp),
-	.checkentry	= &checkentry,
-	.me		= THIS_MODULE,
-};
-
-static struct xt_match esp6_match = {
-	.name		= "esp",
-	.family		= AF_INET6,
-	.proto		= IPPROTO_ESP,
-	.match		= &match,
-	.matchsize	= sizeof(struct xt_esp),
-	.checkentry	= &checkentry,
-	.me		= THIS_MODULE,
+static struct xt_match xt_esp_match[] __read_mostly = {
+	{
+		.name		= "esp",
+		.family		= AF_INET,
+		.checkentry	= checkentry,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_esp),
+		.proto		= IPPROTO_ESP,
+		.me		= THIS_MODULE,
+	},
+	{
+		.name		= "esp",
+		.family		= AF_INET6,
+		.checkentry	= checkentry,
+		.match		= match,
+		.matchsize	= sizeof(struct xt_esp),
+		.proto		= IPPROTO_ESP,
+		.me		= THIS_MODULE,
+	},
 };
 
 static int __init xt_esp_init(void)
 {
-	int ret;
-	ret = xt_register_match(&esp_match);
-	if (ret)
-		return ret;
-
-	ret = xt_register_match(&esp6_match);
-	if (ret)
-		xt_unregister_match(&esp_match);
-
-	return ret;
+	return xt_register_matches(xt_esp_match, ARRAY_SIZE(xt_esp_match));
 }
 
 static void __exit xt_esp_cleanup(void)
 {
-	xt_unregister_match(&esp_match);
-	xt_unregister_match(&esp6_match);
+	xt_unregister_matches(xt_esp_match, ARRAY_SIZE(xt_esp_match));
 }
 
 module_init(xt_esp_init);

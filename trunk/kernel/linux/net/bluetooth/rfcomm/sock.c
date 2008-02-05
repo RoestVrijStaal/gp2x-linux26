@@ -1,4 +1,4 @@
-/* 
+/*
    RFCOMM implementation for Linux Bluetooth stack (BlueZ).
    Copyright (C) 2002 Maxim Krasnyansky <maxk@qualcomm.com>
    Copyright (C) 2002 Marcel Holtmann <marcel@holtmann.org>
@@ -11,13 +11,13 @@
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF THIRD PARTY RIGHTS.
    IN NO EVENT SHALL THE COPYRIGHT HOLDER(S) AND AUTHOR(S) BE LIABLE FOR ANY
-   CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES 
-   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN 
-   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF 
+   CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES, OR ANY DAMAGES
+   WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+   ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-   ALL LIABILITY, INCLUDING LIABILITY FOR INFRINGEMENT OF ANY PATENTS, 
-   COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS, RELATING TO USE OF THIS 
+   ALL LIABILITY, INCLUDING LIABILITY FOR INFRINGEMENT OF ANY PATENTS,
+   COPYRIGHTS, TRADEMARKS OR OTHER RIGHTS, RELATING TO USE OF THIS
    SOFTWARE IS DISCLAIMED.
 */
 
@@ -130,7 +130,7 @@ static struct sock *__rfcomm_get_sock_by_addr(u8 channel, bdaddr_t *src)
 	struct hlist_node *node;
 
 	sk_for_each(sk, node, &rfcomm_sk_list.head) {
-		if (rfcomm_pi(sk)->channel == channel && 
+		if (rfcomm_pi(sk)->channel == channel &&
 				!bacmp(&bt_sk(sk)->src, src))
 			break;
 	}
@@ -282,12 +282,12 @@ static struct proto rfcomm_proto = {
 	.obj_size	= sizeof(struct rfcomm_pinfo)
 };
 
-static struct sock *rfcomm_sock_alloc(struct socket *sock, int proto, gfp_t prio)
+static struct sock *rfcomm_sock_alloc(struct net *net, struct socket *sock, int proto, gfp_t prio)
 {
 	struct rfcomm_dlc *d;
 	struct sock *sk;
 
-	sk = sk_alloc(PF_BLUETOOTH, prio, &rfcomm_proto, 1);
+	sk = sk_alloc(net, PF_BLUETOOTH, prio, &rfcomm_proto);
 	if (!sk)
 		return NULL;
 
@@ -323,7 +323,7 @@ static struct sock *rfcomm_sock_alloc(struct socket *sock, int proto, gfp_t prio
 	return sk;
 }
 
-static int rfcomm_sock_create(struct socket *sock, int protocol)
+static int rfcomm_sock_create(struct net *net, struct socket *sock, int protocol)
 {
 	struct sock *sk;
 
@@ -336,7 +336,8 @@ static int rfcomm_sock_create(struct socket *sock, int protocol)
 
 	sock->ops = &rfcomm_sock_ops;
 
-	if (!(sk = rfcomm_sock_alloc(sock, protocol, GFP_KERNEL)))
+	sk = rfcomm_sock_alloc(net, sock, protocol, GFP_ATOMIC);
+	if (!sk)
 		return -ENOMEM;
 
 	rfcomm_sock_init(sk, NULL);
@@ -556,7 +557,6 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 	struct sock *sk = sock->sk;
 	struct rfcomm_dlc *d = rfcomm_pi(sk)->dlc;
 	struct sk_buff *skb;
-	int err;
 	int sent = 0;
 
 	if (msg->msg_flags & MSG_OOB)
@@ -571,7 +571,8 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	while (len) {
 		size_t size = min_t(size_t, len, d->mtu);
-		
+		int err;
+
 		skb = sock_alloc_send_skb(sk, size + RFCOMM_SKB_RESERVE,
 				msg->msg_flags & MSG_DONTWAIT, &err);
 		if (!skb)
@@ -581,13 +582,16 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 		err = memcpy_fromiovec(skb_put(skb, size), msg->msg_iov, size);
 		if (err) {
 			kfree_skb(skb);
-			sent = err;
+			if (sent == 0)
+				sent = err;
 			break;
 		}
 
 		err = rfcomm_dlc_send(d, skb);
 		if (err < 0) {
 			kfree_skb(skb);
+			if (sent == 0)
+				sent = err;
 			break;
 		}
 
@@ -597,7 +601,7 @@ static int rfcomm_sock_sendmsg(struct kiocb *iocb, struct socket *sock,
 
 	release_sock(sk);
 
-	return sent ? sent : err;
+	return sent;
 }
 
 static long rfcomm_sock_data_wait(struct sock *sk, long timeo)
@@ -839,7 +843,7 @@ static int rfcomm_sock_release(struct socket *sock)
 	return err;
 }
 
-/* ---- RFCOMM core layer callbacks ---- 
+/* ---- RFCOMM core layer callbacks ----
  *
  * called under rfcomm_lock()
  */
@@ -860,11 +864,11 @@ int rfcomm_connect_ind(struct rfcomm_session *s, u8 channel, struct rfcomm_dlc *
 
 	/* Check for backlog size */
 	if (sk_acceptq_is_full(parent)) {
-		BT_DBG("backlog full %d", parent->sk_ack_backlog); 
+		BT_DBG("backlog full %d", parent->sk_ack_backlog);
 		goto done;
 	}
 
-	sk = rfcomm_sock_alloc(NULL, BTPROTO_RFCOMM, GFP_ATOMIC);
+	sk = rfcomm_sock_alloc(parent->sk_net, NULL, BTPROTO_RFCOMM, GFP_ATOMIC);
 	if (!sk)
 		goto done;
 
@@ -944,7 +948,8 @@ int __init rfcomm_init_sockets(void)
 	if (err < 0)
 		goto error;
 
-	class_create_file(bt_class, &class_attr_rfcomm);
+	if (class_create_file(bt_class, &class_attr_rfcomm) < 0)
+		BT_ERR("Failed to create RFCOMM info file");
 
 	BT_INFO("RFCOMM socket layer initialized");
 

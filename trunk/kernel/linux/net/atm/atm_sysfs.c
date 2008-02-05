@@ -1,6 +1,5 @@
 /* ATM driver model support. */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/kobject.h>
@@ -31,15 +30,15 @@ static ssize_t show_address(struct class_device *cdev, char *buf)
 
 static ssize_t show_atmaddress(struct class_device *cdev, char *buf)
 {
-        unsigned long flags;
+	unsigned long flags;
 	char *pos = buf;
 	struct atm_dev *adev = to_atm_dev(cdev);
-        struct atm_dev_addr *aaddr;
+	struct atm_dev_addr *aaddr;
 	int bin[] = { 1, 2, 10, 6, 1 }, *fmt = bin;
 	int i, j;
 
-        spin_lock_irqsave(&adev->lock, flags);
-        list_for_each_entry(aaddr, &adev->local, entry) {
+	spin_lock_irqsave(&adev->lock, flags);
+	list_for_each_entry(aaddr, &adev->local, entry) {
 		for(i = 0, j = 0; i < ATM_ESA_LEN; ++i, ++j) {
 			if (j == *fmt) {
 				pos += sprintf(pos, ".");
@@ -50,7 +49,7 @@ static ssize_t show_atmaddress(struct class_device *cdev, char *buf)
 		}
 		pos += sprintf(pos, "\n");
 	}
-        spin_unlock_irqrestore(&adev->lock, flags);
+	spin_unlock_irqrestore(&adev->lock, flags);
 
 	return pos - buf;
 }
@@ -62,7 +61,7 @@ static ssize_t show_carrier(struct class_device *cdev, char *buf)
 
 	pos += sprintf(pos, "%d\n",
 		       adev->signal == ATM_PHY_SIG_LOST ? 0 : 1);
-		
+
 	return pos - buf;
 }
 
@@ -87,7 +86,7 @@ static ssize_t show_link_rate(struct class_device *cdev, char *buf)
 			link_rate = adev->link_rate * 8 * 53;
 	}
 	pos += sprintf(pos, "%d\n", link_rate);
-		
+
 	return pos - buf;
 }
 
@@ -106,10 +105,9 @@ static struct class_device_attribute *atm_attrs[] = {
 	NULL
 };
 
-static int atm_uevent(struct class_device *cdev, char **envp, int num_envp, char *buf, int size)
+static int atm_uevent(struct class_device *cdev, struct kobj_uevent_env *env)
 {
 	struct atm_dev *adev;
-	int i = 0, len = 0;
 
 	if (!cdev)
 		return -ENODEV;
@@ -118,11 +116,9 @@ static int atm_uevent(struct class_device *cdev, char **envp, int num_envp, char
 	if (!adev)
 		return -ENODEV;
 
-	if (add_uevent_var(envp, num_envp, &i, buf, size, &len,
-			   "NAME=%s%d", adev->type, adev->number))
+	if (add_uevent_var(env, "NAME=%s%d", adev->type, adev->number))
 		return -ENOMEM;
 
-	envp[i] = NULL;
 	return 0;
 }
 
@@ -142,7 +138,7 @@ static struct class atm_class = {
 int atm_register_sysfs(struct atm_dev *adev)
 {
 	struct class_device *cdev = &adev->class_dev;
-	int i, err;
+	int i, j, err;
 
 	cdev->class = &atm_class;
 	class_set_devdata(cdev, adev);
@@ -152,10 +148,19 @@ int atm_register_sysfs(struct atm_dev *adev)
 	if (err < 0)
 		return err;
 
-	for (i = 0; atm_attrs[i]; i++)
-		class_device_create_file(cdev, atm_attrs[i]);
+	for (i = 0; atm_attrs[i]; i++) {
+		err = class_device_create_file(cdev, atm_attrs[i]);
+		if (err)
+			goto err_out;
+	}
 
 	return 0;
+
+err_out:
+	for (j = 0; j < i; j++)
+		class_device_remove_file(cdev, atm_attrs[j]);
+	class_device_del(cdev);
+	return err;
 }
 
 void atm_unregister_sysfs(struct atm_dev *adev)
