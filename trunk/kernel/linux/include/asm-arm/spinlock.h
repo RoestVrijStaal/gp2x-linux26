@@ -85,7 +85,6 @@ static inline void __raw_spin_unlock(raw_spinlock_t *lock)
  * Write locks are easy - we just set bit 31.  When unlocking, we can
  * just write zero since the lock is exclusively held.
  */
-#define rwlock_is_locked(x)	(*((volatile unsigned int *)(x)) != 0)
 
 static inline void __raw_write_lock(raw_rwlock_t *rw)
 {
@@ -217,5 +216,9 @@ static inline int __raw_read_trylock(raw_rwlock_t *rw)
 
 /* read_can_lock - would read_trylock() succeed? */
 #define __raw_read_can_lock(x)		((x)->lock < 0x80000000)
+
+#define _raw_spin_relax(lock)	cpu_relax()
+#define _raw_read_relax(lock)	cpu_relax()
+#define _raw_write_relax(lock)	cpu_relax()
 
 #endif /* __ASM_SPINLOCK_H */

@@ -5,15 +5,19 @@
 
 #include <linux/mm.h> /* need struct page */
 
-#include <asm/scatterlist.h>
+#include <linux/scatterlist.h>
 
 /*
  * DMA-consistent mapping functions.  These allocate/free a region of
  * uncached, unwrite-buffered mapped memory space for use with DMA
  * devices.  This is the "generic" version.  The PCI specific version
  * is in pci.h
+ *
+ * Note: Drivers should NOT use this function directly, as it will break
+ * platforms with CONFIG_DMABOUNCE.
+ * Use the driver DMA support - see dma-mapping.h (dma_sync_*)
  */
-extern void consistent_sync(void *kaddr, size_t size, int rw);
+extern void dma_cache_maint(const void *kaddr, size_t size, int rw);
 
 /*
  * Return whether the given device DMA address mask can be supported
@@ -44,7 +48,7 @@ static inline int dma_get_cache_alignment(void)
 	return 32;
 }
 
-static inline int dma_is_consistent(dma_addr_t handle)
+static inline int dma_is_consistent(struct device *dev, dma_addr_t handle)
 {
 	return !!arch_is_coherent();
 }
@@ -55,6 +59,22 @@ static inline int dma_is_consistent(dma_addr_t handle)
 static inline int dma_mapping_error(dma_addr_t dma_addr)
 {
 	return dma_addr == ~0;
+}
+
+/*
+ * Dummy noncoherent implementation.  We don't provide a dma_cache_sync
+ * function so drivers using this API are highlighted with build warnings.
+ */
+static inline void *
+dma_alloc_noncoherent(struct device *dev, size_t size, dma_addr_t *handle, gfp_t gfp)
+{
+	return NULL;
+}
+
+static inline void
+dma_free_noncoherent(struct device *dev, size_t size, void *cpu_addr,
+		     dma_addr_t handle)
+{
 }
 
 /**
@@ -145,7 +165,7 @@ dma_map_single(struct device *dev, void *cpu_addr, size_t size,
 	       enum dma_data_direction dir)
 {
 	if (!arch_is_coherent())
-		consistent_sync(cpu_addr, size, dir);
+		dma_cache_maint(cpu_addr, size, dir);
 
 	return virt_to_dma(dev, (unsigned long)cpu_addr);
 }
@@ -254,11 +274,11 @@ dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 	for (i = 0; i < nents; i++, sg++) {
 		char *virt;
 
-		sg->dma_address = page_to_dma(dev, sg->page) + sg->offset;
-		virt = page_address(sg->page) + sg->offset;
+		sg->dma_address = page_to_dma(dev, sg_page(sg)) + sg->offset;
+		virt = sg_virt(sg);
 
 		if (!arch_is_coherent())
-			consistent_sync(virt, sg->length, dir);
+			dma_cache_maint(virt, sg->length, dir);
 	}
 
 	return nents;
@@ -314,7 +334,7 @@ dma_sync_single_for_cpu(struct device *dev, dma_addr_t handle, size_t size,
 			enum dma_data_direction dir)
 {
 	if (!arch_is_coherent())
-		consistent_sync((void *)dma_to_virt(dev, handle), size, dir);
+		dma_cache_maint((void *)dma_to_virt(dev, handle), size, dir);
 }
 
 static inline void
@@ -322,7 +342,7 @@ dma_sync_single_for_device(struct device *dev, dma_addr_t handle, size_t size,
 			   enum dma_data_direction dir)
 {
 	if (!arch_is_coherent())
-		consistent_sync((void *)dma_to_virt(dev, handle), size, dir);
+		dma_cache_maint((void *)dma_to_virt(dev, handle), size, dir);
 }
 #else
 extern void dma_sync_single_for_cpu(struct device*, dma_addr_t, size_t, enum dma_data_direction);
@@ -351,9 +371,9 @@ dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg, int nents,
 	int i;
 
 	for (i = 0; i < nents; i++, sg++) {
-		char *virt = page_address(sg->page) + sg->offset;
+		char *virt = sg_virt(sg);
 		if (!arch_is_coherent())
-			consistent_sync(virt, sg->length, dir);
+			dma_cache_maint(virt, sg->length, dir);
 	}
 }
 
@@ -364,9 +384,9 @@ dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg, int nents,
 	int i;
 
 	for (i = 0; i < nents; i++, sg++) {
-		char *virt = page_address(sg->page) + sg->offset;
+		char *virt = sg_virt(sg);
 		if (!arch_is_coherent())
-			consistent_sync(virt, sg->length, dir);
+			dma_cache_maint(virt, sg->length, dir);
 	}
 }
 #else
@@ -381,7 +401,7 @@ extern void dma_sync_sg_for_device(struct device*, struct scatterlist*, int, enu
  *
  * On the SA-1111, a bug limits DMA to only certain regions of RAM.
  * On the IXP425, the PCI inbound window is 64MB (256MB total RAM)
- * On some ADI engineering sytems, PCI inbound window is 32MB (12MB total RAM)
+ * On some ADI engineering systems, PCI inbound window is 32MB (12MB total RAM)
  *
  * The following are helper functions used by the dmabounce subystem
  *
@@ -425,7 +445,7 @@ extern void dmabounce_unregister_dev(struct device *);
  *
  * The dmabounce routines call this function whenever a dma-mapping
  * is requested to determine whether a given buffer needs to be bounced
- * or not. The function must return 0 if the the buffer is OK for
+ * or not. The function must return 0 if the buffer is OK for
  * DMA access and 1 if the buffer needs to be bounced.
  *
  */
