@@ -19,6 +19,10 @@
 
 #ifdef __KERNEL__
 
+#ifndef _LINUX_BITOPS_H
+#error only <linux/bitops.h> can be included directly
+#endif
+
 #include <linux/compiler.h>
 #include <asm/system.h>
 
@@ -37,9 +41,9 @@ static inline void ____atomic_set_bit(unsigned int bit, volatile unsigned long *
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	*p |= mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 }
 
 static inline void ____atomic_clear_bit(unsigned int bit, volatile unsigned long *p)
@@ -49,9 +53,9 @@ static inline void ____atomic_clear_bit(unsigned int bit, volatile unsigned long
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	*p &= ~mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 }
 
 static inline void ____atomic_change_bit(unsigned int bit, volatile unsigned long *p)
@@ -61,9 +65,9 @@ static inline void ____atomic_change_bit(unsigned int bit, volatile unsigned lon
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	*p ^= mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 }
 
 static inline int
@@ -75,10 +79,10 @@ ____atomic_test_and_set_bit(unsigned int bit, volatile unsigned long *p)
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	res = *p;
 	*p = res | mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return res & mask;
 }
@@ -92,10 +96,10 @@ ____atomic_test_and_clear_bit(unsigned int bit, volatile unsigned long *p)
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	res = *p;
 	*p = res & ~mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return res & mask;
 }
@@ -109,10 +113,10 @@ ____atomic_test_and_change_bit(unsigned int bit, volatile unsigned long *p)
 
 	p += bit >> 5;
 
-	local_irq_save(flags);
+	raw_local_irq_save(flags);
 	res = *p;
 	*p = res ^ mask;
-	local_irq_restore(flags);
+	raw_local_irq_restore(flags);
 
 	return res & mask;
 }
@@ -286,6 +290,7 @@ static inline int constant_fls(int x)
 
 #include <asm-generic/bitops/sched.h>
 #include <asm-generic/bitops/hweight.h>
+#include <asm-generic/bitops/lock.h>
 
 /*
  * Ext2 is defined to use little-endian byte ordering.

@@ -1,4 +1,4 @@
-/* linux/include/asm-arm/arch-s3c2410/spi.h
+/* linux/include/asm-arm/arch-s3c2410/spi-gpio.h
  *
  * Copyright (c) 2006 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
@@ -20,6 +20,8 @@ struct s3c2410_spigpio_info {
 	unsigned long		 pin_clk;
 	unsigned long		 pin_mosi;
 	unsigned long		 pin_miso;
+
+	int			 bus_num;
 
 	unsigned long		 board_size;
 	struct spi_board_info	*board_info;

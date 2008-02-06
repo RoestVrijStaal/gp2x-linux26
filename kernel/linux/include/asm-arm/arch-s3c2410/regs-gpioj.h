@@ -1,4 +1,4 @@
-/* linux/include/asm/hardware/s3c2410/regs-gpioj.h
+/* linux/include/asm-arm/arch-s3c2410/regs-gpioj.h
  *
  * Copyright (c) 2004 Simtec Electronics <linux@simtec.co.uk>
  *		      http://www.simtec.co.uk/products/SWLINUX/
@@ -97,6 +97,10 @@
 #define S3C2440_GPJ12_INP       (0x00 << 24)
 #define S3C2440_GPJ12_OUTP      (0x01 << 24)
 #define S3C2440_GPJ12_CAMRESET  (0x02 << 24)
+
+#define S3C2443_GPJ13		S3C2410_GPIONO(S3C2440_GPIO_BANKJ, 13)
+#define S3C2443_GPJ14		S3C2410_GPIONO(S3C2440_GPIO_BANKJ, 14)
+#define S3C2443_GPJ15		S3C2410_GPIONO(S3C2440_GPIO_BANKJ, 15)
 
 #endif	/* __ASM_ARCH_REGS_GPIOJ_H */
 

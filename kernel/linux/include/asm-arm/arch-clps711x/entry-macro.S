@@ -1,5 +1,5 @@
 /*
- * include/asm-arm/arch-CLPS711x/entry-macro.S
+ * include/asm-arm/arch-clps711x/entry-macro.S
  *
  * Low-level IRQ helper macros for CLPS711X-based platforms
  *
@@ -11,6 +11,12 @@
 #include <asm/hardware/clps7111.h>
 
 		.macro	disable_fiq
+		.endm
+
+		.macro	get_irqnr_preamble, base, tmp
+		.endm
+
+		.macro	arch_ret_to_user, tmp1, tmp2
 		.endm
 
 #if (INTSR2 - INTSR1) != (INTMR2 - INTMR1)
