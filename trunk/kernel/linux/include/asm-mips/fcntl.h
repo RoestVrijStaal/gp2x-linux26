@@ -13,6 +13,7 @@
 #define O_SYNC		0x0010
 #define O_NONBLOCK	0x0080
 #define O_CREAT         0x0100	/* not fcntl */
+#define O_TRUNC		0x0200	/* not fcntl */
 #define O_EXCL		0x0400	/* not fcntl */
 #define O_NOCTTY	0x0800	/* not fcntl */
 #define FASYNC		0x1000	/* fcntl, for BSD compatibility */
@@ -25,8 +26,6 @@
 
 #define F_SETOWN	24	/*  for sockets. */
 #define F_GETOWN	23	/*  for sockets. */
-#define F_SETSIG	10	/*  for sockets. */
-#define F_GETSIG	11	/*  for sockets. */
 
 #ifndef __mips64
 #define F_GETLK64	33	/*  using 'struct flock64' */
