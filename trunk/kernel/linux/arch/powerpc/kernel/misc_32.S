@@ -102,80 +102,6 @@ _GLOBAL(reloc_got2)
 	blr
 
 /*
- * identify_cpu,
- * called with r3 = data offset and r4 = CPU number
- * doesn't change r3
- */
-_GLOBAL(identify_cpu)
-	addis	r8,r3,cpu_specs@ha
-	addi	r8,r8,cpu_specs@l
-	mfpvr	r7
-1:
-	lwz	r5,CPU_SPEC_PVR_MASK(r8)
-	and	r5,r5,r7
-	lwz	r6,CPU_SPEC_PVR_VALUE(r8)
-	cmplw	0,r6,r5
-	beq	1f
-	addi	r8,r8,CPU_SPEC_ENTRY_SIZE
-	b	1b
-1:
-	addis	r6,r3,cur_cpu_spec@ha
-	addi	r6,r6,cur_cpu_spec@l
-	sub	r8,r8,r3
-	stw	r8,0(r6)
-	blr
-
-/*
- * do_cpu_ftr_fixups - goes through the list of CPU feature fixups
- * and writes nop's over sections of code that don't apply for this cpu.
- * r3 = data offset (not changed)
- */
-_GLOBAL(do_cpu_ftr_fixups)
-	/* Get CPU 0 features */
-	addis	r6,r3,cur_cpu_spec@ha
-	addi	r6,r6,cur_cpu_spec@l
-	lwz	r4,0(r6)
-	add	r4,r4,r3
-	lwz	r4,CPU_SPEC_FEATURES(r4)
-
-	/* Get the fixup table */
-	addis	r6,r3,__start___ftr_fixup@ha
-	addi	r6,r6,__start___ftr_fixup@l
-	addis	r7,r3,__stop___ftr_fixup@ha
-	addi	r7,r7,__stop___ftr_fixup@l
-
-	/* Do the fixup */
-1:	cmplw	0,r6,r7
-	bgelr
-	addi	r6,r6,16
-	lwz	r8,-16(r6)	/* mask */
-	and	r8,r8,r4
-	lwz	r9,-12(r6)	/* value */
-	cmplw	0,r8,r9
-	beq	1b
-	lwz	r8,-8(r6)	/* section begin */
-	lwz	r9,-4(r6)	/* section end */
-	subf.	r9,r8,r9
-	beq	1b
-	/* write nops over the section of code */
-	/* todo: if large section, add a branch at the start of it */
-	srwi	r9,r9,2
-	mtctr	r9
-	add	r8,r8,r3
-	lis	r0,0x60000000@h	/* nop */
-3:	stw	r0,0(r8)
-	andi.	r10,r4,CPU_FTR_SPLIT_ID_CACHE@l
-	beq	2f
-	dcbst	0,r8		/* suboptimal, but simpler */
-	sync
-	icbi	0,r8
-2:	addi	r8,r8,4
-	bdnz	3b
-	sync			/* additional sync needed on g4 */
-	isync
-	b	1b
-
-/*
  * call_setup_cpu - call the setup_cpu function for this cpu
  * r3 = data offset, r24 = cpu number
  *
@@ -362,7 +288,16 @@ _GLOBAL(_tlbia)
  */
 _GLOBAL(_tlbie)
 #if defined(CONFIG_40x)
+	/* We run the search with interrupts disabled because we have to change
+	 * the PID and I don't want to preempt when that happens.
+	 */
+	mfmsr	r5
+	mfspr	r6,SPRN_PID
+	wrteei	0
+	mtspr	SPRN_PID,r4
 	tlbsx.	r3, 0, r3
+	mtspr	SPRN_PID,r6
+	wrtee	r5
 	bne	10f
 	sync
 	/* There are only 64 TLB entries, so r3 < 64, which means bit 25 is clear.
@@ -371,13 +306,23 @@ _GLOBAL(_tlbie)
 	tlbwe	r3, r3, TLB_TAG
 	isync
 10:
-#elif defined(CONFIG_44x)
-	mfspr	r4,SPRN_MMUCR
-	mfspr	r5,SPRN_PID			/* Get PID */
-	rlwimi	r4,r5,0,24,31			/* Set TID */
-	mtspr	SPRN_MMUCR,r4
 
+#elif defined(CONFIG_44x)
+	mfspr	r5,SPRN_MMUCR
+	rlwimi	r5,r4,0,24,31			/* Set TID */
+
+	/* We have to run the search with interrupts disabled, even critical
+	 * and debug interrupts (in fact the only critical exceptions we have
+	 * are debug and machine check).  Otherwise  an interrupt which causes
+	 * a TLB miss can clobber the MMUCR between the mtspr and the tlbsx. */
+	mfmsr	r4
+	lis	r6,(MSR_EE|MSR_CE|MSR_ME|MSR_DE)@ha
+	addi	r6,r6,(MSR_EE|MSR_CE|MSR_ME|MSR_DE)@l
+	andc	r6,r4,r6
+	mtmsr	r6
+	mtspr	SPRN_MMUCR,r5
 	tlbsx.	r3, 0, r3
+	mtmsr	r4
 	bne	10f
 	sync
 	/* There are only 64 TLB entries, so r3 < 64,
@@ -466,7 +411,7 @@ BEGIN_FTR_SECTION
 	mtspr   SPRN_L1CSR0,r3
 	isync
 	blr
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_UNIFIED_ID_CACHE)
 	mfspr	r3,SPRN_L1CSR1
 	ori	r3,r3,L1CSR1_ICFI|L1CSR1_ICLFR
 	mtspr	SPRN_L1CSR1,r3
@@ -493,7 +438,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 _GLOBAL(__flush_icache_range)
 BEGIN_FTR_SECTION
 	blr				/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	li	r5,L1_CACHE_BYTES-1
 	andc	r3,r3,r5
 	subf	r4,r3,r4
@@ -588,8 +533,8 @@ _GLOBAL(invalidate_dcache_range)
  */
 _GLOBAL(__flush_dcache_icache)
 BEGIN_FTR_SECTION
-	blr					/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+	blr
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	rlwinm	r3,r3,0,0,19			/* Get page base address */
 	li	r4,4096/L1_CACHE_BYTES	/* Number of lines in a page */
 	mtctr	r4
@@ -598,12 +543,21 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 	addi	r3,r3,L1_CACHE_BYTES
 	bdnz	0b
 	sync
+#ifndef CONFIG_44x
+	/* We don't flush the icache on 44x. Those have a virtual icache
+	 * and we don't have access to the virtual address here (it's
+	 * not the page vaddr but where it's mapped in user space). The
+	 * flushing of the icache on these is handled elsewhere, when
+	 * a change in the address space occurs, before returning to
+	 * user space
+	 */
 	mtctr	r4
 1:	icbi	0,r6
 	addi	r6,r6,L1_CACHE_BYTES
 	bdnz	1b
 	sync
 	isync
+#endif /* CONFIG_44x */
 	blr
 
 /*
@@ -617,7 +571,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
 _GLOBAL(__flush_dcache_icache_phys)
 BEGIN_FTR_SECTION
 	blr					/* for 601, do nothing */
-END_FTR_SECTION_IFCLR(CPU_FTR_SPLIT_ID_CACHE)
+END_FTR_SECTION_IFSET(CPU_FTR_COHERENT_ICACHE)
 	mfmsr	r10
 	rlwinm	r0,r10,0,28,26			/* clear DR */
 	mtmsr	r0
@@ -808,10 +762,6 @@ _GLOBAL(abs)
 	sub	r3,r3,r4
 	blr
 
-_GLOBAL(_get_SP)
-	mr	r3,r1		/* Close enough */
-	blr
-
 /*
  * Create a kernel thread
  *   kernel_thread(fn, arg, flags)
@@ -843,7 +793,7 @@ _GLOBAL(kernel_thread)
 	addi	r1,r1,16
 	blr
 
-_GLOBAL(execve)
+_GLOBAL(kernel_execve)
 	li	r0,__NR_execve
 	sc
 	bnslr

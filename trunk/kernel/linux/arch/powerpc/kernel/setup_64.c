@@ -20,7 +20,6 @@
 #include <linux/reboot.h>
 #include <linux/delay.h>
 #include <linux/initrd.h>
-#include <linux/ide.h>
 #include <linux/seq_file.h>
 #include <linux/ioport.h>
 #include <linux/console.h>
@@ -33,6 +32,7 @@
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
 #include <linux/bootmem.h>
+#include <linux/pci.h>
 #include <asm/io.h>
 #include <asm/kdump.h>
 #include <asm/prom.h>
@@ -56,7 +56,6 @@
 #include <asm/page.h>
 #include <asm/mmu.h>
 #include <asm/lmb.h>
-#include <asm/iseries/it_lp_naca.h>
 #include <asm/firmware.h>
 #include <asm/xmon.h>
 #include <asm/udbg.h>
@@ -72,17 +71,16 @@
 
 int have_of = 1;
 int boot_cpuid = 0;
-dev_t boot_dev;
 u64 ppc64_pft_size;
 
 /* Pick defaults since we might want to patch instructions
  * before we've read this from the device tree.
  */
 struct ppc64_caches ppc64_caches = {
-	.dline_size = 0x80,
-	.log_dline_size = 7,
-	.iline_size = 0x80,
-	.log_iline_size = 7
+	.dline_size = 0x40,
+	.log_dline_size = 6,
+	.iline_size = 0x40,
+	.log_iline_size = 6
 };
 EXPORT_SYMBOL_GPL(ppc64_caches);
 
@@ -94,11 +92,6 @@ int dcache_bsize;
 int icache_bsize;
 int ucache_bsize;
 
-#ifdef CONFIG_MAGIC_SYSRQ
-unsigned long SYSRQ_KEY;
-#endif /* CONFIG_MAGIC_SYSRQ */
-
-
 #ifdef CONFIG_SMP
 
 static int smt_enabled_cmdline;
@@ -107,7 +100,7 @@ static int smt_enabled_cmdline;
 static void check_smt_enabled(void)
 {
 	struct device_node *dn;
-	char *smt_option;
+	const char *smt_option;
 
 	/* Allow the command line to overrule the OF option */
 	if (smt_enabled_cmdline)
@@ -116,7 +109,7 @@ static void check_smt_enabled(void)
 	dn = of_find_node_by_path("/options");
 
 	if (dn) {
-		smt_option = (char *)get_property(dn, "ibm,smt-enabled", NULL);
+		smt_option = of_get_property(dn, "ibm,smt-enabled", NULL);
 
                 if (smt_option) {
 			if (!strcmp(smt_option, "on"))
@@ -176,6 +169,9 @@ void __init setup_paca(int cpu)
 
 void __init early_setup(unsigned long dt_ptr)
 {
+	/* Identify CPU type */
+	identify_cpu(0, mfspr(SPRN_PVR));
+
 	/* Assume we're on cpu 0 for now. Don't write to the paca yet! */
 	setup_paca(0);
 
@@ -185,9 +181,9 @@ void __init early_setup(unsigned long dt_ptr)
  	DBG(" -> early_setup(), dt_ptr: 0x%lx\n", dt_ptr);
 
 	/*
-	 * Do early initializations using the flattened device
-	 * tree, like retreiving the physical memory map or
-	 * calculating/retreiving the hash table size
+	 * Do early initialization using the flattened device
+	 * tree, such as retrieving the physical memory map or
+	 * calculating/retrieving the hash table size.
 	 */
 	early_init_devtree(__va(dt_ptr));
 
@@ -229,8 +225,8 @@ void early_setup_secondary(void)
 {
 	struct paca_struct *lpaca = get_paca();
 
-	/* Mark enabled in PACA */
-	lpaca->proc_enabled = 0;
+	/* Mark interrupts enabled in PACA */
+	lpaca->soft_enabled = 0;
 
 	/* Initialize hash table for that CPU */
 	htab_initialize_secondary();
@@ -293,25 +289,18 @@ static void __init initialize_cache_info(void)
 		 */
 
 		if ( num_cpus == 1 ) {
-			u32 *sizep, *lsizep;
+			const u32 *sizep, *lsizep;
 			u32 size, lsize;
-			const char *dc, *ic;
-
-			/* Then read cache informations */
-			if (machine_is(powermac)) {
-				dc = "d-cache-block-size";
-				ic = "i-cache-block-size";
-			} else {
-				dc = "d-cache-line-size";
-				ic = "i-cache-line-size";
-			}
 
 			size = 0;
 			lsize = cur_cpu_spec->dcache_bsize;
-			sizep = (u32 *)get_property(np, "d-cache-size", NULL);
+			sizep = of_get_property(np, "d-cache-size", NULL);
 			if (sizep != NULL)
 				size = *sizep;
-			lsizep = (u32 *) get_property(np, dc, NULL);
+			lsizep = of_get_property(np, "d-cache-block-size", NULL);
+			/* fallback if block size missing */
+			if (lsizep == NULL)
+				lsizep = of_get_property(np, "d-cache-line-size", NULL);
 			if (lsizep != NULL)
 				lsize = *lsizep;
 			if (sizep == 0 || lsizep == 0)
@@ -325,10 +314,12 @@ static void __init initialize_cache_info(void)
 
 			size = 0;
 			lsize = cur_cpu_spec->icache_bsize;
-			sizep = (u32 *)get_property(np, "i-cache-size", NULL);
+			sizep = of_get_property(np, "i-cache-size", NULL);
 			if (sizep != NULL)
 				size = *sizep;
-			lsizep = (u32 *)get_property(np, ic, NULL);
+			lsizep = of_get_property(np, "i-cache-block-size", NULL);
+			if (lsizep == NULL)
+				lsizep = of_get_property(np, "i-cache-line-size", NULL);
 			if (lsizep != NULL)
 				lsize = *lsizep;
 			if (sizep == 0 || lsizep == 0)
@@ -353,6 +344,14 @@ static void __init initialize_cache_info(void)
 void __init setup_system(void)
 {
 	DBG(" -> setup_system()\n");
+
+	/* Apply the CPUs-specific and firmware specific fixups to kernel
+	 * text (nop out sections not relevant to this CPU or this firmware)
+	 */
+	do_feature_fixups(cur_cpu_spec->cpu_features,
+			  &__start___ftr_fixup, &__stop___ftr_fixup);
+	do_feature_fixups(powerpc_firmware_features,
+			  &__start___fw_ftr_fixup, &__stop___fw_ftr_fixup);
 
 	/*
 	 * Unflatten the device-tree passed by prom_init or kexec
@@ -387,7 +386,8 @@ void __init setup_system(void)
 	 * setting up the hash table pointers. It also sets up some interrupt-mapping
 	 * related options that will be used by finish_device_tree()
 	 */
-	ppc_md.init_early();
+	if (ppc_md.init_early)
+		ppc_md.init_early();
 
  	/*
 	 * We can discover serial ports now since the above did setup the
@@ -397,18 +397,14 @@ void __init setup_system(void)
 	find_legacy_serial_ports();
 
 	/*
-	 * Initialize xmon
-	 */
-#ifdef CONFIG_XMON_DEFAULT
-	xmon_init(1);
-#endif
-	/*
 	 * Register early console
 	 */
 	register_early_udbg_console();
 
-	if (do_early_xmon)
-		debugger(NULL);
+	/*
+	 * Initialize xmon
+	 */
+	xmon_setup();
 
 	check_smt_enabled();
 	smp_setup_cpu_maps();
@@ -420,16 +416,19 @@ void __init setup_system(void)
 	smp_release_cpus();
 #endif
 
-	printk("Starting Linux PPC64 %s\n", system_utsname.version);
+	printk("Starting Linux PPC64 %s\n", init_utsname()->version);
 
 	printk("-----------------------------------------------------\n");
 	printk("ppc64_pft_size                = 0x%lx\n", ppc64_pft_size);
 	printk("physicalMemorySize            = 0x%lx\n", lmb_phys_mem_size());
-	printk("ppc64_caches.dcache_line_size = 0x%x\n",
-	       ppc64_caches.dline_size);
-	printk("ppc64_caches.icache_line_size = 0x%x\n",
-	       ppc64_caches.iline_size);
-	printk("htab_address                  = 0x%p\n", htab_address);
+	if (ppc64_caches.dline_size != 0x80)
+		printk("ppc64_caches.dcache_line_size = 0x%x\n",
+		       ppc64_caches.dline_size);
+	if (ppc64_caches.iline_size != 0x80)
+		printk("ppc64_caches.icache_line_size = 0x%x\n",
+		       ppc64_caches.iline_size);
+	if (htab_address)
+		printk("htab_address                  = 0x%p\n", htab_address);
 	printk("htab_hash_mask                = 0x%lx\n", htab_hash_mask);
 #if PHYSICAL_START > 0
 	printk("physical_start                = 0x%x\n", PHYSICAL_START);
@@ -529,7 +528,8 @@ void __init setup_arch(char **cmdline_p)
 	conswitchp = &dummy_con;
 #endif
 
-	ppc_md.setup_arch();
+	if (ppc_md.setup_arch)
+		ppc_md.setup_arch();
 
 	paging_init();
 	ppc64_boot_msg(0x15, "Setup Done");
@@ -581,19 +581,29 @@ void __init setup_per_cpu_areas(void)
 	char *ptr;
 
 	/* Copy section for each CPU (we discard the original) */
-	size = ALIGN(__per_cpu_end - __per_cpu_start, SMP_CACHE_BYTES);
+	size = ALIGN(__per_cpu_end - __per_cpu_start, PAGE_SIZE);
 #ifdef CONFIG_MODULES
 	if (size < PERCPU_ENOUGH_ROOM)
 		size = PERCPU_ENOUGH_ROOM;
 #endif
 
 	for_each_possible_cpu(i) {
-		ptr = alloc_bootmem_node(NODE_DATA(cpu_to_node(i)), size);
+		ptr = alloc_bootmem_pages_node(NODE_DATA(cpu_to_node(i)), size);
 		if (!ptr)
 			panic("Cannot allocate cpu data for CPU %d\n", i);
 
 		paca[i].data_offset = ptr - __per_cpu_start;
 		memcpy(ptr, __per_cpu_start, __per_cpu_end - __per_cpu_start);
 	}
+
+	/* Now that per_cpu is setup, initialize cpu_sibling_map */
+	smp_setup_cpu_sibling_map();
 }
 #endif
+
+
+#ifdef CONFIG_PPC_INDIRECT_IO
+struct ppc_pci_io ppc_pci_io;
+EXPORT_SYMBOL(ppc_pci_io);
+#endif /* CONFIG_PPC_INDIRECT_IO */
+

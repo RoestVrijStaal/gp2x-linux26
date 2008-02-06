@@ -7,7 +7,6 @@
  *    Copyright (C) 1996-2001 Cort Dougan
  *  Adapted for Power Macintosh by Paul Mackerras
  *    Copyright (C) 1996 Paul Mackerras (paulus@cs.anu.edu.au)
- *  Amiga/APUS changes by Jesper Skov (jskov@cygnus.co.uk).
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -52,6 +51,8 @@
 #include <linux/radix-tree.h>
 #include <linux/mutex.h>
 #include <linux/bootmem.h>
+#include <linux/pci.h>
+#include <linux/debugfs.h>
 
 #include <asm/uaccess.h>
 #include <asm/system.h>
@@ -63,8 +64,10 @@
 #include <asm/ptrace.h>
 #include <asm/machdep.h>
 #include <asm/udbg.h>
-#ifdef CONFIG_PPC_ISERIES
+#ifdef CONFIG_PPC64
 #include <asm/paca.h>
+#include <asm/firmware.h>
+#include <asm/lv1call.h>
 #endif
 
 int __irq_offset_value;
@@ -94,6 +97,84 @@ extern atomic_t ipi_sent;
 EXPORT_SYMBOL(irq_desc);
 
 int distribute_irqs = 1;
+
+static inline unsigned long get_hard_enabled(void)
+{
+	unsigned long enabled;
+
+	__asm__ __volatile__("lbz %0,%1(13)"
+	: "=r" (enabled) : "i" (offsetof(struct paca_struct, hard_enabled)));
+
+	return enabled;
+}
+
+static inline void set_soft_enabled(unsigned long enable)
+{
+	__asm__ __volatile__("stb %0,%1(13)"
+	: : "r" (enable), "i" (offsetof(struct paca_struct, soft_enabled)));
+}
+
+void local_irq_restore(unsigned long en)
+{
+	/*
+	 * get_paca()->soft_enabled = en;
+	 * Is it ever valid to use local_irq_restore(0) when soft_enabled is 1?
+	 * That was allowed before, and in such a case we do need to take care
+	 * that gcc will set soft_enabled directly via r13, not choose to use
+	 * an intermediate register, lest we're preempted to a different cpu.
+	 */
+	set_soft_enabled(en);
+	if (!en)
+		return;
+
+	if (firmware_has_feature(FW_FEATURE_ISERIES)) {
+		/*
+		 * Do we need to disable preemption here?  Not really: in the
+		 * unlikely event that we're preempted to a different cpu in
+		 * between getting r13, loading its lppaca_ptr, and loading
+		 * its any_int, we might call iseries_handle_interrupts without
+		 * an interrupt pending on the new cpu, but that's no disaster,
+		 * is it?  And the business of preempting us off the old cpu
+		 * would itself involve a local_irq_restore which handles the
+		 * interrupt to that cpu.
+		 *
+		 * But use "local_paca->lppaca_ptr" instead of "get_lppaca()"
+		 * to avoid any preemption checking added into get_paca().
+		 */
+		if (local_paca->lppaca_ptr->int_dword.any_int)
+			iseries_handle_interrupts();
+		return;
+	}
+
+	/*
+	 * if (get_paca()->hard_enabled) return;
+	 * But again we need to take care that gcc gets hard_enabled directly
+	 * via r13, not choose to use an intermediate register, lest we're
+	 * preempted to a different cpu in between the two instructions.
+	 */
+	if (get_hard_enabled())
+		return;
+
+	/*
+	 * Need to hard-enable interrupts here.  Since currently disabled,
+	 * no need to take further asm precautions against preemption; but
+	 * use local_paca instead of get_paca() to avoid preemption checking.
+	 */
+	local_paca->hard_enabled = en;
+	if ((int)mfspr(SPRN_DEC) < 0)
+		mtspr(SPRN_DEC, 1);
+
+	/*
+	 * Force the delivery of pending soft-disabled interrupts on PS3.
+	 * Any HV call will have this side effect.
+	 */
+	if (firmware_has_feature(FW_FEATURE_PS3_LV1)) {
+		u64 tmp;
+		lv1_get_version_info(&tmp);
+	}
+
+	__hard_irq_enable();
+}
 #endif /* CONFIG_PPC64 */
 
 int show_interrupts(struct seq_file *p, void *v)
@@ -186,12 +267,13 @@ void fixup_irqs(cpumask_t map)
 
 void do_IRQ(struct pt_regs *regs)
 {
+	struct pt_regs *old_regs = set_irq_regs(regs);
 	unsigned int irq;
 #ifdef CONFIG_IRQSTACKS
 	struct thread_info *curtp, *irqtp;
 #endif
 
-        irq_enter();
+	irq_enter();
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 	/* Debugging check for stack overflow: is there less than 2KB free? */
@@ -210,12 +292,12 @@ void do_IRQ(struct pt_regs *regs)
 
 	/*
 	 * Every platform is required to implement ppc_md.get_irq.
-	 * This function will either return an irq number or -1 to
+	 * This function will either return an irq number or NO_IRQ to
 	 * indicate there are no more pending.
-	 * The value -2 is for buggy hardware and means that this IRQ
-	 * has already been handled. -- Tom
+	 * The value NO_IRQ_IGNORE is for buggy hardware and means that this
+	 * IRQ has already been handled. -- Tom
 	 */
-	irq = ppc_md.get_irq(regs);
+	irq = ppc_md.get_irq();
 
 	if (irq != NO_IRQ && irq != NO_IRQ_IGNORE) {
 #ifdef CONFIG_IRQSTACKS
@@ -229,21 +311,23 @@ void do_IRQ(struct pt_regs *regs)
 				handler = &__do_IRQ;
 			irqtp->task = curtp->task;
 			irqtp->flags = 0;
-			call_handle_irq(irq, desc, regs, irqtp, handler);
+			call_handle_irq(irq, desc, irqtp, handler);
 			irqtp->task = NULL;
 			if (irqtp->flags)
 				set_bits(irqtp->flags, &curtp->flags);
 		} else
 #endif
-			generic_handle_irq(irq, regs);
+			generic_handle_irq(irq);
 	} else if (irq != NO_IRQ_IGNORE)
 		/* That's not SMP safe ... but who cares ? */
 		ppc_spurious_interrupts++;
 
-        irq_exit();
+	irq_exit();
+	set_irq_regs(old_regs);
 
 #ifdef CONFIG_PPC_ISERIES
-	if (get_lppaca()->int_dword.fields.decr_int) {
+	if (firmware_has_feature(FW_FEATURE_ISERIES) &&
+			get_lppaca()->int_dword.fields.decr_int) {
 		get_lppaca()->int_dword.fields.decr_int = 0;
 		/* Signal a fake decrementer interrupt */
 		timer_interrupt(regs);
@@ -253,7 +337,8 @@ void do_IRQ(struct pt_regs *regs)
 
 void __init init_IRQ(void)
 {
-	ppc_md.init_IRQ();
+	if (ppc_md.init_IRQ)
+		ppc_md.init_IRQ();
 #ifdef CONFIG_PPC64
 	irq_ctx_init();
 #endif
@@ -311,7 +396,6 @@ void do_softirq(void)
 
 	local_irq_restore(flags);
 }
-EXPORT_SYMBOL(do_softirq);
 
 
 /*
@@ -321,14 +405,26 @@ EXPORT_SYMBOL(do_softirq);
 #ifdef CONFIG_PPC_MERGE
 
 static LIST_HEAD(irq_hosts);
-static spinlock_t irq_big_lock = SPIN_LOCK_UNLOCKED;
+static DEFINE_SPINLOCK(irq_big_lock);
 static DEFINE_PER_CPU(unsigned int, irq_radix_reader);
 static unsigned int irq_radix_writer;
 struct irq_map_entry irq_map[NR_IRQS];
 static unsigned int irq_virq_count = NR_IRQS;
 static struct irq_host *irq_default_host;
 
-struct irq_host *irq_alloc_host(unsigned int revmap_type,
+irq_hw_number_t virq_to_hw(unsigned int virq)
+{
+	return irq_map[virq].hwirq;
+}
+EXPORT_SYMBOL_GPL(virq_to_hw);
+
+static int default_irq_host_match(struct irq_host *h, struct device_node *np)
+{
+	return h->of_node != NULL && h->of_node == np;
+}
+
+struct irq_host *irq_alloc_host(struct device_node *of_node,
+				unsigned int revmap_type,
 				unsigned int revmap_arg,
 				struct irq_host_ops *ops,
 				irq_hw_number_t inval_irq)
@@ -342,13 +438,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	/* Allocate structure and revmap table if using linear mapping */
 	if (revmap_type == IRQ_HOST_MAP_LINEAR)
 		size += revmap_arg * sizeof(unsigned int);
-	if (mem_init_done)
-		host = kzalloc(size, GFP_KERNEL);
-	else {
-		host = alloc_bootmem(size);
-		if (host)
-			memset(host, 0, size);
-	}
+	host = zalloc_maybe_bootmem(size, GFP_KERNEL);
 	if (host == NULL)
 		return NULL;
 
@@ -356,6 +446,10 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	host->revmap_type = revmap_type;
 	host->inval_irq = inval_irq;
 	host->ops = ops;
+	host->of_node = of_node;
+
+	if (host->ops->match == NULL)
+		host->ops->match = default_irq_host_match;
 
 	spin_lock_irqsave(&irq_big_lock, flags);
 
@@ -387,7 +481,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 		host->inval_irq = 0;
 		/* setup us as the host for all legacy interrupts */
 		for (i = 1; i < NUM_ISA_INTERRUPTS; i++) {
-			irq_map[i].hwirq = 0;
+			irq_map[i].hwirq = i;
 			smp_wmb();
 			irq_map[i].host = host;
 			smp_wmb();
@@ -397,7 +491,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 
 			/* Legacy flags are left to default at this point,
 			 * one can then use irq_create_mapping() to
-			 * explicitely change them
+			 * explicitly change them
 			 */
 			ops->map(host, i, i);
 		}
@@ -405,7 +499,7 @@ struct irq_host *irq_alloc_host(unsigned int revmap_type,
 	case IRQ_HOST_MAP_LINEAR:
 		rmap = (unsigned int *)(host + 1);
 		for (i = 0; i < revmap_arg; i++)
-			rmap[i] = IRQ_NONE;
+			rmap[i] = NO_IRQ;
 		host->revmap_data.linear.size = revmap_arg;
 		smp_wmb();
 		host->revmap_data.linear.revmap = rmap;
@@ -431,7 +525,7 @@ struct irq_host *irq_find_host(struct device_node *node)
 	 */
 	spin_lock_irqsave(&irq_big_lock, flags);
 	list_for_each_entry(h, &irq_hosts, link)
-		if (h->ops->match == NULL || h->ops->match(h, node)) {
+		if (h->ops->match(h, node)) {
 			found = h;
 			break;
 		}
@@ -507,6 +601,49 @@ static void irq_radix_rdunlock(unsigned long flags)
 	local_irq_restore(flags);
 }
 
+static int irq_setup_virq(struct irq_host *host, unsigned int virq,
+			    irq_hw_number_t hwirq)
+{
+	/* Clear IRQ_NOREQUEST flag */
+	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
+
+	/* map it */
+	smp_wmb();
+	irq_map[virq].hwirq = hwirq;
+	smp_mb();
+
+	if (host->ops->map(host, virq, hwirq)) {
+		pr_debug("irq: -> mapping failed, freeing\n");
+		irq_free_virt(virq, 1);
+		return -1;
+	}
+
+	return 0;
+}
+
+unsigned int irq_create_direct_mapping(struct irq_host *host)
+{
+	unsigned int virq;
+
+	if (host == NULL)
+		host = irq_default_host;
+
+	BUG_ON(host == NULL);
+	WARN_ON(host->revmap_type != IRQ_HOST_MAP_NOMAP);
+
+	virq = irq_alloc_virt(host, 1, 0);
+	if (virq == NO_IRQ) {
+		pr_debug("irq: create_direct virq allocation failed\n");
+		return NO_IRQ;
+	}
+
+	pr_debug("irq: create_direct obtained virq %d\n", virq);
+
+	if (irq_setup_virq(host, virq, virq))
+		return NO_IRQ;
+
+	return virq;
+}
 
 unsigned int irq_create_mapping(struct irq_host *host,
 				irq_hw_number_t hwirq)
@@ -530,7 +667,9 @@ unsigned int irq_create_mapping(struct irq_host *host,
 	 * host->ops->map() to update the flags
 	 */
 	virq = irq_find_mapping(host, hwirq);
-	if (virq != IRQ_NONE) {
+	if (virq != NO_IRQ) {
+		if (host->ops->remap)
+			host->ops->remap(host, virq, hwirq);
 		pr_debug("irq: -> existing mapping on virq %d\n", virq);
 		return virq;
 	}
@@ -553,24 +692,15 @@ unsigned int irq_create_mapping(struct irq_host *host,
 	}
 	pr_debug("irq: -> obtained virq %d\n", virq);
 
-	/* Clear IRQ_NOREQUEST flag */
-	get_irq_desc(virq)->status &= ~IRQ_NOREQUEST;
-
-	/* map it */
-	smp_wmb();
-	irq_map[virq].hwirq = hwirq;
-	smp_mb();
-	if (host->ops->map(host, virq, hwirq)) {
-		pr_debug("irq: -> mapping failed, freeing\n");
-		irq_free_virt(virq, 1);
+	if (irq_setup_virq(host, virq, hwirq))
 		return NO_IRQ;
-	}
+
 	return virq;
 }
 EXPORT_SYMBOL_GPL(irq_create_mapping);
 
-extern unsigned int irq_create_of_mapping(struct device_node *controller,
-					  u32 *intspec, unsigned int intsize)
+unsigned int irq_create_of_mapping(struct device_node *controller,
+				   u32 *intspec, unsigned int intsize)
 {
 	struct irq_host *host;
 	irq_hw_number_t hwirq;
@@ -623,10 +753,14 @@ EXPORT_SYMBOL_GPL(irq_of_parse_and_map);
 
 void irq_dispose_mapping(unsigned int virq)
 {
-	struct irq_host *host = irq_map[virq].host;
+	struct irq_host *host;
 	irq_hw_number_t hwirq;
 	unsigned long flags;
 
+	if (virq == NO_IRQ)
+		return;
+
+	host = irq_map[virq].host;
 	WARN_ON (host == NULL);
 	if (host == NULL)
 		return;
@@ -651,7 +785,7 @@ void irq_dispose_mapping(unsigned int virq)
 	switch(host->revmap_type) {
 	case IRQ_HOST_MAP_LINEAR:
 		if (hwirq < host->revmap_data.linear.size)
-			host->revmap_data.linear.revmap[hwirq] = IRQ_NONE;
+			host->revmap_data.linear.revmap[hwirq] = NO_IRQ;
 		break;
 	case IRQ_HOST_MAP_TREE:
 		/* Check if radix tree allocated yet */
@@ -776,7 +910,6 @@ unsigned int irq_alloc_virt(struct irq_host *host,
 {
 	unsigned long flags;
 	unsigned int i, j, found = NO_IRQ;
-	unsigned int limit = irq_virq_count - count;
 
 	if (count == 0 || count > (irq_virq_count - NUM_ISA_INTERRUPTS))
 		return NO_IRQ;
@@ -793,14 +926,16 @@ unsigned int irq_alloc_virt(struct irq_host *host,
 	/* Look for count consecutive numbers in the allocatable
 	 * (non-legacy) space
 	 */
-	for (i = NUM_ISA_INTERRUPTS; i <= limit; ) {
-		for (j = i; j < (i + count); j++)
-			if (irq_map[j].host != NULL) {
-				i = j + 1;
-				continue;
-			}
-		found = i;
-		break;
+	for (i = NUM_ISA_INTERRUPTS, j = 0; i < irq_virq_count; i++) {
+		if (irq_map[i].host != NULL)
+			j = 0;
+		else
+			j++;
+
+		if (j == count) {
+			found = i - count + 1;
+			break;
+		}
 	}
 	if (found == NO_IRQ) {
 		spin_unlock_irqrestore(&irq_big_lock, flags);
@@ -865,31 +1000,69 @@ static int irq_late_init(void)
 }
 arch_initcall(irq_late_init);
 
+#ifdef CONFIG_VIRQ_DEBUG
+static int virq_debug_show(struct seq_file *m, void *private)
+{
+	unsigned long flags;
+	irq_desc_t *desc;
+	const char *p;
+	char none[] = "none";
+	int i;
+
+	seq_printf(m, "%-5s  %-7s  %-15s  %s\n", "virq", "hwirq",
+		      "chip name", "host name");
+
+	for (i = 1; i < NR_IRQS; i++) {
+		desc = get_irq_desc(i);
+		spin_lock_irqsave(&desc->lock, flags);
+
+		if (desc->action && desc->action->handler) {
+			seq_printf(m, "%5d  ", i);
+			seq_printf(m, "0x%05lx  ", virq_to_hw(i));
+
+			if (desc->chip && desc->chip->typename)
+				p = desc->chip->typename;
+			else
+				p = none;
+			seq_printf(m, "%-15s  ", p);
+
+			if (irq_map[i].host && irq_map[i].host->of_node)
+				p = irq_map[i].host->of_node->full_name;
+			else
+				p = none;
+			seq_printf(m, "%s\n", p);
+		}
+
+		spin_unlock_irqrestore(&desc->lock, flags);
+	}
+
+	return 0;
+}
+
+static int virq_debug_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, virq_debug_show, inode->i_private);
+}
+
+static const struct file_operations virq_debug_fops = {
+	.open = virq_debug_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
+static int __init irq_debugfs_init(void)
+{
+	if (debugfs_create_file("virq_mapping", S_IRUGO, powerpc_debugfs_root,
+				 NULL, &virq_debug_fops))
+		return -ENOMEM;
+
+	return 0;
+}
+__initcall(irq_debugfs_init);
+#endif /* CONFIG_VIRQ_DEBUG */
+
 #endif /* CONFIG_PPC_MERGE */
-
-#ifdef CONFIG_PCI_MSI
-int pci_enable_msi(struct pci_dev * pdev)
-{
-	if (ppc_md.enable_msi)
-		return ppc_md.enable_msi(pdev);
-	else
-		return -1;
-}
-
-void pci_disable_msi(struct pci_dev * pdev)
-{
-	if (ppc_md.disable_msi)
-		ppc_md.disable_msi(pdev);
-}
-
-void pci_scan_msi_device(struct pci_dev *dev) {}
-int pci_enable_msix(struct pci_dev* dev, struct msix_entry *entries, int nvec) {return -1;}
-void pci_disable_msix(struct pci_dev *dev) {}
-void msi_remove_pci_irq_vectors(struct pci_dev *dev) {}
-void disable_msi_mode(struct pci_dev *dev, int pos, int type) {}
-void pci_no_msi(void) {}
-
-#endif
 
 #ifdef CONFIG_PPC64
 static int __init setup_noirqdistrib(char *str)

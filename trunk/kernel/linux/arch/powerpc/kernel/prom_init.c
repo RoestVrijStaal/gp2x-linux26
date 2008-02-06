@@ -173,8 +173,8 @@ static unsigned long __initdata dt_string_start, dt_string_end;
 static unsigned long __initdata prom_initrd_start, prom_initrd_end;
 
 #ifdef CONFIG_PPC64
-static int __initdata iommu_force_on;
-static int __initdata ppc64_iommu_off;
+static int __initdata prom_iommu_force_on;
+static int __initdata prom_iommu_off;
 static unsigned long __initdata prom_tce_alloc_start;
 static unsigned long __initdata prom_tce_alloc_end;
 #endif
@@ -582,9 +582,9 @@ static void __init early_cmdline_parse(void)
 		while (*opt && *opt == ' ')
 			opt++;
 		if (!strncmp(opt, RELOC("off"), 3))
-			RELOC(ppc64_iommu_off) = 1;
+			RELOC(prom_iommu_off) = 1;
 		else if (!strncmp(opt, RELOC("force"), 5))
-			RELOC(iommu_force_on) = 1;
+			RELOC(prom_iommu_force_on) = 1;
 	}
 #endif
 }
@@ -627,6 +627,7 @@ static void __init early_cmdline_parse(void)
 /* Option vector 3: processor options supported */
 #define OV3_FP			0x80	/* floating point */
 #define OV3_VMX			0x40	/* VMX/Altivec */
+#define OV3_DFP			0x20	/* decimal FP */
 
 /* Option vector 5: PAPR/OF options supported */
 #define OV5_LPAR		0x80	/* logical partitioning supported */
@@ -634,6 +635,13 @@ static void __init early_cmdline_parse(void)
 /* ibm,dynamic-reconfiguration-memory property supported */
 #define OV5_DRCONF_MEMORY	0x20
 #define OV5_LARGE_PAGES		0x10	/* large pages supported */
+#define OV5_DONATE_DEDICATE_CPU 0x02	/* donate dedicated CPU support */
+/* PCIe/MSI support.  Without MSI full PCIe is not supported */
+#ifdef CONFIG_PCI_MSI
+#define OV5_MSI			0x01	/* PCIe/MSI support */
+#else
+#define OV5_MSI			0x00
+#endif /* CONFIG_PCI_MSI */
 
 /*
  * The architecture vector has an array of PVR mask/value pairs,
@@ -642,6 +650,7 @@ static void __init early_cmdline_parse(void)
 static unsigned char ibm_architecture_vec[] = {
 	W(0xfffe0000), W(0x003a0000),	/* POWER5/POWER5+ */
 	W(0xffff0000), W(0x003e0000),	/* POWER6 */
+	W(0xffffffff), W(0x0f000002),	/* all 2.05-compliant */
 	W(0xfffffffe), W(0x0f000001),	/* all 2.04-compliant and earlier */
 	5 - 1,				/* 5 option vectors */
 
@@ -668,7 +677,7 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 3: processor options supported */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV3_FP | OV3_VMX,
+	OV3_FP | OV3_VMX | OV3_DFP,
 
 	/* option vector 4: IBM PAPR implementation */
 	2 - 2,				/* length */
@@ -677,7 +686,8 @@ static unsigned char ibm_architecture_vec[] = {
 	/* option vector 5: PAPR/OF options */
 	3 - 2,				/* length */
 	0,				/* don't ignore, don't halt */
-	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES,
+	OV5_LPAR | OV5_SPLPAR | OV5_LARGE_PAGES | OV5_DRCONF_MEMORY |
+	OV5_DONATE_DEDICATE_CPU | OV5_MSI,
 };
 
 /* Old method - ELF header with PT_NOTE sections */
@@ -965,7 +975,7 @@ static unsigned long __init prom_next_cell(int s, cell_t **cellp)
  * If problems seem to show up, it would be a good start to track
  * them down.
  */
-static void reserve_mem(u64 base, u64 size)
+static void __init reserve_mem(u64 base, u64 size)
 {
 	u64 top = base + size;
 	unsigned long cnt = RELOC(mem_reserve_cnt);
@@ -1167,7 +1177,7 @@ static void __init prom_initialize_tce_table(void)
 	u64 local_alloc_top, local_alloc_bottom;
 	u64 i;
 
-	if (RELOC(ppc64_iommu_off))
+	if (RELOC(prom_iommu_off))
 		return;
 
 	prom_debug("starting prom_initialize_tce_table\n");
@@ -1189,7 +1199,7 @@ static void __init prom_initialize_tce_table(void)
 		if ((type[0] == 0) || (strstr(type, RELOC("pci")) == NULL))
 			continue;
 
-		/* Keep the old logic in tack to avoid regression. */
+		/* Keep the old logic intact to avoid regression. */
 		if (compatible[0] != 0) {
 			if ((strstr(compatible, RELOC("python")) == NULL) &&
 			    (strstr(compatible, RELOC("Speedwagon")) == NULL) &&
@@ -1234,7 +1244,7 @@ static void __init prom_initialize_tce_table(void)
 			local_alloc_bottom = base;
 
 		/* It seems OF doesn't null-terminate the path :-( */
-		memset(path, 0, sizeof(path));
+		memset(path, 0, PROM_SCRATCH_SIZE);
 		/* Call OF to setup the TCE hardware */
 		if (call_prom("package-to-path", 3, 1, node,
 			      path, PROM_SCRATCH_SIZE-1) == PROM_ERROR) {
@@ -2033,33 +2043,55 @@ static void __init fixup_device_tree_maple(void)
 #endif
 
 #ifdef CONFIG_PPC_CHRP
-/* Pegasos lacks the "ranges" property in the isa node */
+/*
+ * Pegasos and BriQ lacks the "ranges" property in the isa node
+ * Pegasos needs decimal IRQ 14/15, not hexadecimal
+ * Pegasos has the IDE configured in legacy mode, but advertised as native
+ */
 static void __init fixup_device_tree_chrp(void)
 {
-	phandle isa;
-	u32 isa_ranges[6];
+	phandle ph;
+	u32 prop[6];
+	u32 rloc = 0x01006000; /* IO space; PCI device = 12 */
 	char *name;
 	int rc;
 
 	name = "/pci@80000000/isa@c";
-	isa = call_prom("finddevice", 1, 1, ADDR(name));
-	if (!PHANDLE_VALID(isa))
-		return;
+	ph = call_prom("finddevice", 1, 1, ADDR(name));
+	if (!PHANDLE_VALID(ph)) {
+		name = "/pci@ff500000/isa@6";
+		ph = call_prom("finddevice", 1, 1, ADDR(name));
+		rloc = 0x01003000; /* IO space; PCI device = 6 */
+	}
+	if (PHANDLE_VALID(ph)) {
+		rc = prom_getproplen(ph, "ranges");
+		if (rc == 0 || rc == PROM_ERROR) {
+			prom_printf("Fixing up missing ISA range on Pegasos...\n");
 
-	rc = prom_getproplen(isa, "ranges");
-	if (rc != 0 && rc != PROM_ERROR)
-		return;
+			prop[0] = 0x1;
+			prop[1] = 0x0;
+			prop[2] = rloc;
+			prop[3] = 0x0;
+			prop[4] = 0x0;
+			prop[5] = 0x00010000;
+			prom_setprop(ph, name, "ranges", prop, sizeof(prop));
+		}
+	}
 
-	prom_printf("Fixing up missing ISA range on Pegasos...\n");
-
-	isa_ranges[0] = 0x1;
-	isa_ranges[1] = 0x0;
-	isa_ranges[2] = 0x01006000;
-	isa_ranges[3] = 0x0;
-	isa_ranges[4] = 0x0;
-	isa_ranges[5] = 0x00010000;
-	prom_setprop(isa, name, "ranges",
-			isa_ranges, sizeof(isa_ranges));
+	name = "/pci@80000000/ide@C,1";
+	ph = call_prom("finddevice", 1, 1, ADDR(name));
+	if (PHANDLE_VALID(ph)) {
+		prom_printf("Fixing up IDE interrupt on Pegasos...\n");
+		prop[0] = 14;
+		prop[1] = 0x0;
+		prom_setprop(ph, name, "interrupts", prop, 2*sizeof(u32));
+		prom_printf("Fixing up IDE class-code on Pegasos...\n");
+		rc = prom_getprop(ph, "class-code", prop, sizeof(u32));
+		if (rc == sizeof(u32)) {
+			prop[0] &= ~0x5;
+			prom_setprop(ph, name, "class-code", prop, sizeof(u32));
+		}
+	}
 }
 #else
 #define fixup_device_tree_chrp()
@@ -2109,16 +2141,136 @@ static void __init fixup_device_tree_pmac(void)
 #define fixup_device_tree_pmac()
 #endif
 
+#ifdef CONFIG_PPC_EFIKA
+/* The current fw of the Efika has a device tree needs quite a few
+ * fixups to be compliant with the mpc52xx bindings. It's currently
+ * unknown if it will ever be compliant (come on bPlan ...) so we do fixups.
+ * NOTE that we (barely) tolerate it because the EFIKA was out before
+ * the bindings were finished, for any new boards -> RTFM ! */
+
+struct subst_entry {
+	char *path;
+	char *property;
+	void *value;
+	int value_len;
+};
+
+static void __init fixup_device_tree_efika(void)
+{
+	/* Substitution table */
+	#define prop_cstr(x) x, sizeof(x)
+	int prop_sound_irq[3] = { 2, 2, 0 };
+	int prop_bcomm_irq[3*16] = { 3,0,0, 3,1,0, 3,2,0, 3,3,0,
+	                             3,4,0, 3,5,0, 3,6,0, 3,7,0,
+	                             3,8,0, 3,9,0, 3,10,0, 3,11,0,
+	                             3,12,0, 3,13,0, 3,14,0, 3,15,0 };
+	struct subst_entry efika_subst_table[] = {
+		{ "/",			"device_type",	prop_cstr("efika") },
+		{ "/builtin",		"device_type",	prop_cstr("soc") },
+		{ "/builtin/ata",	"compatible",	prop_cstr("mpc5200b-ata\0mpc5200-ata"), },
+		{ "/builtin/bestcomm",	"compatible",	prop_cstr("mpc5200b-bestcomm\0mpc5200-bestcomm") },
+		{ "/builtin/bestcomm",	"interrupts",	prop_bcomm_irq, sizeof(prop_bcomm_irq) },
+		{ "/builtin/ethernet",	"compatible",	prop_cstr("mpc5200b-fec\0mpc5200-fec") },
+		{ "/builtin/pic",	"compatible",	prop_cstr("mpc5200b-pic\0mpc5200-pic") },
+		{ "/builtin/serial",	"compatible",	prop_cstr("mpc5200b-psc-uart\0mpc5200-psc-uart") },
+		{ "/builtin/sound",	"compatible",	prop_cstr("mpc5200b-psc-ac97\0mpc5200-psc-ac97") },
+		{ "/builtin/sound",	"interrupts",	prop_sound_irq, sizeof(prop_sound_irq) },
+		{ "/builtin/sram",	"compatible",	prop_cstr("mpc5200b-sram\0mpc5200-sram") },
+		{ "/builtin/sram",	"device_type",	prop_cstr("sram") },
+		{}
+	};
+	#undef prop_cstr
+
+	/* Vars */
+	u32 node;
+	char prop[64];
+	int rv, i;
+
+	/* Check if we're really running on a EFIKA */
+	node = call_prom("finddevice", 1, 1, ADDR("/"));
+	if (!PHANDLE_VALID(node))
+		return;
+
+	rv = prom_getprop(node, "model", prop, sizeof(prop));
+	if (rv == PROM_ERROR)
+		return;
+	if (strcmp(prop, "EFIKA5K2"))
+		return;
+
+	prom_printf("Applying EFIKA device tree fixups\n");
+
+	/* Process substitution table */
+	for (i=0; efika_subst_table[i].path; i++) {
+		struct subst_entry *se = &efika_subst_table[i];
+
+		node = call_prom("finddevice", 1, 1, ADDR(se->path));
+		if (!PHANDLE_VALID(node)) {
+			prom_printf("fixup_device_tree_efika: ",
+				"skipped entry %x - not found\n", i);
+			continue;
+		}
+
+		rv = prom_setprop(node, se->path, se->property,
+					se->value, se->value_len );
+		if (rv == PROM_ERROR)
+			prom_printf("fixup_device_tree_efika: ",
+				"skipped entry %x - setprop error\n", i);
+	}
+
+	/* Make sure ethernet mdio bus node exists */
+	node = call_prom("finddevice", 1, 1, ADDR("/builtin/mdio"));
+	if (!PHANDLE_VALID(node)) {
+		prom_printf("Adding Ethernet MDIO node\n");
+		call_prom("interpret", 1, 1,
+			" s\" /builtin\" find-device"
+			" new-device"
+				" 1 encode-int s\" #address-cells\" property"
+				" 0 encode-int s\" #size-cells\" property"
+				" s\" mdio\" 2dup device-name device-type"
+				" s\" mpc5200b-fec-phy\" encode-string"
+				" s\" compatible\" property"
+				" 0xf0003000 0x400 reg"
+				" 0x2 encode-int"
+				" 0x5 encode-int encode+"
+				" 0x3 encode-int encode+"
+				" s\" interrupts\" property"
+			" finish-device");
+	};
+
+	/* Make sure ethernet phy device node exist */
+	node = call_prom("finddevice", 1, 1, ADDR("/builtin/mdio/ethernet-phy"));
+	if (!PHANDLE_VALID(node)) {
+		prom_printf("Adding Ethernet PHY node\n");
+		call_prom("interpret", 1, 1,
+			" s\" /builtin/mdio\" find-device"
+			" new-device"
+				" s\" ethernet-phy\" device-name"
+				" 0x10 encode-int s\" reg\" property"
+				" my-self"
+				" ihandle>phandle"
+			" finish-device"
+			" s\" /builtin/ethernet\" find-device"
+				" encode-int"
+				" s\" phy-handle\" property"
+			" device-end");
+	}
+
+}
+#else
+#define fixup_device_tree_efika()
+#endif
+
 static void __init fixup_device_tree(void)
 {
 	fixup_device_tree_maple();
 	fixup_device_tree_chrp();
 	fixup_device_tree_pmac();
+	fixup_device_tree_efika();
 }
 
 static void __init prom_find_boot_cpu(void)
 {
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 	u32 getprop_rval;
 	ihandle prom_cpu;
 	phandle cpu_pkg;
@@ -2138,7 +2290,7 @@ static void __init prom_find_boot_cpu(void)
 static void __init prom_check_initrd(unsigned long r3, unsigned long r4)
 {
 #ifdef CONFIG_BLK_DEV_INITRD
-       	struct prom_t *_prom = &RELOC(prom);
+	struct prom_t *_prom = &RELOC(prom);
 
 	if (r3 && r4 && r4 != 0xdeadbeef) {
 		unsigned long val;
@@ -2171,7 +2323,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 			       unsigned long pp,
 			       unsigned long r6, unsigned long r7)
 {	
-       	struct prom_t *_prom;
+	struct prom_t *_prom;
 	unsigned long hdr;
 	unsigned long offset = reloc_offset();
 
@@ -2230,8 +2382,8 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	/*
 	 * Copy the CPU hold code
 	 */
-       	if (RELOC(of_platform) != PLATFORM_POWERMAC)
-       		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
+	if (RELOC(of_platform) != PLATFORM_POWERMAC)
+		copy_and_flush(0, KERNELBASE + offset, 0x100, 0);
 
 	/*
 	 * Do early parsing of command line
@@ -2277,11 +2429,11 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	 * Fill in some infos for use by the kernel later on
 	 */
 #ifdef CONFIG_PPC64
-	if (RELOC(ppc64_iommu_off))
+	if (RELOC(prom_iommu_off))
 		prom_setprop(_prom->chosen, "/chosen", "linux,iommu-off",
 			     NULL, 0);
 
-	if (RELOC(iommu_force_on))
+	if (RELOC(prom_iommu_force_on))
 		prom_setprop(_prom->chosen, "/chosen", "linux,iommu-force-on",
 			     NULL, 0);
 

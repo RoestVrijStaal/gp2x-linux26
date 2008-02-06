@@ -41,20 +41,17 @@
 #include <linux/compat.h>
 #include <linux/ptrace.h>
 #include <linux/elf.h>
+#include <linux/ipc.h>
 
 #include <asm/ptrace.h>
 #include <asm/types.h>
-#include <asm/ipc.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/semaphore.h>
 #include <asm/time.h>
 #include <asm/mmu_context.h>
 #include <asm/ppc-pci.h>
-
-/* readdir & getdents */
-#define NAME_OFFSET(de) ((int) ((de)->d_name - (char __user *) (de)))
-#define ROUND_UP(x) (((x)+sizeof(u32)-1) & ~(sizeof(u32)-1))
+#include <asm/syscalls.h>
 
 struct old_linux_dirent32 {
 	u32		d_ino;
@@ -69,16 +66,20 @@ struct readdir_callback32 {
 };
 
 static int fillonedir(void * __buf, const char * name, int namlen,
-		                  off_t offset, ino_t ino, unsigned int d_type)
+		                  off_t offset, u64 ino, unsigned int d_type)
 {
 	struct readdir_callback32 * buf = (struct readdir_callback32 *) __buf;
 	struct old_linux_dirent32 __user * dirent;
+	ino_t d_ino;
 
 	if (buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	buf->count++;
 	dirent = buf->dirent;
-	put_user(ino, &dirent->d_ino);
+	put_user(d_ino, &dirent->d_ino);
 	put_user(offset, &dirent->d_offset);
 	put_user(namlen, &dirent->d_namlen);
 	copy_to_user(dirent->d_name, name, namlen);
@@ -120,15 +121,20 @@ asmlinkage long ppc32_select(u32 n, compat_ulong_t __user *inp,
 
 int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 {
+	compat_ino_t ino;
 	long err;
 
 	if (stat->size > MAX_NON_LFS || !new_valid_dev(stat->dev) ||
 	    !new_valid_dev(stat->rdev))
 		return -EOVERFLOW;
 
+	ino = stat->ino;
+	if (sizeof(ino) < sizeof(stat->ino) && ino != stat->ino)
+		return -EOVERFLOW;
+
 	err  = access_ok(VERIFY_WRITE, statbuf, sizeof(*statbuf)) ? 0 : -EFAULT;
 	err |= __put_user(new_encode_dev(stat->dev), &statbuf->st_dev);
-	err |= __put_user(stat->ino, &statbuf->st_ino);
+	err |= __put_user(ino, &statbuf->st_ino);
 	err |= __put_user(stat->mode, &statbuf->st_mode);
 	err |= __put_user(stat->nlink, &statbuf->st_nlink);
 	err |= __put_user(stat->uid, &statbuf->st_uid);
@@ -186,73 +192,6 @@ static inline long put_tv32(struct compat_timeval __user *o, struct timeval *i)
 	return (!access_ok(VERIFY_WRITE, o, sizeof(*o)) ||
 		(__put_user(i->tv_sec, &o->tv_sec) |
 		 __put_user(i->tv_usec, &o->tv_usec)));
-}
-
-struct sysinfo32 {
-        s32 uptime;
-        u32 loads[3];
-        u32 totalram;
-        u32 freeram;
-        u32 sharedram;
-        u32 bufferram;
-        u32 totalswap;
-        u32 freeswap;
-        unsigned short procs;
-	unsigned short pad;
-	u32 totalhigh;
-	u32 freehigh;
-	u32 mem_unit;
-	char _f[20-2*sizeof(int)-sizeof(int)];
-};
-
-asmlinkage long compat_sys_sysinfo(struct sysinfo32 __user *info)
-{
-	struct sysinfo s;
-	int ret, err;
-	int bitcount=0;
-	mm_segment_t old_fs = get_fs ();
-	
-	/* The __user cast is valid due to set_fs() */
-	set_fs (KERNEL_DS);
-	ret = sys_sysinfo((struct sysinfo __user *)&s);
-	set_fs (old_fs);
-
-	/* Check to see if any memory value is too large for 32-bit and
-         * scale down if needed.
-         */
-	if ((s.totalram >> 32) || (s.totalswap >> 32)) {
-	    while (s.mem_unit < PAGE_SIZE) {
-		s.mem_unit <<= 1;
-		bitcount++;
-	    }
-	    s.totalram >>=bitcount;
-	    s.freeram >>= bitcount;
-	    s.sharedram >>= bitcount;
-	    s.bufferram >>= bitcount;
-	    s.totalswap >>= bitcount;
-	    s.freeswap >>= bitcount;
-	    s.totalhigh >>= bitcount;
-	    s.freehigh >>= bitcount;
-	}
-
-	err = put_user (s.uptime, &info->uptime);
-	err |= __put_user (s.loads[0], &info->loads[0]);
-	err |= __put_user (s.loads[1], &info->loads[1]);
-	err |= __put_user (s.loads[2], &info->loads[2]);
-	err |= __put_user (s.totalram, &info->totalram);
-	err |= __put_user (s.freeram, &info->freeram);
-	err |= __put_user (s.sharedram, &info->sharedram);
-	err |= __put_user (s.bufferram, &info->bufferram);
-	err |= __put_user (s.totalswap, &info->totalswap);
-	err |= __put_user (s.freeswap, &info->freeswap);
-	err |= __put_user (s.procs, &info->procs);
-	err |= __put_user (s.totalhigh, &info->totalhigh);
-	err |= __put_user (s.freehigh, &info->freehigh);
-	err |= __put_user (s.mem_unit, &info->mem_unit);
-	if (err)
-		return -EFAULT;
-	
-	return ret;
 }
 
 
@@ -740,7 +679,7 @@ asmlinkage long compat_sys_umask(u32 mask)
 	return sys_umask((int)mask);
 }
 
-#ifdef CONFIG_SYSCTL
+#ifdef CONFIG_SYSCTL_SYSCALL
 struct __sysctl_args32 {
 	u32 name;
 	int nlen;
@@ -834,6 +773,13 @@ asmlinkage int compat_sys_truncate64(const char __user * path, u32 reg4,
 	return sys_truncate(path, (high << 32) | low);
 }
 
+asmlinkage long compat_sys_fallocate(int fd, int mode, u32 offhi, u32 offlo,
+				     u32 lenhi, u32 lenlo)
+{
+	return sys_fallocate(fd, mode, ((loff_t)offhi << 32) | offlo,
+			     ((loff_t)lenhi << 32) | lenlo);
+}
+
 asmlinkage int compat_sys_ftruncate64(unsigned int fd, u32 reg4, unsigned long high,
 				 unsigned long low)
 {
@@ -871,3 +817,12 @@ asmlinkage long compat_sys_request_key(const char __user *_type,
 	return sys_request_key(_type, _description, _callout_info, destringid);
 }
 
+asmlinkage long compat_sys_sync_file_range2(int fd, unsigned int flags,
+				   unsigned offset_hi, unsigned offset_lo,
+				   unsigned nbytes_hi, unsigned nbytes_lo)
+{
+	loff_t offset = ((loff_t)offset_hi << 32) | offset_lo;
+	loff_t nbytes = ((loff_t)nbytes_hi << 32) | nbytes_lo;
+
+	return sys_sync_file_range(fd, offset, nbytes, flags);
+}

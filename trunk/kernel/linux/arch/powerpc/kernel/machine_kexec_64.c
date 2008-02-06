@@ -31,8 +31,8 @@ int default_machine_kexec_prepare(struct kimage *image)
 	unsigned long begin, end;	/* limits of segment */
 	unsigned long low, high;	/* limits of blocked memory range */
 	struct device_node *node;
-	unsigned long *basep;
-	unsigned int *sizep;
+	const unsigned long *basep;
+	const unsigned int *sizep;
 
 	if (!ppc_md.hpte_clear_all)
 		return -ENOENT;
@@ -72,10 +72,8 @@ int default_machine_kexec_prepare(struct kimage *image)
 	/* We also should not overwrite the tce tables */
 	for (node = of_find_node_by_type(NULL, "pci"); node != NULL;
 			node = of_find_node_by_type(node, "pci")) {
-		basep = (unsigned long *)get_property(node, "linux,tce-base",
-							NULL);
-		sizep = (unsigned int *)get_property(node, "linux,tce-size",
-							NULL);
+		basep = of_get_property(node, "linux,tce-base", NULL);
+		sizep = of_get_property(node, "linux,tce-size", NULL);
 		if (basep == NULL || sizep == NULL)
 			continue;
 
@@ -296,19 +294,19 @@ static unsigned long htab_base, kernel_end;
 static struct property htab_base_prop = {
 	.name = "linux,htab-base",
 	.length = sizeof(unsigned long),
-	.value = (unsigned char *)&htab_base,
+	.value = &htab_base,
 };
 
 static struct property htab_size_prop = {
 	.name = "linux,htab-size",
 	.length = sizeof(unsigned long),
-	.value = (unsigned char *)&htab_size_bytes,
+	.value = &htab_size_bytes,
 };
 
 static struct property kernel_end_prop = {
 	.name = "linux,kernel-end",
 	.length = sizeof(unsigned long),
-	.value = (unsigned char *)&kernel_end,
+	.value = &kernel_end,
 };
 
 static void __init export_htab_values(void)
@@ -337,7 +335,7 @@ static void __init export_htab_values(void)
 static struct property crashk_base_prop = {
 	.name = "linux,crashkernel-base",
 	.length = sizeof(unsigned long),
-	.value = (unsigned char *)&crashk_res.start,
+	.value = &crashk_res.start,
 };
 
 static unsigned long crashk_size;
@@ -345,7 +343,7 @@ static unsigned long crashk_size;
 static struct property crashk_size_prop = {
 	.name = "linux,crashkernel-size",
 	.length = sizeof(unsigned long),
-	.value = (unsigned char *)&crashk_size,
+	.value = &crashk_size,
 };
 
 static void __init export_crashk_values(void)

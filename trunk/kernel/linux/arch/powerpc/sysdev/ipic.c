@@ -1,5 +1,5 @@
 /*
- * include/asm-ppc/ipic.c
+ * arch/powerpc/sysdev/ipic.c
  *
  * IPIC routines implementations.
  *
@@ -210,7 +210,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 4,
 	},
 	[64] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_A,
 		.force	= IPIC_SIFCR_L,
@@ -218,7 +218,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 0,
 	},
 	[65] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_A,
 		.force	= IPIC_SIFCR_L,
@@ -226,7 +226,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 1,
 	},
 	[66] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_A,
 		.force	= IPIC_SIFCR_L,
@@ -234,7 +234,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 2,
 	},
 	[67] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_A,
 		.force	= IPIC_SIFCR_L,
@@ -242,7 +242,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 3,
 	},
 	[68] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_B,
 		.force	= IPIC_SIFCR_L,
@@ -250,7 +250,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 0,
 	},
 	[69] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_B,
 		.force	= IPIC_SIFCR_L,
@@ -258,7 +258,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 1,
 	},
 	[70] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_B,
 		.force	= IPIC_SIFCR_L,
@@ -266,7 +266,7 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 2,
 	},
 	[71] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= IPIC_SMPRR_B,
 		.force	= IPIC_SIFCR_L,
@@ -274,91 +274,91 @@ static struct ipic_info ipic_info[] = {
 		.prio_mask = 3,
 	},
 	[72] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 8,
 	},
 	[73] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 9,
 	},
 	[74] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 10,
 	},
 	[75] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 11,
 	},
 	[76] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 12,
 	},
 	[77] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 13,
 	},
 	[78] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 14,
 	},
 	[79] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 15,
 	},
 	[80] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 16,
 	},
 	[84] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 20,
 	},
 	[85] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 21,
 	},
 	[90] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
 		.bit	= 26,
 	},
 	[91] = {
-		.pend	= IPIC_SIPNR_H,
+		.pend	= IPIC_SIPNR_L,
 		.mask	= IPIC_SIMSR_L,
 		.prio	= 0,
 		.force	= IPIC_SIFCR_L,
@@ -473,9 +473,9 @@ static int ipic_set_irq_type(unsigned int virq, unsigned int flow_type)
 	desc->status |= flow_type & IRQ_TYPE_SENSE_MASK;
 	if (flow_type & IRQ_TYPE_LEVEL_LOW)  {
 		desc->status |= IRQ_LEVEL;
-		set_irq_handler(virq, handle_level_irq);
+		desc->handle_irq = handle_level_irq;
 	} else {
-		set_irq_handler(virq, handle_edge_irq);
+		desc->handle_irq = handle_edge_irq;
 	}
 
 	/* only EXT IRQ senses are programmable on ipic
@@ -511,10 +511,8 @@ static struct irq_chip ipic_irq_chip = {
 
 static int ipic_host_match(struct irq_host *h, struct device_node *node)
 {
-	struct ipic *ipic = h->host_data;
-
 	/* Exact match, unless ipic node is NULL */
-	return ipic->of_node == NULL || ipic->of_node == node;
+	return h->of_node == NULL || h->of_node == node;
 }
 
 static int ipic_host_map(struct irq_host *h, unsigned int virq,
@@ -557,8 +555,7 @@ static struct irq_host_ops ipic_host_ops = {
 	.xlate	= ipic_host_xlate,
 };
 
-void __init ipic_init(struct device_node *node,
-		unsigned int flags)
+struct ipic * __init ipic_init(struct device_node *node, unsigned int flags)
 {
 	struct ipic	*ipic;
 	struct resource res;
@@ -566,22 +563,23 @@ void __init ipic_init(struct device_node *node,
 
 	ipic = alloc_bootmem(sizeof(struct ipic));
 	if (ipic == NULL)
-		return;
+		return NULL;
 
 	memset(ipic, 0, sizeof(struct ipic));
-	ipic->of_node = node ? of_node_get(node) : NULL;
 
-	ipic->irqhost = irq_alloc_host(IRQ_HOST_MAP_LINEAR,
+	ipic->irqhost = irq_alloc_host(of_node_get(node), IRQ_HOST_MAP_LINEAR,
 				       NR_IPIC_INTS,
 				       &ipic_host_ops, 0);
 	if (ipic->irqhost == NULL) {
 		of_node_put(node);
-		return;
+		return NULL;
 	}
 
 	ret = of_address_to_resource(node, 0, &res);
-	if (ret)
-		return;
+	if (ret) {
+		of_node_put(node);
+		return NULL;
+	}
 
 	ipic->regs = ioremap(res.start, res.end - res.start + 1);
 
@@ -625,6 +623,8 @@ void __init ipic_init(struct device_node *node,
 
 	printk ("IPIC (%d IRQ sources) at %p\n", NR_IPIC_INTS,
 			primary_ipic->regs);
+
+	return ipic;
 }
 
 int ipic_set_priority(unsigned int virq, unsigned int priority)
@@ -709,7 +709,7 @@ void ipic_clear_mcp_status(u32 mask)
 }
 
 /* Return an interrupt vector or NO_IRQ if no interrupt is pending. */
-unsigned int ipic_get_irq(struct pt_regs *regs)
+unsigned int ipic_get_irq(void)
 {
 	int irq;
 

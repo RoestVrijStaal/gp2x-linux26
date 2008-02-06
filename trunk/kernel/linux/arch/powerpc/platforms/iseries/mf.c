@@ -38,9 +38,10 @@
 #include <asm/uaccess.h>
 #include <asm/paca.h>
 #include <asm/abs_addr.h>
-#include <asm/iseries/vio.h>
+#include <asm/firmware.h>
 #include <asm/iseries/mf.h>
 #include <asm/iseries/hv_lp_config.h>
+#include <asm/iseries/hv_lp_event.h>
 #include <asm/iseries/it_lp_queue.h>
 
 #include "setup.h"
@@ -357,7 +358,7 @@ static int dma_and_signal_ce_msg(char *ce_msg,
  */
 static int shutdown(void)
 {
-	int rc = kill_proc(1, SIGINT, 1);
+	int rc = kill_cad_pid(SIGINT, 1);
 
 	if (rc) {
 		printk(KERN_ALERT "mf.c: SIGINT to init failed (%d), "
@@ -513,7 +514,7 @@ static void handle_ack(struct io_mf_lp_event *event)
  * parse it enough to know if it is an interrupt or an
  * acknowledge.
  */
-static void hv_handler(struct HvLpEvent *event, struct pt_regs *regs)
+static void hv_handler(struct HvLpEvent *event)
 {
 	if ((event != NULL) && (event->xType == HvLpEvent_Type_MachineFac)) {
 		if (hvlpevent_is_ack(event))
@@ -847,7 +848,7 @@ static int mf_get_boot_rtc(struct rtc_time *tm)
 	/* We need to poll here as we are not yet taking interrupts */
 	while (rtc_data.busy) {
 		if (hvlpevent_is_pending())
-			process_hvlpevents(NULL);
+			process_hvlpevents();
 	}
 	return rtc_set_tm(rtc_data.rc, rtc_data.ce_msg.ce_msg, tm);
 }
@@ -869,8 +870,7 @@ static int proc_mf_dump_cmdline(char *page, char **start, off_t off,
 	if ((off + count) > 256)
 		count = 256 - off;
 
-	dma_addr = dma_map_single(iSeries_vio_dev, page, off + count,
-			DMA_FROM_DEVICE);
+	dma_addr = iseries_hv_map(page, off + count, DMA_FROM_DEVICE);
 	if (dma_mapping_error(dma_addr))
 		return -ENOMEM;
 	memset(page, 0, off + count);
@@ -882,8 +882,7 @@ static int proc_mf_dump_cmdline(char *page, char **start, off_t off,
 	vsp_cmd.sub_data.kern.length = off + count;
 	mb();
 	rc = signal_vsp_instruction(&vsp_cmd);
-	dma_unmap_single(iSeries_vio_dev, dma_addr, off + count,
-			DMA_FROM_DEVICE);
+	iseries_hv_unmap(dma_addr, off + count, DMA_FROM_DEVICE);
 	if (rc)
 		return rc;
 	if (vsp_cmd.result_code != 0)
@@ -918,8 +917,7 @@ static int mf_getVmlinuxChunk(char *buffer, int *size, int offset, u64 side)
 	int len = *size;
 	dma_addr_t dma_addr;
 
-	dma_addr = dma_map_single(iSeries_vio_dev, buffer, len,
-			DMA_FROM_DEVICE);
+	dma_addr = iseries_hv_map(buffer, len, DMA_FROM_DEVICE);
 	memset(buffer, 0, len);
 	memset(&vsp_cmd, 0, sizeof(vsp_cmd));
 	vsp_cmd.cmd = 32;
@@ -937,7 +935,7 @@ static int mf_getVmlinuxChunk(char *buffer, int *size, int offset, u64 side)
 			rc = -ENOMEM;
 	}
 
-	dma_unmap_single(iSeries_vio_dev, dma_addr, len, DMA_FROM_DEVICE);
+	iseries_hv_unmap(dma_addr, len, DMA_FROM_DEVICE);
 
 	return rc;
 }
@@ -1148,8 +1146,7 @@ static int proc_mf_change_cmdline(struct file *file, const char __user *buffer,
 		goto out;
 
 	dma_addr = 0;
-	page = dma_alloc_coherent(iSeries_vio_dev, count, &dma_addr,
-			GFP_ATOMIC);
+	page = iseries_hv_alloc(count, &dma_addr, GFP_ATOMIC);
 	ret = -ENOMEM;
 	if (page == NULL)
 		goto out;
@@ -1169,7 +1166,7 @@ static int proc_mf_change_cmdline(struct file *file, const char __user *buffer,
 	ret = count;
 
 out_free:
-	dma_free_coherent(iSeries_vio_dev, count, page, dma_addr);
+	iseries_hv_free(count, page, dma_addr);
 out:
 	return ret;
 }
@@ -1178,7 +1175,7 @@ static ssize_t proc_mf_change_vmlinux(struct file *file,
 				      const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	struct proc_dir_entry *dp = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *dp = PDE(file->f_path.dentry->d_inode);
 	ssize_t rc;
 	dma_addr_t dma_addr;
 	char *page;
@@ -1189,8 +1186,7 @@ static ssize_t proc_mf_change_vmlinux(struct file *file,
 		goto out;
 
 	dma_addr = 0;
-	page = dma_alloc_coherent(iSeries_vio_dev, count, &dma_addr,
-			GFP_ATOMIC);
+	page = iseries_hv_alloc(count, &dma_addr, GFP_ATOMIC);
 	rc = -ENOMEM;
 	if (page == NULL) {
 		printk(KERN_ERR "mf.c: couldn't allocate memory to set vmlinux chunk\n");
@@ -1218,12 +1214,12 @@ static ssize_t proc_mf_change_vmlinux(struct file *file,
 	*ppos += count;
 	rc = count;
 out_free:
-	dma_free_coherent(iSeries_vio_dev, count, page, dma_addr);
+	iseries_hv_free(count, page, dma_addr);
 out:
 	return rc;
 }
 
-static struct file_operations proc_vmlinux_operations = {
+static const struct file_operations proc_vmlinux_operations = {
 	.write		= proc_mf_change_vmlinux,
 };
 
@@ -1234,6 +1230,9 @@ static int __init mf_proc_init(void)
 	struct proc_dir_entry *mf;
 	char name[2];
 	int i;
+
+	if (!firmware_has_feature(FW_FEATURE_ISERIES))
+		return 0;
 
 	mf_proc_root = proc_mkdir("iSeries/mf", NULL);
 	if (!mf_proc_root)
@@ -1249,7 +1248,6 @@ static int __init mf_proc_init(void)
 		ent = create_proc_entry("cmdline", S_IFREG|S_IRUSR|S_IWUSR, mf);
 		if (!ent)
 			return 1;
-		ent->nlink = 1;
 		ent->data = (void *)(long)i;
 		ent->read_proc = proc_mf_dump_cmdline;
 		ent->write_proc = proc_mf_change_cmdline;
@@ -1260,7 +1258,6 @@ static int __init mf_proc_init(void)
 		ent = create_proc_entry("vmlinux", S_IFREG|S_IWUSR, mf);
 		if (!ent)
 			return 1;
-		ent->nlink = 1;
 		ent->data = (void *)(long)i;
 		ent->proc_fops = &proc_vmlinux_operations;
 	}
@@ -1268,7 +1265,6 @@ static int __init mf_proc_init(void)
 	ent = create_proc_entry("side", S_IFREG|S_IRUSR|S_IWUSR, mf_proc_root);
 	if (!ent)
 		return 1;
-	ent->nlink = 1;
 	ent->data = (void *)0;
 	ent->read_proc = proc_mf_dump_side;
 	ent->write_proc = proc_mf_change_side;
@@ -1276,7 +1272,6 @@ static int __init mf_proc_init(void)
 	ent = create_proc_entry("src", S_IFREG|S_IRUSR|S_IWUSR, mf_proc_root);
 	if (!ent)
 		return 1;
-	ent->nlink = 1;
 	ent->data = (void *)0;
 	ent->read_proc = proc_mf_dump_src;
 	ent->write_proc = proc_mf_change_src;
