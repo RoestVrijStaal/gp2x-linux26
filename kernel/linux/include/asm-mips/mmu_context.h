@@ -20,6 +20,7 @@
 #include <asm/mipsmtregs.h>
 #include <asm/smtc.h>
 #endif /* SMTC */
+#include <asm-generic/mm_hooks.h>
 
 /*
  * For the fast tlb miss handlers, we keep a per cpu array of pointers
@@ -106,7 +107,7 @@ get_new_mmu_context(struct mm_struct *mm, unsigned long cpu)
 
 #else /* CONFIG_MIPS_MT_SMTC */
 
-#define get_new_mmu_context(mm,cpu) smtc_get_new_mmu_context((mm),(cpu))
+#define get_new_mmu_context(mm, cpu) smtc_get_new_mmu_context((mm), (cpu))
 
 #endif /* CONFIG_MIPS_MT_SMTC */
 
@@ -119,7 +120,7 @@ init_new_context(struct task_struct *tsk, struct mm_struct *mm)
 {
 	int i;
 
-	for (i = 0; i < num_online_cpus(); i++)
+	for_each_online_cpu(i)
 		cpu_context(i, mm) = 0;
 
 	return 0;
@@ -190,7 +191,7 @@ static inline void destroy_context(struct mm_struct *mm)
 {
 }
 
-#define deactivate_mm(tsk,mm)	do { } while (0)
+#define deactivate_mm(tsk, mm)	do { } while (0)
 
 /*
  * After we have set current->mm to a new value, this activates
@@ -262,10 +263,10 @@ drop_mmu_context(struct mm_struct *mm, unsigned cpu)
 		/* See comments for similar code above */
 		prevvpe = dvpe();
 		oldasid = (read_c0_entryhi() & ASID_MASK);
-		if(smtc_live_asid[mytlb][oldasid]) {
-		  smtc_live_asid[mytlb][oldasid] &= ~(0x1 << cpu);
-		  if(smtc_live_asid[mytlb][oldasid] == 0)
-			smtc_flush_tlb_asid(oldasid);
+		if (smtc_live_asid[mytlb][oldasid]) {
+			smtc_live_asid[mytlb][oldasid] &= ~(0x1 << cpu);
+			if(smtc_live_asid[mytlb][oldasid] == 0)
+				smtc_flush_tlb_asid(oldasid);
 		}
 		/* See comments for similar code above */
 		write_c0_entryhi((read_c0_entryhi() & ~HW_ASID_MASK)
@@ -283,7 +284,7 @@ drop_mmu_context(struct mm_struct *mm, unsigned cpu)
 		int i;
 
 		/* SMTC shares the TLB (and ASIDs) across VPEs */
-		for (i = 0; i < num_online_cpus(); i++) {
+		for_each_online_cpu(i) {
 	    	    if((smtc_status & SMTC_TLB_SHARED)
 	    	    || (cpu_data[i].vpe_id == cpu_data[cpu].vpe_id))
 			cpu_context(i, mm) = 0;

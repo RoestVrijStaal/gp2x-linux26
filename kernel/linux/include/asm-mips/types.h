@@ -34,9 +34,9 @@ typedef unsigned long __u64;
 
 #else
 
-#if defined(__GNUC__) && !defined(__STRICT_ANSI__)
-typedef __signed__ long long __s64;
-typedef unsigned long long __u64;
+#if defined(__GNUC__)
+__extension__ typedef __signed__ long long __s64;
+__extension__ typedef unsigned long long __u64;
 #endif
 
 #endif
@@ -91,16 +91,6 @@ typedef u64 dma64_addr_t;
 typedef unsigned long long phys_t;
 #else
 typedef unsigned long phys_t;
-#endif
-
-#ifdef CONFIG_LBD
-typedef u64 sector_t;
-#define HAVE_SECTOR_T
-#endif
-
-#ifdef CONFIG_LSF
-typedef u64 blkcnt_t;
-#define HAVE_BLKCNT_T
 #endif
 
 #endif /* __ASSEMBLY__ */

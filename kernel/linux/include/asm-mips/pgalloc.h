@@ -11,6 +11,7 @@
 
 #include <linux/highmem.h>
 #include <linux/mm.h>
+#include <linux/sched.h>
 
 static inline void pmd_populate_kernel(struct mm_struct *mm, pmd_t *pmd,
 	pte_t *pte)
@@ -48,7 +49,7 @@ static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 
 	ret = (pgd_t *) __get_free_pages(GFP_KERNEL, PGD_ORDER);
 	if (ret) {
-		init = pgd_offset(&init_mm, 0);
+		init = pgd_offset(&init_mm, 0UL);
 		pgd_init((unsigned long)ret);
 		memcpy(ret + USER_PTRS_PER_PGD, init + USER_PTRS_PER_PGD,
 		       (PTRS_PER_PGD - USER_PTRS_PER_PGD) * sizeof(pgd_t));
@@ -94,7 +95,7 @@ static inline void pte_free(struct page *pte)
 	__free_pages(pte, PTE_ORDER);
 }
 
-#define __pte_free_tlb(tlb,pte)		tlb_remove_page((tlb),(pte))
+#define __pte_free_tlb(tlb, pte)	tlb_remove_page((tlb), (pte))
 
 #ifdef CONFIG_32BIT
 
@@ -103,7 +104,7 @@ static inline void pte_free(struct page *pte)
  * inside the pgd, so has no extra memory associated with it.
  */
 #define pmd_free(x)			do { } while (0)
-#define __pmd_free_tlb(tlb,x)		do { } while (0)
+#define __pmd_free_tlb(tlb, x)		do { } while (0)
 
 #endif
 
@@ -124,10 +125,12 @@ static inline void pmd_free(pmd_t *pmd)
 	free_pages((unsigned long)pmd, PMD_ORDER);
 }
 
-#define __pmd_free_tlb(tlb,x)	pmd_free(x)
+#define __pmd_free_tlb(tlb, x)	pmd_free(x)
 
 #endif
 
 #define check_pgt_cache()	do { } while (0)
+
+extern void pagetable_init(void);
 
 #endif /* _ASM_PGALLOC_H */

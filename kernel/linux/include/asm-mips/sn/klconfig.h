@@ -51,8 +51,8 @@
 
 #if defined(CONFIG_SGI_IP27) || defined(CONFIG_SGI_IP35)
 #include <asm/sn/agent.h>
-#include <asm/arc/types.h>
-#include <asm/arc/hinv.h>
+#include <asm/fw/arc/types.h>
+#include <asm/fw/arc/hinv.h>
 #if defined(CONFIG_SGI_IP35)
 // The hack file has to be before vector and after sn0_fru....
 #include <asm/hack.h>
@@ -60,6 +60,8 @@
 #include <asm/xtalk/xtalk.h>
 #endif /* CONFIG_SGI_IP35 */
 #endif /* CONFIG_SGI_IP27 || CONFIG_SGI_IP35 */
+
+typedef u64  nic_t;
 
 #define KLCFGINFO_MAGIC	0xbeedbabe
 
@@ -176,7 +178,7 @@ typedef struct kl_config_hdr {
 /* --- New Macros for the changed kl_config_hdr_t structure --- */
 
 #define PTR_CH_MALLOC_HDR(_k)   ((klc_malloc_hdr_t *)\
-			(unsigned long)_k + (_k->ch_malloc_hdr_off)))
+			((unsigned long)_k + (_k->ch_malloc_hdr_off)))
 
 #define KL_CONFIG_CH_MALLOC_HDR(_n)   PTR_CH_MALLOC_HDR(KL_CONFIG_HDR(_n))
 
@@ -403,7 +405,7 @@ typedef struct kl_config_hdr {
 #define KLTYPE(_x) 	((_x) & KLTYPE_MASK)
 #define IS_MIO_PRESENT(l)	((l->brd_type == KLTYPE_BASEIO) && \
 				 (l->brd_flags & SECOND_NIC_PRESENT))
-#define IS_MIO_IOC3(l,n)	(IS_MIO_PRESENT(l) && (n > 2))
+#define IS_MIO_IOC3(l, n)	(IS_MIO_PRESENT(l) && (n > 2))
 
 /*
  * board structures
