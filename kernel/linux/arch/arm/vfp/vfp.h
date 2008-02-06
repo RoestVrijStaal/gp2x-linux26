@@ -355,3 +355,24 @@ u32 vfp_estimate_sqrt_significand(u32 exponent, u32 significand);
  * we check for an error.
  */
 #define VFP_EXCEPTION_ERROR	((u32)-1 & ~VFP_NAN_FLAG)
+
+/*
+ * A flag to tell vfp instruction type.
+ *  OP_SCALAR - this operation always operates in scalar mode
+ *  OP_SD - the instruction exceptionally writes to a single precision result.
+ *  OP_DD - the instruction exceptionally writes to a double precision result.
+ *  OP_SM - the instruction exceptionally reads from a single precision operand.
+ */
+#define OP_SCALAR	(1 << 0)
+#define OP_SD		(1 << 1)
+#define OP_DD		(1 << 1)
+#define OP_SM		(1 << 2)
+
+struct op {
+	u32 (* const fn)(int dd, int dn, int dm, u32 fpscr);
+	u32 flags;
+};
+
+#ifdef CONFIG_SMP
+extern void vfp_save_state(void *location, u32 fpexc);
+#endif

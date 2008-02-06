@@ -27,6 +27,9 @@
 #include <linux/profile.h>
 #include <linux/sysdev.h>
 #include <linux/timer.h>
+#include <linux/irq.h>
+
+#include <linux/mc146818rtc.h>
 
 #include <asm/leds.h>
 #include <asm/thread_info.h>
@@ -37,14 +40,14 @@
  */
 struct sys_timer *system_timer;
 
-extern unsigned long wall_jiffies;
-
+#if defined(CONFIG_RTC_DRV_CMOS) || defined(CONFIG_RTC_DRV_CMOS_MODULE)
 /* this needs a better home */
 DEFINE_SPINLOCK(rtc_lock);
 
-#ifdef CONFIG_SA1100_RTC_MODULE
+#ifdef CONFIG_RTC_DRV_CMOS_MODULE
 EXPORT_SYMBOL(rtc_lock);
 #endif
+#endif	/* pc-style 'CMOS' RTC support */
 
 /* change this if you have some constant time drift */
 #define USECS_PER_JIFFY	(1000000/HZ)
@@ -69,19 +72,22 @@ EXPORT_SYMBOL(profile_pc);
  */
 int (*set_rtc)(void);
 
+#ifndef CONFIG_GENERIC_TIME
 static unsigned long dummy_gettimeoffset(void)
 {
 	return 0;
 }
+#endif
 
 /*
- * Scheduler clock - returns current time in nanosec units.
- * This is the default implementation.  Sub-architecture
- * implementations can override this.
+ * An implementation of printk_clock() independent from
+ * sched_clock().  This avoids non-bootable kernels when
+ * printk_clock is enabled.
  */
-unsigned long long __attribute__((weak)) sched_clock(void)
+unsigned long long printk_clock(void)
 {
-	return (unsigned long long)jiffies * (1000000000 / HZ);
+	return (unsigned long long)(jiffies - INITIAL_JIFFIES) *
+			(1000000000 / HZ);
 }
 
 static unsigned long next_rtc_update;
@@ -219,10 +225,10 @@ EXPORT_SYMBOL(leds_event);
 #ifdef CONFIG_LEDS_TIMER
 static inline void do_leds(void)
 {
-	static unsigned int count = 50;
+	static unsigned int count = HZ/2;
 
 	if (--count == 0) {
-		count = 50;
+		count = HZ/2;
 		leds_event(led_timer);
 	}
 }
@@ -230,20 +236,16 @@ static inline void do_leds(void)
 #define	do_leds()
 #endif
 
+#ifndef CONFIG_GENERIC_TIME
 void do_gettimeofday(struct timeval *tv)
 {
 	unsigned long flags;
 	unsigned long seq;
-	unsigned long usec, sec, lost;
+	unsigned long usec, sec;
 
 	do {
 		seq = read_seqbegin_irqsave(&xtime_lock, flags);
 		usec = system_timer->offset();
-
-		lost = jiffies - wall_jiffies;
-		if (lost)
-			usec += lost * USECS_PER_JIFFY;
-
 		sec = xtime.tv_sec;
 		usec += xtime.tv_nsec / 1000;
 	} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));
@@ -276,7 +278,6 @@ int do_settimeofday(struct timespec *tv)
 	 * done, and then undo it!
 	 */
 	nsec -= system_timer->offset() * NSEC_PER_USEC;
-	nsec -= (jiffies - wall_jiffies) * TICK_NSEC;
 
 	wtm_sec  = wall_to_monotonic.tv_sec + (xtime.tv_sec - sec);
 	wtm_nsec = wall_to_monotonic.tv_nsec + (xtime.tv_nsec - nsec);
@@ -291,6 +292,7 @@ int do_settimeofday(struct timespec *tv)
 }
 
 EXPORT_SYMBOL(do_settimeofday);
+#endif /* !CONFIG_GENERIC_TIME */
 
 /**
  * save_time_delta - Save the offset between system time and RTC time
@@ -325,21 +327,23 @@ void restore_time_delta(struct timespec *delta, struct timespec *rtc)
 }
 EXPORT_SYMBOL(restore_time_delta);
 
+#ifndef CONFIG_GENERIC_CLOCKEVENTS
 /*
  * Kernel system timer support.
  */
-void timer_tick(struct pt_regs *regs)
+void timer_tick(void)
 {
-	profile_tick(CPU_PROFILING, regs);
+	profile_tick(CPU_PROFILING);
 	do_leds();
 	do_set_rtc();
-	do_timer(regs);
+	do_timer(1);
 #ifndef CONFIG_SMP
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
 }
+#endif
 
-#ifdef CONFIG_PM
+#if defined(CONFIG_PM) && !defined(CONFIG_GENERIC_CLOCKEVENTS)
 static int timer_suspend(struct sys_device *dev, pm_message_t state)
 {
 	struct sys_timer *timer = container_of(dev, struct sys_timer, dev);
@@ -500,13 +504,15 @@ device_initcall(timer_init_sysfs);
 
 void __init time_init(void)
 {
+#ifndef CONFIG_GENERIC_TIME
 	if (system_timer->offset == NULL)
 		system_timer->offset = dummy_gettimeoffset;
+#endif
 	system_timer->init();
 
 #ifdef CONFIG_NO_IDLE_HZ
 	if (system_timer->dyn_tick)
-		system_timer->dyn_tick->lock = SPIN_LOCK_UNLOCKED;
+		spin_lock_init(&system_timer->dyn_tick->lock);
 #endif
 }
 

@@ -338,7 +338,7 @@ struct prcm_config {
 /*
  * These represent optimal values for common parts, it won't work for all.
  * As long as you scale down, most parameters are still work, they just
- * become sub-optimal. The RFR value goes in the oppisite direction. If you
+ * become sub-optimal. The RFR value goes in the opposite direction. If you
  * don't adjust it down as your clock period increases the refresh interval
  * will not be met. Setting all parameters for complete worst case may work,
  * but may cut memory performance by 2x. Due to errata the DLLs need to be
@@ -384,7 +384,7 @@ struct prcm_config {
  * Filling in table based on H4 boards and 2430-SDPs variants available.
  * There are quite a few more rates combinations which could be defined.
  *
- * When multiple values are defiend the start up will try and choose the
+ * When multiple values are defined the start up will try and choose the
  * fastest one. If a 'fast' value is defined, then automatically, the /2
  * one should be included as it can be used.	Generally having more that
  * one fast set does not make sense, as static timings need to be changed
@@ -560,7 +560,7 @@ static struct clk osc_ck = {		/* (*12, *13, 19.2, *26, 38.4)MHz */
 	.name		= "osc_ck",
 	.rate		= 26000000,		/* fixed up in clock init */
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X |
-				RATE_FIXED | ALWAYS_ENABLED | RATE_PROPAGATES,
+				RATE_FIXED | RATE_PROPAGATES,
 };
 
 /* With out modem likely 12MHz, with modem likely 13MHz */
@@ -1013,7 +1013,8 @@ static struct clk dss2_fck = {		/* Alt clk used in power management */
 	.name		= "dss2_fck",
 	.parent		= &sys_ck,		/* fixed at sys_ck or 48MHz */
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X |
-				RATE_CKCTL | CM_CORE_SEL1 | RATE_FIXED,
+				RATE_CKCTL | CM_CORE_SEL1 | RATE_FIXED |
+				DELAYED_APP,
 	.enable_reg	= (void __iomem *)&CM_FCLKEN1_CORE,
 	.enable_bit	= 1,
 	.src_offset	= 13,
@@ -1368,7 +1369,8 @@ static struct clk mcbsp5_fck = {
 };
 
 static struct clk mcspi1_ick = {
-	.name		= "mcspi1_ick",
+	.name		= "mcspi_ick",
+	.id		= 1,
 	.parent		= &l4_ck,
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_ICLKEN1_CORE,
@@ -1377,7 +1379,8 @@ static struct clk mcspi1_ick = {
 };
 
 static struct clk mcspi1_fck = {
-	.name		= "mcspi1_fck",
+	.name		= "mcspi_fck",
+	.id		= 1,
 	.parent		= &func_48m_ck,
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_FCLKEN1_CORE,
@@ -1386,7 +1389,8 @@ static struct clk mcspi1_fck = {
 };
 
 static struct clk mcspi2_ick = {
-	.name		= "mcspi2_ick",
+	.name		= "mcspi_ick",
+	.id		= 2,
 	.parent		= &l4_ck,
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_ICLKEN1_CORE,
@@ -1395,7 +1399,8 @@ static struct clk mcspi2_ick = {
 };
 
 static struct clk mcspi2_fck = {
-	.name		= "mcspi2_fck",
+	.name		= "mcspi_fck",
+	.id		= 2,
 	.parent		= &func_48m_ck,
 	.flags		= CLOCK_IN_OMAP242X | CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_FCLKEN1_CORE,
@@ -1404,7 +1409,8 @@ static struct clk mcspi2_fck = {
 };
 
 static struct clk mcspi3_ick = {
-	.name		= "mcspi3_ick",
+	.name		= "mcspi_ick",
+	.id		= 3,
 	.parent		= &l4_ck,
 	.flags		= CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_ICLKEN2_CORE,
@@ -1413,7 +1419,8 @@ static struct clk mcspi3_ick = {
 };
 
 static struct clk mcspi3_fck = {
-	.name		= "mcspi3_fck",
+	.name		= "mcspi_fck",
+	.id		= 3,
 	.parent		= &func_48m_ck,
 	.flags		= CLOCK_IN_OMAP243X,
 	.enable_reg	= (void __iomem *)&CM_FCLKEN2_CORE,

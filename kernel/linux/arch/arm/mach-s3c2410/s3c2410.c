@@ -8,17 +8,6 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
- *
- * Modifications:
- *     16-May-2003 BJD  Created initial version
- *     16-Aug-2003 BJD  Fixed header files and copyright, added URL
- *     05-Sep-2003 BJD  Moved to kernel v2.6
- *     18-Jan-2004 BJD  Added serial port configuration
- *     21-Aug-2004 BJD  Added new struct s3c2410_board handler
- *     28-Sep-2004 BJD  Updates for new serial port bits
- *     04-Nov-2004 BJD  Updated UART configuration process
- *     10-Jan-2005 BJD  Removed s3c2410_clock_tick_rate
- *     13-Aug-2005 DA   Removed UART from initial I/O mappings
 */
 
 #include <linux/kernel.h>
@@ -28,6 +17,7 @@
 #include <linux/timer.h>
 #include <linux/init.h>
 #include <linux/sysdev.h>
+#include <linux/serial_core.h>
 #include <linux/platform_device.h>
 
 #include <asm/mach/arch.h>
@@ -39,21 +29,18 @@
 #include <asm/irq.h>
 
 #include <asm/arch/regs-clock.h>
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 
-#include "s3c2410.h"
-#include "cpu.h"
-#include "devs.h"
-#include "clock.h"
+#include <asm/plat-s3c24xx/s3c2410.h>
+#include <asm/plat-s3c24xx/cpu.h>
+#include <asm/plat-s3c24xx/devs.h>
+#include <asm/plat-s3c24xx/clock.h>
 
 /* Initial IO mappings */
 
 static struct map_desc s3c2410_iodesc[] __initdata = {
-	IODESC_ENT(USBHOST),
 	IODESC_ENT(CLKPWR),
-	IODESC_ENT(LCD),
 	IODESC_ENT(TIMER),
-	IODESC_ENT(ADC),
 	IODESC_ENT(WATCHDOG),
 };
 
@@ -122,7 +109,7 @@ static struct sys_device s3c2410_sysdev = {
 
 /* need to register class before we actually register the device, and
  * we also need to ensure that it has been initialised before any of the
- * drivers even try to use it (even if not on an s3c2440 based system)
+ * drivers even try to use it (even if not on an s3c2410 based system)
  * as a driver which may support both 2410 and 2440 may try and use it.
 */
 

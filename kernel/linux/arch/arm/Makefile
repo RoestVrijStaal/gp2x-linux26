@@ -12,9 +12,11 @@
 
 LDFLAGS_vmlinux	:=-p --no-undefined -X
 CPPFLAGS_vmlinux.lds = -DTEXT_OFFSET=$(TEXT_OFFSET)
-OBJCOPYFLAGS	:=-O binary -R .note -R .comment -S
+OBJCOPYFLAGS	:=-O binary -R .note -R .note.gnu.build-id -R .comment -S
 GZFLAGS		:=-9
-#CFLAGS		+=-pipe
+#KBUILD_CFLAGS	+=-pipe
+# Explicitly specifiy 32-bit ARM ISA since toolchain default can be -mthumb:
+KBUILD_CFLAGS	+=$(call cc-option,-marm,)
 
 # Do not use arch/arm/defconfig - it's always outdated.
 # Select a platform tht is kept up-to-date
@@ -26,15 +28,15 @@ MMUEXT		:= -nommu
 endif
 
 ifeq ($(CONFIG_FRAME_POINTER),y)
-CFLAGS		+=-fno-omit-frame-pointer -mapcs -mno-sched-prolog
+KBUILD_CFLAGS	+=-fno-omit-frame-pointer -mapcs -mno-sched-prolog
 endif
 
 ifeq ($(CONFIG_CPU_BIG_ENDIAN),y)
-CPPFLAGS	+= -mbig-endian
+KBUILD_CPPFLAGS	+= -mbig-endian
 AS		+= -EB
 LD		+= -EB
 else
-CPPFLAGS	+= -mlittle-endian
+KBUILD_CPPFLAGS	+= -mlittle-endian
 AS		+= -EL
 LD		+= -EL
 endif
@@ -45,8 +47,13 @@ comma = ,
 # Note that GCC does not numerically define an architecture version
 # macro, but instead defines a whole series of macros which makes
 # testing for a specific architecture or later rather impossible.
+arch-$(CONFIG_CPU_32v7)		:=-D__LINUX_ARM_ARCH__=7 $(call cc-option,-march=armv7a,-march=armv5t -Wa$(comma)-march=armv7a)
 arch-$(CONFIG_CPU_32v6)		:=-D__LINUX_ARM_ARCH__=6 $(call cc-option,-march=armv6,-march=armv5t -Wa$(comma)-march=armv6)
+# Only override the compiler option if ARMv6. The ARMv6K extensions are
+# always available in ARMv7
+ifeq ($(CONFIG_CPU_32v6),y)
 arch-$(CONFIG_CPU_32v6K)	:=-D__LINUX_ARM_ARCH__=6 $(call cc-option,-march=armv6k,-march=armv5t -Wa$(comma)-march=armv6k)
+endif
 arch-$(CONFIG_CPU_32v5)		:=-D__LINUX_ARM_ARCH__=5 $(call cc-option,-march=armv5te,-march=armv4t)
 arch-$(CONFIG_CPU_32v4T)	:=-D__LINUX_ARM_ARCH__=4 -march=armv4t
 arch-$(CONFIG_CPU_32v4)		:=-D__LINUX_ARM_ARCH__=4 -march=armv4
@@ -55,7 +62,12 @@ arch-$(CONFIG_CPU_32v3)		:=-D__LINUX_ARM_ARCH__=3 -march=armv3
 # This selects how we optimise for the processor.
 tune-$(CONFIG_CPU_ARM610)	:=-mtune=arm610
 tune-$(CONFIG_CPU_ARM710)	:=-mtune=arm710
+tune-$(CONFIG_CPU_ARM7TDMI)	:=-mtune=arm7tdmi
 tune-$(CONFIG_CPU_ARM720T)	:=-mtune=arm7tdmi
+tune-$(CONFIG_CPU_ARM740T)	:=-mtune=arm7tdmi
+tune-$(CONFIG_CPU_ARM9TDMI)	:=-mtune=arm9tdmi
+tune-$(CONFIG_CPU_ARM940T)	:=-mtune=arm9tdmi
+tune-$(CONFIG_CPU_ARM946T)	:=$(call cc-option,-mtune=arm9e,-mtune=arm9tdmi)
 tune-$(CONFIG_CPU_ARM920T)	:=-mtune=arm9tdmi
 tune-$(CONFIG_CPU_ARM922T)	:=-mtune=arm9tdmi
 tune-$(CONFIG_CPU_ARM925T)	:=-mtune=arm9tdmi
@@ -73,8 +85,8 @@ CFLAGS_ABI	:=$(call cc-option,-mapcs-32,-mabi=apcs-gnu) $(call cc-option,-mno-th
 endif
 
 # Need -Uarm for gcc < 3.x
-CFLAGS		+=$(CFLAGS_ABI) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
-AFLAGS		+=$(CFLAGS_ABI) $(arch-y) $(tune-y) -msoft-float
+KBUILD_CFLAGS	+=$(CFLAGS_ABI) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
+KBUILD_AFLAGS	+=$(CFLAGS_ABI) $(arch-y) $(tune-y) -msoft-float
 
 CHECKFLAGS	+= -D__arm__
 
@@ -101,7 +113,9 @@ endif
  machine-$(CONFIG_ARCH_INTEGRATOR) := integrator
  textofs-$(CONFIG_ARCH_CLPS711X)   := 0x00028000
  machine-$(CONFIG_ARCH_CLPS711X)   := clps711x
- machine-$(CONFIG_ARCH_IOP3XX)	   := iop3xx
+ machine-$(CONFIG_ARCH_IOP32X)	   := iop32x
+ machine-$(CONFIG_ARCH_IOP33X)	   := iop33x
+ machine-$(CONFIG_ARCH_IOP13XX)	   := iop13xx
  machine-$(CONFIG_ARCH_IXP4XX)	   := ixp4xx
  machine-$(CONFIG_ARCH_IXP2000)    := ixp2000
  machine-$(CONFIG_ARCH_IXP23XX)    := ixp23xx
@@ -115,10 +129,16 @@ endif
  machine-$(CONFIG_ARCH_H720X)	   := h720x
  machine-$(CONFIG_ARCH_AAEC2000)   := aaec2000
  machine-$(CONFIG_ARCH_REALVIEW)   := realview
- machine-$(CONFIG_ARCH_AT91)       := at91rm9200
- machine-$(CONFIG_ARCH_EP93XX)     := ep93xx
- machine-$(CONFIG_ARCH_PNX4008)    := pnx4008
- machine-$(CONFIG_ARCH_NETX)       := netx
+ machine-$(CONFIG_ARCH_AT91)	   := at91
+ machine-$(CONFIG_ARCH_EP93XX)	   := ep93xx
+ machine-$(CONFIG_ARCH_PNX4008)	   := pnx4008
+ machine-$(CONFIG_ARCH_NETX)	   := netx
+ machine-$(CONFIG_ARCH_NS9XXX)	   := ns9xxx
+ textofs-$(CONFIG_ARCH_NS9XXX)	   := 0x00108000
+ machine-$(CONFIG_ARCH_DAVINCI)	   := davinci
+ machine-$(CONFIG_ARCH_KS8695)     := ks8695
+  incdir-$(CONFIG_ARCH_MXC)	   := mxc
+ machine-$(CONFIG_ARCH_MX3)	   := mx3
  machine-$(CONFIG_ARCH_MMSP2)      := mmsp2
 
 ifeq ($(CONFIG_ARCH_EBSA110),y)
@@ -141,7 +161,7 @@ MACHINE  := arch/arm/mach-$(machine-y)/
 else
 MACHINE  :=
 endif
-  
+
 export	TEXT_OFFSET GZFLAGS MMUEXT
 
 # Do we have FASTFPE?
@@ -153,12 +173,20 @@ endif
 # If we have a machine-specific directory, then include it in the build.
 core-y				+= arch/arm/kernel/ arch/arm/mm/ arch/arm/common/
 core-y				+= $(MACHINE)
+core-$(CONFIG_ARCH_S3C2410)	+= arch/arm/mach-s3c2400/
+core-$(CONFIG_ARCH_S3C2410)	+= arch/arm/mach-s3c2412/
+core-$(CONFIG_ARCH_S3C2410)	+= arch/arm/mach-s3c2440/
+core-$(CONFIG_ARCH_S3C2410)	+= arch/arm/mach-s3c2442/
+core-$(CONFIG_ARCH_S3C2410)	+= arch/arm/mach-s3c2443/
 core-$(CONFIG_FPE_NWFPE)	+= arch/arm/nwfpe/
 core-$(CONFIG_FPE_FASTFPE)	+= $(FASTFPE_OBJ)
 core-$(CONFIG_VFP)		+= arch/arm/vfp/
 
 # If we have a common platform directory, then include it in the build.
+core-$(CONFIG_PLAT_IOP)		+= arch/arm/plat-iop/
 core-$(CONFIG_ARCH_OMAP)	+= arch/arm/plat-omap/
+core-$(CONFIG_PLAT_S3C24XX)		+= arch/arm/plat-s3c24xx/
+core-$(CONFIG_ARCH_MXC)		+= arch/arm/plat-mxc/
 
 drivers-$(CONFIG_OPROFILE)      += arch/arm/oprofile/
 drivers-$(CONFIG_ARCH_CLPS7500)	+= drivers/acorn/char/
@@ -168,10 +196,12 @@ libs-y				:= arch/arm/lib/ $(libs-y)
 
 # Default target when executing plain make
 ifeq ($(CONFIG_XIP_KERNEL),y)
-all: xipImage
+KBUILD_IMAGE := xipImage
 else
-all: zImage
+KBUILD_IMAGE := zImage
 endif
+
+all:	$(KBUILD_IMAGE)
 
 boot := arch/arm/boot
 

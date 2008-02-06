@@ -10,7 +10,6 @@
  */
 #include <linux/module.h>
 #include <linux/signal.h>
-#include <linux/ptrace.h>
 #include <linux/mm.h>
 #include <linux/init.h>
 
@@ -131,10 +130,11 @@ __do_user_fault(struct task_struct *tsk, unsigned long addr,
 	force_sig_info(sig, &si, tsk);
 }
 
-void
-do_bad_area(struct task_struct *tsk, struct mm_struct *mm, unsigned long addr,
-	    unsigned int fsr, struct pt_regs *regs)
+void do_bad_area(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
+	struct task_struct *tsk = current;
+	struct mm_struct *mm = tsk->active_mm;
+
 	/*
 	 * If we are in kernel mode at this point, we
 	 * have no context to handle this fault with.
@@ -145,8 +145,8 @@ do_bad_area(struct task_struct *tsk, struct mm_struct *mm, unsigned long addr,
 		__do_kernel_fault(mm, addr, fsr, regs);
 }
 
-#define VM_FAULT_BADMAP		(-20)
-#define VM_FAULT_BADACCESS	(-21)
+#define VM_FAULT_BADMAP		0x010000
+#define VM_FAULT_BADACCESS	0x020000
 
 static int
 __do_page_fault(struct mm_struct *mm, unsigned long addr, unsigned int fsr,
@@ -170,7 +170,7 @@ good_area:
 	if (fsr & (1 << 11)) /* write? */
 		mask = VM_WRITE;
 	else
-		mask = VM_READ|VM_EXEC;
+		mask = VM_READ|VM_EXEC|VM_WRITE;
 
 	fault = VM_FAULT_BADACCESS;
 	if (!(vma->vm_flags & mask))
@@ -183,21 +183,21 @@ good_area:
 	 */
 survive:
 	fault = handle_mm_fault(mm, vma, addr & PAGE_MASK, fsr & (1 << 11));
-
-	/*
-	 * Handle the "normal" cases first - successful and sigbus
-	 */
-	switch (fault) {
-	case VM_FAULT_MAJOR:
-		tsk->maj_flt++;
-		return fault;
-	case VM_FAULT_MINOR:
-		tsk->min_flt++;
-	case VM_FAULT_SIGBUS:
-		return fault;
+	if (unlikely(fault & VM_FAULT_ERROR)) {
+		if (fault & VM_FAULT_OOM)
+			goto out_of_memory;
+		else if (fault & VM_FAULT_SIGBUS)
+			return fault;
+		BUG();
 	}
+	if (fault & VM_FAULT_MAJOR)
+		tsk->maj_flt++;
+	else
+		tsk->min_flt++;
+	return fault;
 
-	if (tsk->pid != 1)
+out_of_memory:
+	if (!is_global_init(tsk))
 		goto out;
 
 	/*
@@ -229,7 +229,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	 * If we're in an interrupt or have no user
 	 * context, we must not take the fault..
 	 */
-	if (in_interrupt() || !mm)
+	if (in_atomic() || !mm)
 		goto no_context;
 
 	/*
@@ -249,7 +249,7 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	/*
 	 * Handle the "normal" case first - VM_FAULT_MAJOR / VM_FAULT_MINOR
 	 */
-	if (fault >= VM_FAULT_MINOR)
+	if (likely(!(fault & (VM_FAULT_ERROR | VM_FAULT_BADMAP | VM_FAULT_BADACCESS))))
 		return 0;
 
 	/*
@@ -259,27 +259,24 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	if (!user_mode(regs))
 		goto no_context;
 
-	switch (fault) {
-	case VM_FAULT_OOM:
+	if (fault & VM_FAULT_OOM) {
 		/*
 		 * We ran out of memory, or some other thing
 		 * happened to us that made us unable to handle
 		 * the page fault gracefully.
 		 */
 		printk("VM: killing process %s\n", tsk->comm);
-		do_exit(SIGKILL);
+		do_group_exit(SIGKILL);
 		return 0;
-
-	case VM_FAULT_SIGBUS:
+	}
+	if (fault & VM_FAULT_SIGBUS) {
 		/*
 		 * We had some memory, but were unable to
 		 * successfully fix up this page fault.
 		 */
 		sig = SIGBUS;
 		code = BUS_ADRERR;
-		break;
-
-	default:
+	} else {
 		/*
 		 * Something tried to access memory that
 		 * isn't in our memory map..
@@ -287,7 +284,6 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		sig = SIGSEGV;
 		code = fault == VM_FAULT_BADACCESS ?
 			SEGV_ACCERR : SEGV_MAPERR;
-		break;
 	}
 
 	__do_user_fault(tsk, addr, fsr, sig, code, regs);
@@ -319,7 +315,6 @@ static int
 do_translation_fault(unsigned long addr, unsigned int fsr,
 		     struct pt_regs *regs)
 {
-	struct task_struct *tsk;
 	unsigned int index;
 	pgd_t *pgd, *pgd_k;
 	pmd_t *pmd, *pmd_k;
@@ -351,9 +346,7 @@ do_translation_fault(unsigned long addr, unsigned int fsr,
 	return 0;
 
 bad_area:
-	tsk = current;
-
-	do_bad_area(tsk, tsk->active_mm, addr, fsr, regs);
+	do_bad_area(addr, fsr, regs);
 	return 0;
 }
 
@@ -364,8 +357,7 @@ bad_area:
 static int
 do_sect_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
-	struct task_struct *tsk = current;
-	do_bad_area(tsk, tsk->active_mm, addr, fsr, regs);
+	do_bad_area(addr, fsr, regs);
 	return 0;
 }
 
@@ -441,7 +433,7 @@ hook_fault_code(int nr, int (*fn)(unsigned long, unsigned int, struct pt_regs *)
 /*
  * Dispatch a data abort to the relevant handler.
  */
-asmlinkage void
+asmlinkage void __exception
 do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = fsr_info + (fsr & 15) + ((fsr & (1 << 10)) >> 6);
@@ -457,10 +449,10 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	info.si_errno = 0;
 	info.si_code  = inf->code;
 	info.si_addr  = (void __user *)addr;
-	notify_die("", regs, &info, fsr, 0);
+	arm_notify_die("", regs, &info, fsr, 0);
 }
 
-asmlinkage void
+asmlinkage void __exception
 do_PrefetchAbort(unsigned long addr, struct pt_regs *regs)
 {
 	do_translation_fault(addr, 0, regs);

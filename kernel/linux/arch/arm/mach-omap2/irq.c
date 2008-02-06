@@ -1,5 +1,5 @@
 /*
- * linux/arch/arm/mach-omap/omap2/irq.c
+ * linux/arch/arm/mach-omap2/irq.c
  *
  * Interrupt handler for OMAP2 boards.
  *
@@ -37,29 +37,17 @@ static struct omap_irq_bank {
 } __attribute__ ((aligned(4))) irq_banks[] = {
 	{
 		/* MPU INTC */
-		.base_reg	= OMAP24XX_IC_BASE,
+		.base_reg	= IO_ADDRESS(OMAP24XX_IC_BASE),
 		.nr_irqs	= 96,
 	}, {
 		/* XXX: DSP INTC */
-
-#if 0
-	/*
-	 * Commented out for now until we fix the IVA clocking
-	 */
-#ifdef CONFIG_ARCH_OMAP2420
-	}, {
-		/* IVA INTC (2420 only) */
-		.base_reg	= OMAP24XX_IVA_INTC_BASE,
-		.nr_irqs	= 16,	/* Actually 32, but only 16 are used */
-#endif
-#endif
 	}
 };
 
 /* XXX: FIQ and additional INTC support (only MPU at the moment) */
 static void omap_ack_irq(unsigned int irq)
 {
-	omap_writel(0x1, irq_banks[0].base_reg + INTC_CONTROL);
+	__raw_writel(0x1, irq_banks[0].base_reg + INTC_CONTROL);
 }
 
 static void omap_mask_irq(unsigned int irq)
@@ -72,7 +60,7 @@ static void omap_mask_irq(unsigned int irq)
 		irq %= 32;
 	}
 
-	omap_writel(1 << irq, irq_banks[0].base_reg + INTC_MIR_SET0 + offset);
+	__raw_writel(1 << irq, irq_banks[0].base_reg + INTC_MIR_SET0 + offset);
 }
 
 static void omap_unmask_irq(unsigned int irq)
@@ -85,7 +73,7 @@ static void omap_unmask_irq(unsigned int irq)
 		irq %= 32;
 	}
 
-	omap_writel(1 << irq, irq_banks[0].base_reg + INTC_MIR_CLEAR0 + offset);
+	__raw_writel(1 << irq, irq_banks[0].base_reg + INTC_MIR_CLEAR0 + offset);
 }
 
 static void omap_mask_ack_irq(unsigned int irq)
@@ -105,17 +93,20 @@ static void __init omap_irq_bank_init_one(struct omap_irq_bank *bank)
 {
 	unsigned long tmp;
 
-	tmp = omap_readl(bank->base_reg + INTC_REVISION) & 0xff;
+	tmp = __raw_readl(bank->base_reg + INTC_REVISION) & 0xff;
 	printk(KERN_INFO "IRQ: Found an INTC at 0x%08lx "
 			 "(revision %ld.%ld) with %d interrupts\n",
 			 bank->base_reg, tmp >> 4, tmp & 0xf, bank->nr_irqs);
 
-	tmp = omap_readl(bank->base_reg + INTC_SYSCONFIG);
+	tmp = __raw_readl(bank->base_reg + INTC_SYSCONFIG);
 	tmp |= 1 << 1;	/* soft reset */
-	omap_writel(tmp, bank->base_reg + INTC_SYSCONFIG);
+	__raw_writel(tmp, bank->base_reg + INTC_SYSCONFIG);
 
-	while (!(omap_readl(bank->base_reg + INTC_SYSSTATUS) & 0x1))
+	while (!(__raw_readl(bank->base_reg + INTC_SYSSTATUS) & 0x1))
 		/* Wait for reset to complete */;
+
+	/* Enable autoidle */
+	__raw_writel(1 << 0, bank->base_reg + INTC_SYSCONFIG);
 }
 
 void __init omap_init_irq(void)
@@ -142,7 +133,7 @@ void __init omap_init_irq(void)
 
 	for (i = 0; i < nr_irqs; i++) {
 		set_irq_chip(i, &omap_irq_chip);
-		set_irq_handler(i, do_level_IRQ);
+		set_irq_handler(i, handle_level_irq);
 		set_irq_flags(i, IRQF_VALID);
 	}
 }
