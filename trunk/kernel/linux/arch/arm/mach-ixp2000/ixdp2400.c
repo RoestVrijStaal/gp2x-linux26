@@ -133,11 +133,13 @@ static void ixdp2400_pci_postinit(void)
 	struct pci_dev *dev;
 
 	if (ixdp2x00_master_npu()) {
-		dev = pci_find_slot(1, IXDP2400_SLAVE_ENET_DEVFN);
+		dev = pci_get_bus_and_slot(1, IXDP2400_SLAVE_ENET_DEVFN);
 		pci_remove_bus_device(dev);
+		pci_dev_put(dev);
 	} else {
-		dev = pci_find_slot(1, IXDP2400_MASTER_ENET_DEVFN);
+		dev = pci_get_bus_and_slot(1, IXDP2400_MASTER_ENET_DEVFN);
 		pci_remove_bus_device(dev);
+		pci_dev_put(dev);
 
 		ixdp2x00_slave_pci_postinit();
 	}
@@ -162,7 +164,7 @@ int __init ixdp2400_pci_init(void)
 
 subsys_initcall(ixdp2400_pci_init);
 
-void ixdp2400_init_irq(void)
+void __init ixdp2400_init_irq(void)
 {
 	ixdp2x00_init_irq(IXDP2400_CPLD_INT_STAT, IXDP2400_CPLD_INT_MASK, IXDP2400_NR_IRQS);
 }

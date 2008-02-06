@@ -17,6 +17,8 @@ static int omap1_clk_enable_generic(struct clk * clk);
 static void omap1_clk_disable_generic(struct clk * clk);
 static void omap1_ckctl_recalc(struct clk * clk);
 static void omap1_watchdog_recalc(struct clk * clk);
+static int omap1_set_sossi_rate(struct clk *clk, unsigned long rate);
+static void omap1_sossi_recalc(struct clk *clk);
 static void omap1_ckctl_recalc_dsp_domain(struct clk * clk);
 static int omap1_clk_enable_dsp_domain(struct clk * clk);
 static int omap1_clk_set_rate_dsp_domain(struct clk * clk, unsigned long rate);
@@ -89,6 +91,7 @@ struct arm_idlect1_clk {
 #define EN_DSPTIMCK	5
 
 /* Various register defines for clock controls scattered around OMAP chip */
+#define SDW_MCLK_INV_BIT	2	/* In ULPD_CLKC_CTRL */
 #define USB_MCLK_EN_BIT		4	/* In ULPD_CLKC_CTRL */
 #define USB_HOST_HHC_UHOST_EN	9	/* In MOD_CONF_CTRL_0 */
 #define SWD_ULPD_PLL_CLK_REQ	1	/* In SWD_CLK_DIV_CTRL_SEL */
@@ -167,9 +170,10 @@ static struct clk ck_dpll1 = {
 
 static struct arm_idlect1_clk ck_dpll1out = {
 	.clk = {
-	       	.name		= "ck_dpll1out",
+		.name		= "ck_dpll1out",
 		.parent		= &ck_dpll1,
-		.flags		= CLOCK_IN_OMAP16XX | CLOCK_IDLE_CONTROL,
+		.flags		= CLOCK_IN_OMAP16XX | CLOCK_IDLE_CONTROL |
+				  ENABLE_REG_32BIT | RATE_PROPAGATES,
 		.enable_reg	= (void __iomem *)ARM_IDLECT2,
 		.enable_bit	= EN_CKOUT_ARM,
 		.recalc		= &followparent_recalc,
@@ -177,6 +181,19 @@ static struct arm_idlect1_clk ck_dpll1out = {
 		.disable	= &omap1_clk_disable_generic,
 	},
 	.idlect_shift	= 12,
+};
+
+static struct clk sossi_ck = {
+	.name		= "ck_sossi",
+	.parent		= &ck_dpll1out.clk,
+	.flags		= CLOCK_IN_OMAP16XX | CLOCK_NO_IDLE_PARENT |
+			  ENABLE_REG_32BIT,
+	.enable_reg	= (void __iomem *)MOD_CONF_CTRL_1,
+	.enable_bit	= 16,
+	.recalc		= &omap1_sossi_recalc,
+	.set_rate	= &omap1_set_sossi_rate,
+	.enable		= &omap1_clk_enable_generic,
+	.disable	= &omap1_clk_disable_generic,
 };
 
 static struct clk arm_ck = {
@@ -281,7 +298,7 @@ static struct clk arminth_ck16xx = {
 static struct clk dsp_ck = {
 	.name		= "dsp_ck",
 	.parent		= &ck_dpll1,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  RATE_CKCTL,
 	.enable_reg	= (void __iomem *)ARM_CKCTL,
 	.enable_bit	= EN_DSPCK,
@@ -294,7 +311,7 @@ static struct clk dsp_ck = {
 static struct clk dspmmu_ck = {
 	.name		= "dspmmu_ck",
 	.parent		= &ck_dpll1,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  RATE_CKCTL | ALWAYS_ENABLED,
 	.rate_offset	= CKCTL_DSPMMUDIV_OFFSET,
 	.recalc		= &omap1_ckctl_recalc,
@@ -305,7 +322,7 @@ static struct clk dspmmu_ck = {
 static struct clk dspper_ck = {
 	.name		= "dspper_ck",
 	.parent		= &ck_dpll1,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  RATE_CKCTL | VIRTUAL_IO_ADDRESS,
 	.enable_reg	= (void __iomem *)DSP_IDLECT2,
 	.enable_bit	= EN_PERCK,
@@ -319,7 +336,7 @@ static struct clk dspper_ck = {
 static struct clk dspxor_ck = {
 	.name		= "dspxor_ck",
 	.parent		= &ck_ref,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  VIRTUAL_IO_ADDRESS,
 	.enable_reg	= (void __iomem *)DSP_IDLECT2,
 	.enable_bit	= EN_XORPCK,
@@ -331,7 +348,7 @@ static struct clk dspxor_ck = {
 static struct clk dsptim_ck = {
 	.name		= "dsptim_ck",
 	.parent		= &ck_ref,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  VIRTUAL_IO_ADDRESS,
 	.enable_reg	= (void __iomem *)DSP_IDLECT2,
 	.enable_bit	= EN_DSPTIMCK,
@@ -373,7 +390,7 @@ static struct clk arminth_ck1510 = {
 
 static struct clk tipb_ck = {
 	/* No-idle controlled by "tc_ck" */
-	.name		= "tibp_ck",
+	.name		= "tipb_ck",
 	.parent		= &tc_ck.clk,
 	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP310 |
 			  ALWAYS_ENABLED,
@@ -732,10 +749,22 @@ remains active during MPU idle whenever this is enabled */
 static struct clk i2c_fck = {
 	.name		= "i2c_fck",
 	.id		= 1,
-	.flags		= CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
+	.flags		= CLOCK_IN_OMAP310 | CLOCK_IN_OMAP1510 | CLOCK_IN_OMAP16XX |
 			  VIRTUAL_CLOCK | CLOCK_NO_IDLE_PARENT |
 			  ALWAYS_ENABLED,
 	.parent		= &armxor_ck.clk,
+	.recalc		= &followparent_recalc,
+	.enable		= &omap1_clk_enable_generic,
+	.disable	= &omap1_clk_disable_generic,
+};
+
+static struct clk i2c_ick = {
+	.name		= "i2c_ick",
+	.id		= 1,
+	.flags		= CLOCK_IN_OMAP16XX |
+			  VIRTUAL_CLOCK | CLOCK_NO_IDLE_PARENT |
+			  ALWAYS_ENABLED,
+	.parent		= &armper_ck.clk,
 	.recalc		= &followparent_recalc,
 	.enable		= &omap1_clk_enable_generic,
 	.disable	= &omap1_clk_disable_generic,
@@ -747,6 +776,7 @@ static struct clk * onchip_clks[] = {
 	&ck_dpll1,
 	/* CK_GEN1 clocks */
 	&ck_dpll1out.clk,
+	&sossi_ck,
 	&arm_ck,
 	&armper_ck.clk,
 	&arm_gpio_ck,
@@ -790,6 +820,7 @@ static struct clk * onchip_clks[] = {
 	/* Virtual clocks */
 	&virtual_ck_mpu,
 	&i2c_fck,
+	&i2c_ick,
 };
 
 #endif

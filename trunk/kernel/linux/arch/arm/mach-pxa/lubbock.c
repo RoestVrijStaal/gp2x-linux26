@@ -48,6 +48,7 @@
 #include <asm/arch/mmc.h>
 
 #include "generic.h"
+#include "devices.h"
 
 
 #define LUB_MISC_WR		__LUB_REG(LUBBOCK_FPGA_PHYS + 0x080)
@@ -85,8 +86,7 @@ static struct irq_chip lubbock_irq_chip = {
 	.unmask		= lubbock_unmask_irq,
 };
 
-static void lubbock_irq_handler(unsigned int irq, struct irqdesc *desc,
-				struct pt_regs *regs)
+static void lubbock_irq_handler(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned long pending = LUB_IRQ_SET_CLR & lubbock_irq_enabled;
 	do {
@@ -94,7 +94,7 @@ static void lubbock_irq_handler(unsigned int irq, struct irqdesc *desc,
 		if (likely(pending)) {
 			irq = LUBBOCK_IRQ(0) + __ffs(pending);
 			desc = irq_desc + irq;
-			desc_handle_irq(irq, desc, regs);
+			desc_handle_irq(irq, desc);
 		}
 		pending = LUB_IRQ_SET_CLR & lubbock_irq_enabled;
 	} while (pending);
@@ -104,12 +104,12 @@ static void __init lubbock_init_irq(void)
 {
 	int irq;
 
-	pxa_init_irq();
+	pxa25x_init_irq();
 
 	/* setup extra lubbock irqs */
 	for (irq = LUBBOCK_IRQ(0); irq <= LUBBOCK_LAST_IRQ; irq++) {
 		set_irq_chip(irq, &lubbock_irq_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 
@@ -221,7 +221,7 @@ static struct resource pxa_ssp_resources[] = {
 
 static struct pxa2xx_spi_master pxa_ssp_master_info = {
 	.ssp_type	= PXA25x_SSP,
-	.clock_enable	= CKEN3_SSP,
+	.clock_enable	= CKEN_SSP,
 	.num_chipselect	= 0,
 };
 
@@ -352,7 +352,7 @@ static struct platform_device *devices[] __initdata = {
 	&pxa_ssp,
 };
 
-static struct pxafb_mach_info sharp_lm8v31 __initdata = {
+static struct pxafb_mode_info sharp_lm8v31_mode = {
 	.pixclock	= 270000,
 	.xres		= 640,
 	.yres		= 480,
@@ -365,6 +365,11 @@ static struct pxafb_mach_info sharp_lm8v31 __initdata = {
 	.lower_margin	= 0,
 	.sync		= FB_SYNC_HOR_HIGH_ACT | FB_SYNC_VERT_HIGH_ACT,
 	.cmap_greyscale	= 0,
+};
+
+static struct pxafb_mach_info sharp_lm8v31 = {
+	.modes		= &sharp_lm8v31_mode,
+	.num_modes	= 1,
 	.cmap_inverse	= 0,
 	.cmap_static	= 0,
 	.lccr0		= LCCR0_SDS,
@@ -374,7 +379,7 @@ static struct pxafb_mach_info sharp_lm8v31 __initdata = {
 #define	MMC_POLL_RATE		msecs_to_jiffies(1000)
 
 static void lubbock_mmc_poll(unsigned long);
-static irqreturn_t (*mmc_detect_int)(int, void *, struct pt_regs *);
+static irq_handler_t mmc_detect_int;
 
 static struct timer_list mmc_timer = {
 	.function	= lubbock_mmc_poll,
@@ -393,22 +398,22 @@ static void lubbock_mmc_poll(unsigned long data)
 	if (LUB_IRQ_SET_CLR & (1 << 0))
 		mod_timer(&mmc_timer, jiffies + MMC_POLL_RATE);
 	else {
-		(void) mmc_detect_int(LUBBOCK_SD_IRQ, (void *)data, NULL);
+		(void) mmc_detect_int(LUBBOCK_SD_IRQ, (void *)data);
 		enable_irq(LUBBOCK_SD_IRQ);
 	}
 }
 
-static irqreturn_t lubbock_detect_int(int irq, void *data, struct pt_regs *regs)
+static irqreturn_t lubbock_detect_int(int irq, void *data)
 {
 	/* IRQ is level triggered; disable, and poll for removal */
 	disable_irq(irq);
 	mod_timer(&mmc_timer, jiffies + MMC_POLL_RATE);
 
-	return mmc_detect_int(irq, data, regs);
+	return mmc_detect_int(irq, data);
 }
 
 static int lubbock_mci_init(struct device *dev,
-		irqreturn_t (*detect_int)(int, void *, struct pt_regs *),
+		irq_handler_t detect_int,
 		void *data)
 {
 	/* setup GPIO for PXA25x MMC controller	*/
@@ -506,6 +511,25 @@ static void __init lubbock_map_io(void)
 	pxa_gpio_mode(GPIO43_BTTXD_MD);
 	pxa_gpio_mode(GPIO44_BTCTS_MD);
 	pxa_gpio_mode(GPIO45_BTRTS_MD);
+
+	GPSR(GPIO48_nPOE) =
+		GPIO_bit(GPIO48_nPOE) |
+		GPIO_bit(GPIO49_nPWE) |
+		GPIO_bit(GPIO50_nPIOR) |
+		GPIO_bit(GPIO51_nPIOW) |
+		GPIO_bit(GPIO52_nPCE_1) |
+		GPIO_bit(GPIO53_nPCE_2);
+
+	pxa_gpio_mode(GPIO48_nPOE_MD);
+	pxa_gpio_mode(GPIO49_nPWE_MD);
+	pxa_gpio_mode(GPIO50_nPIOR_MD);
+	pxa_gpio_mode(GPIO51_nPIOW_MD);
+	pxa_gpio_mode(GPIO52_nPCE_1_MD);
+	pxa_gpio_mode(GPIO53_nPCE_2_MD);
+	pxa_gpio_mode(GPIO54_pSKTSEL_MD);
+	pxa_gpio_mode(GPIO55_nPREG_MD);
+	pxa_gpio_mode(GPIO56_nPWAIT_MD);
+	pxa_gpio_mode(GPIO57_nIOIS16_MD);
 
 	/* This is for the SMC chip select */
 	pxa_gpio_mode(GPIO79_nCS_3_MD);

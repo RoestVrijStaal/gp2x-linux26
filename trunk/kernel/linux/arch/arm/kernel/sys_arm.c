@@ -26,9 +26,9 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/utsname.h>
+#include <linux/ipc.h>
 
 #include <asm/uaccess.h>
-#include <asm/ipc.h>
 
 extern unsigned long do_mremap(unsigned long addr, unsigned long old_len,
 			       unsigned long new_len, unsigned long flags,
@@ -279,7 +279,7 @@ out:
 	return error;
 }
 
-long execve(const char *filename, char **argv, char **envp)
+int kernel_execve(const char *filename, char *const argv[], char *const envp[])
 {
 	struct pt_regs regs;
 	int ret;
@@ -317,10 +317,10 @@ long execve(const char *filename, char **argv, char **envp)
  out:
 	return ret;
 }
-EXPORT_SYMBOL(execve);
+EXPORT_SYMBOL(kernel_execve);
 
 /*
- * Since loff_t is a 64 bit type we avoid a lot of ABI hastle
+ * Since loff_t is a 64 bit type we avoid a lot of ABI hassle
  * with a different argument ordering.
  */
 asmlinkage long sys_arm_fadvise64_64(int fd, int advice,

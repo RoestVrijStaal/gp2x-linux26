@@ -39,12 +39,12 @@
 #endif
 
 static irqreturn_t
-lh7a40x_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+lh7a40x_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
 
 	TIMER_EOI = 0;
-	timer_tick(regs);
+	timer_tick();
 
 	write_sequnlock(&xtime_lock);
 
@@ -53,7 +53,7 @@ lh7a40x_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction lh7a40x_timer_irq = {
 	.name		= "LHA740x Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= lh7a40x_timer_interrupt,
 };
 

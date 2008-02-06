@@ -7,6 +7,7 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  */
+#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
@@ -16,9 +17,11 @@
 #include <linux/profile.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
+#include <linux/err.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
 #include <linux/seq_file.h>
+#include <linux/irq.h>
 
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
@@ -36,7 +39,9 @@
  * The online bitmask indicates that the CPU is up and running.
  */
 cpumask_t cpu_possible_map;
+EXPORT_SYMBOL(cpu_possible_map);
 cpumask_t cpu_online_map;
+EXPORT_SYMBOL(cpu_online_map);
 
 /*
  * as from 2.5, kernels no longer have an init_tasks structure
@@ -447,6 +452,7 @@ int smp_call_function(void (*func)(void *info), void *info, int retry,
 	return smp_call_function_on_cpu(func, info, retry, wait,
 					cpu_online_map);
 }
+EXPORT_SYMBOL_GPL(smp_call_function);
 
 void show_ipi_list(struct seq_file *p)
 {
@@ -472,25 +478,26 @@ void show_local_irqs(struct seq_file *p)
 	seq_putc(p, '\n');
 }
 
-static void ipi_timer(struct pt_regs *regs)
+static void ipi_timer(void)
 {
-	int user = user_mode(regs);
-
 	irq_enter();
-	profile_tick(CPU_PROFILING, regs);
-	update_process_times(user);
+	profile_tick(CPU_PROFILING);
+	update_process_times(user_mode(get_irq_regs()));
 	irq_exit();
 }
 
 #ifdef CONFIG_LOCAL_TIMERS
-asmlinkage void do_local_timer(struct pt_regs *regs)
+asmlinkage void __exception do_local_timer(struct pt_regs *regs)
 {
+	struct pt_regs *old_regs = set_irq_regs(regs);
 	int cpu = smp_processor_id();
 
 	if (local_timer_ack()) {
 		irq_stat[cpu].local_timer_irqs++;
-		ipi_timer(regs);
+		ipi_timer();
 	}
+
+	set_irq_regs(old_regs);
 }
 #endif
 
@@ -545,10 +552,11 @@ static void ipi_cpu_stop(unsigned int cpu)
  *
  *  Bit 0 - Inter-processor function call
  */
-asmlinkage void do_IPI(struct pt_regs *regs)
+asmlinkage void __exception do_IPI(struct pt_regs *regs)
 {
 	unsigned int cpu = smp_processor_id();
 	struct ipi_data *ipi = &per_cpu(ipi_data, cpu);
+	struct pt_regs *old_regs = set_irq_regs(regs);
 
 	ipi->ipi_count++;
 
@@ -572,7 +580,7 @@ asmlinkage void do_IPI(struct pt_regs *regs)
 
 			switch (nextmsg) {
 			case IPI_TIMER:
-				ipi_timer(regs);
+				ipi_timer();
 				break;
 
 			case IPI_RESCHEDULE:
@@ -597,6 +605,8 @@ asmlinkage void do_IPI(struct pt_regs *regs)
 			}
 		} while (msgs);
 	}
+
+	set_irq_regs(old_regs);
 }
 
 void smp_send_reschedule(int cpu)
@@ -621,7 +631,7 @@ void smp_send_stop(void)
 /*
  * not supported here
  */
-int __init setup_profiling_timer(unsigned int multiplier)
+int setup_profiling_timer(unsigned int multiplier)
 {
 	return -EINVAL;
 }

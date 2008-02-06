@@ -9,6 +9,7 @@
  */
 
 #include <asm/unistd.h>
+#include <asm/arch/entry-macro.S>
 
 #include "entry-header.S"
 
@@ -24,6 +25,9 @@ ret_fast_syscall:
 	ldr	r1, [tsk, #TI_FLAGS]
 	tst	r1, #_TIF_WORK_MASK
 	bne	fast_work_pending
+
+	/* perform architecture specific actions before user return */
+	arch_ret_to_user r1, lr
 
 	@ fast_restore_user_regs
 	ldr	r1, [sp, #S_OFF + S_PSR]	@ get calling cpsr
@@ -42,7 +46,7 @@ fast_work_pending:
 work_pending:
 	tst	r1, #_TIF_NEED_RESCHED
 	bne	work_resched
-	tst	r1, #_TIF_NOTIFY_RESUME | _TIF_SIGPENDING
+	tst	r1, #_TIF_SIGPENDING
 	beq	no_work_pending
 	mov	r0, sp				@ 'regs'
 	mov	r2, why				@ 'syscall'
@@ -61,6 +65,9 @@ ret_slow_syscall:
 	tst	r1, #_TIF_WORK_MASK
 	bne	work_pending
 no_work_pending:
+	/* perform architecture specific actions before user return */
+	arch_ret_to_user r1, lr
+
 	@ slow_restore_user_regs
 	ldr	r1, [sp, #S_PSR]		@ get calling cpsr
 	ldr	lr, [sp, #S_PC]!		@ get pc

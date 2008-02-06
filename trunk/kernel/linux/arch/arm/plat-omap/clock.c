@@ -33,6 +33,41 @@ static DEFINE_SPINLOCK(clockfw_lock);
 
 static struct clk_functions *arch_clock;
 
+#ifdef CONFIG_PM_DEBUG
+
+static void print_parents(struct clk *clk)
+{
+	struct clk *p;
+	int printed = 0;
+
+	list_for_each_entry(p, &clocks, node) {
+		if (p->parent == clk && p->usecount) {
+			if (!clk->usecount && !printed) {
+				printk("MISMATCH: %s\n", clk->name);
+				printed = 1;
+			}
+			printk("\t%-15s\n", p->name);
+		}
+	}
+}
+
+void clk_print_usecounts(void)
+{
+	unsigned long flags;
+	struct clk *p;
+
+	spin_lock_irqsave(&clockfw_lock, flags);
+	list_for_each_entry(p, &clocks, node) {
+		if (p->usecount)
+			printk("%-15s: %d\n", p->name, p->usecount);
+		print_parents(p);
+
+	}
+	spin_unlock_irqrestore(&clockfw_lock, flags);
+}
+
+#endif
+
 /*-------------------------------------------------------------------------
  * Standard clock functions defined in include/linux/clk.h
  *-------------------------------------------------------------------------*/
@@ -100,6 +135,7 @@ void clk_disable(struct clk *clk)
 		return;
 
 	spin_lock_irqsave(&clockfw_lock, flags);
+	BUG_ON(clk->usecount == 0);
 	if (arch_clock->clk_disable)
 		arch_clock->clk_disable(clk);
 	spin_unlock_irqrestore(&clockfw_lock, flags);
@@ -248,6 +284,8 @@ void followparent_recalc(struct clk *clk)
 		return;
 
 	clk->rate = clk->parent->rate;
+	if (unlikely(clk->flags & RATE_PROPAGATES))
+		propagate_rate(clk);
 }
 
 /* Propagate rate to children */
@@ -321,6 +359,31 @@ void clk_allow_idle(struct clk *clk)
 EXPORT_SYMBOL(clk_allow_idle);
 
 /*-------------------------------------------------------------------------*/
+
+#ifdef CONFIG_OMAP_RESET_CLOCKS
+/*
+ * Disable any unused clocks left on by the bootloader
+ */
+static int __init clk_disable_unused(void)
+{
+	struct clk *ck;
+	unsigned long flags;
+
+	list_for_each_entry(ck, &clocks, node) {
+		if (ck->usecount > 0 || (ck->flags & ALWAYS_ENABLED) ||
+			ck->enable_reg == 0)
+			continue;
+
+		spin_lock_irqsave(&clockfw_lock, flags);
+		if (arch_clock->clk_disable_unused)
+			arch_clock->clk_disable_unused(ck);
+		spin_unlock_irqrestore(&clockfw_lock, flags);
+	}
+
+	return 0;
+}
+late_initcall(clk_disable_unused);
+#endif
 
 int __init clk_init(struct clk_functions * custom_clocks)
 {

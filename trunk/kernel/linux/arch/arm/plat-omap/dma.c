@@ -2,7 +2,7 @@
  * linux/arch/arm/plat-omap/dma.c
  *
  * Copyright (C) 2003 Nokia Corporation
- * Author: Juha Yrjölä <juha.yrjola@nokia.com>
+ * Author: Juha YrjÃ¶lÃ¤ <juha.yrjola@nokia.com>
  * DMA channel linking for 1610 by Samuel Ortiz <samuel.ortiz@nokia.com>
  * Graphics DMA and LCD DMA graphics tranformations
  * by Imre Deak <imre.deak@nokia.com>
@@ -119,32 +119,41 @@ static void clear_lch_regs(int lch)
 		omap_writew(0, lch_base + i);
 }
 
-void omap_set_dma_priority(int dst_port, int priority)
+void omap_set_dma_priority(int lch, int dst_port, int priority)
 {
 	unsigned long reg;
 	u32 l;
 
-	switch (dst_port) {
-	case OMAP_DMA_PORT_OCP_T1:	/* FFFECC00 */
-		reg = OMAP_TC_OCPT1_PRIOR;
-		break;
-	case OMAP_DMA_PORT_OCP_T2:	/* FFFECCD0 */
-		reg = OMAP_TC_OCPT2_PRIOR;
-		break;
-	case OMAP_DMA_PORT_EMIFF:	/* FFFECC08 */
-		reg = OMAP_TC_EMIFF_PRIOR;
-		break;
-	case OMAP_DMA_PORT_EMIFS:	/* FFFECC04 */
-		reg = OMAP_TC_EMIFS_PRIOR;
-		break;
-	default:
-		BUG();
-		return;
+	if (cpu_class_is_omap1()) {
+		switch (dst_port) {
+		case OMAP_DMA_PORT_OCP_T1:	/* FFFECC00 */
+			reg = OMAP_TC_OCPT1_PRIOR;
+			break;
+		case OMAP_DMA_PORT_OCP_T2:	/* FFFECCD0 */
+			reg = OMAP_TC_OCPT2_PRIOR;
+			break;
+		case OMAP_DMA_PORT_EMIFF:	/* FFFECC08 */
+			reg = OMAP_TC_EMIFF_PRIOR;
+			break;
+		case OMAP_DMA_PORT_EMIFS:	/* FFFECC04 */
+			reg = OMAP_TC_EMIFS_PRIOR;
+			break;
+		default:
+			BUG();
+			return;
+		}
+		l = omap_readl(reg);
+		l &= ~(0xf << 8);
+		l |= (priority & 0xf) << 8;
+		omap_writel(l, reg);
 	}
-	l = omap_readl(reg);
-	l &= ~(0xf << 8);
-	l |= (priority & 0xf) << 8;
-	omap_writel(l, reg);
+
+	if (cpu_is_omap24xx()) {
+		if (priority)
+			OMAP_DMA_CCR_REG(lch) |= (1 << 6);
+		else
+			OMAP_DMA_CCR_REG(lch) &= ~(1 << 6);
+	}
 }
 
 void omap_set_dma_transfer_params(int lch, int data_type, int elem_count,
@@ -232,6 +241,14 @@ void omap_set_dma_color_mode(int lch, enum omap_dma_color_mode mode, u32 color)
 		w |= 1;		/* Channel type G */
 	}
 	OMAP1_DMA_LCH_CTRL_REG(lch) = w;
+}
+
+void omap_set_dma_write_mode(int lch, enum omap_dma_write_mode mode)
+{
+	if (cpu_is_omap24xx()) {
+		OMAP_DMA_CSDP_REG(lch) &= ~(0x3 << 16);
+		OMAP_DMA_CSDP_REG(lch) |= (mode << 16);
+	}
 }
 
 /* Note that src_port is only for omap1 */
@@ -540,7 +557,7 @@ int omap_request_dma(int dev_id, const char *dev_name,
 		omap_enable_channel_irq(free_ch);
 		/* Clear the CSR register and IRQ status register */
 		OMAP_DMA_CSR_REG(free_ch) = OMAP2_DMA_CSR_CLEAR_MASK;
-		omap_writel(~0x0, OMAP_DMA4_IRQSTATUS_L0);
+		omap_writel(1 << free_ch, OMAP_DMA4_IRQSTATUS_L0);
 	}
 
 	*dma_ch_out = free_ch;
@@ -580,10 +597,7 @@ void omap_free_dma(int lch)
 
 		/* Clear the CSR register and IRQ status register */
 		OMAP_DMA_CSR_REG(lch) = OMAP2_DMA_CSR_CLEAR_MASK;
-
-		val = omap_readl(OMAP_DMA4_IRQSTATUS_L0);
-		val |= 1 << lch;
-		omap_writel(val, OMAP_DMA4_IRQSTATUS_L0);
+		omap_writel(1 << lch, OMAP_DMA4_IRQSTATUS_L0);
 
 		/* Disable all DMA interrupts for the channel. */
 		OMAP_DMA_CICR_REG(lch) = 0;
@@ -698,6 +712,32 @@ void omap_stop_dma(int lch)
 }
 
 /*
+ * Allows changing the DMA callback function or data. This may be needed if
+ * the driver shares a single DMA channel for multiple dma triggers.
+ */
+int omap_set_dma_callback(int lch,
+			  void (* callback)(int lch, u16 ch_status, void *data),
+			  void *data)
+{
+	unsigned long flags;
+
+	if (lch < 0)
+		return -ENODEV;
+
+	spin_lock_irqsave(&dma_chan_lock, flags);
+	if (dma_chan[lch].dev_id == -1) {
+		printk(KERN_ERR "DMA callback for not set for free channel\n");
+		spin_unlock_irqrestore(&dma_chan_lock, flags);
+		return -EINVAL;
+	}
+	dma_chan[lch].callback = callback;
+	dma_chan[lch].data = data;
+	spin_unlock_irqrestore(&dma_chan_lock, flags);
+
+	return 0;
+}
+
+/*
  * Returns current physical source address for the given DMA channel.
  * If the channel is running the caller must disable interrupts prior calling
  * this function and process the returned value before re-enabling interrupt to
@@ -707,7 +747,7 @@ void omap_stop_dma(int lch)
  */
 dma_addr_t omap_get_dma_src_pos(int lch)
 {
-	dma_addr_t offset;
+	dma_addr_t offset = 0;
 
 	if (cpu_class_is_omap1())
 		offset = (dma_addr_t) (OMAP1_DMA_CSSA_L_REG(lch) |
@@ -729,7 +769,7 @@ dma_addr_t omap_get_dma_src_pos(int lch)
  */
 dma_addr_t omap_get_dma_dst_pos(int lch)
 {
-	dma_addr_t offset;
+	dma_addr_t offset = 0;
 
 	if (cpu_class_is_omap1())
 		offset = (dma_addr_t) (OMAP1_DMA_CDSA_L_REG(lch) |
@@ -856,8 +896,7 @@ static int omap1_dma_handle_ch(int ch)
 	return 1;
 }
 
-static irqreturn_t omap1_dma_irq_handler(int irq, void *dev_id,
-					 struct pt_regs *regs)
+static irqreturn_t omap1_dma_irq_handler(int irq, void *dev_id)
 {
 	int ch = ((int) dev_id) - 1;
 	int handled = 0;
@@ -885,12 +924,18 @@ static irqreturn_t omap1_dma_irq_handler(int irq, void *dev_id,
 static int omap2_dma_handle_ch(int ch)
 {
 	u32 status = OMAP_DMA_CSR_REG(ch);
-	u32 val;
 
-	if (!status)
+	if (!status) {
+		if (printk_ratelimit())
+			printk(KERN_WARNING "Spurious DMA IRQ for lch %d\n", ch);
 		return 0;
-	if (unlikely(dma_chan[ch].dev_id == -1))
+	}
+	if (unlikely(dma_chan[ch].dev_id == -1)) {
+		if (printk_ratelimit())
+			printk(KERN_WARNING "IRQ %04x for non-allocated DMA"
+					"channel %d\n", status, ch);
 		return 0;
+	}
 	if (unlikely(status & OMAP_DMA_DROP_IRQ))
 		printk(KERN_INFO
 		       "DMA synchronization event drop occurred with device "
@@ -906,11 +951,7 @@ static int omap2_dma_handle_ch(int ch)
 		       dma_chan[ch].dev_id);
 
 	OMAP_DMA_CSR_REG(ch) = OMAP2_DMA_CSR_CLEAR_MASK;
-
-	val = omap_readl(OMAP_DMA4_IRQSTATUS_L0);
-	/* ch in this function is from 0-31 while in register it is 1-32 */
-	val = 1 << (ch);
-	omap_writel(val, OMAP_DMA4_IRQSTATUS_L0);
+	omap_writel(1 << ch, OMAP_DMA4_IRQSTATUS_L0);
 
 	if (likely(dma_chan[ch].callback != NULL))
 		dma_chan[ch].callback(ch, status, dma_chan[ch].data);
@@ -919,18 +960,21 @@ static int omap2_dma_handle_ch(int ch)
 }
 
 /* STATUS register count is from 1-32 while our is 0-31 */
-static irqreturn_t omap2_dma_irq_handler(int irq, void *dev_id,
-					 struct pt_regs *regs)
+static irqreturn_t omap2_dma_irq_handler(int irq, void *dev_id)
 {
 	u32 val;
 	int i;
 
 	val = omap_readl(OMAP_DMA4_IRQSTATUS_L0);
-
-	for (i = 1; i <= OMAP_LOGICAL_DMA_CH_COUNT; i++) {
-		int active = val & (1 << (i - 1));
-		if (active)
-			omap2_dma_handle_ch(i - 1);
+	if (val == 0) {
+		if (printk_ratelimit())
+			printk(KERN_WARNING "Spurious DMA IRQ\n");
+		return IRQ_HANDLED;
+	}
+	for (i = 0; i < OMAP_LOGICAL_DMA_CH_COUNT && val != 0; i++) {
+		if (val & 1)
+			omap2_dma_handle_ch(i);
+		val >>= 1;
 	}
 
 	return IRQ_HANDLED;
@@ -1128,7 +1172,7 @@ static void set_b1_regs(void)
 		break;
 	default:
 		BUG();
-		return;	/* Supress warning about uninitialized vars */
+		return;	/* Suppress warning about uninitialized vars */
 	}
 
 	if (omap_dma_in_1510_mode()) {
@@ -1177,8 +1221,7 @@ static void set_b1_regs(void)
 	omap_writew(fi, OMAP1610_DMA_LCD_SRC_FI_B1_L);
 }
 
-static irqreturn_t lcd_dma_irq_handler(int irq, void *dev_id,
-				       struct pt_regs *regs)
+static irqreturn_t lcd_dma_irq_handler(int irq, void *dev_id)
 {
 	u16 w;
 
@@ -1304,11 +1347,6 @@ void omap_stop_lcd_dma(void)
 	omap_writew(w, OMAP1610_DMA_LCD_CTRL);
 }
 
-int omap_lcd_dma_ext_running(void)
-{
-	return lcd_dma.ext_ctrl && lcd_dma.active;
-}
-
 /*----------------------------------------------------------------------------*/
 
 static int __init omap_init_dma(void)
@@ -1339,6 +1377,14 @@ static int __init omap_init_dma(void)
 			dma_chan_count = 16;
 		} else
 			dma_chan_count = 9;
+		if (cpu_is_omap16xx()) {
+			u16 w;
+
+			/* this would prevent OMAP sleep */
+			w = omap_readw(OMAP1610_DMA_LCD_CTRL);
+			w &= ~(1 << 8);
+			omap_writew(w, OMAP1610_DMA_LCD_CTRL);
+		}
 	} else if (cpu_is_omap24xx()) {
 		u8 revision = omap_readb(OMAP_DMA4_REVISION);
 		printk(KERN_INFO "OMAP DMA hardware revision %d.%d\n",
@@ -1414,11 +1460,13 @@ EXPORT_SYMBOL(omap_request_dma);
 EXPORT_SYMBOL(omap_free_dma);
 EXPORT_SYMBOL(omap_start_dma);
 EXPORT_SYMBOL(omap_stop_dma);
+EXPORT_SYMBOL(omap_set_dma_callback);
 EXPORT_SYMBOL(omap_enable_dma_irq);
 EXPORT_SYMBOL(omap_disable_dma_irq);
 
 EXPORT_SYMBOL(omap_set_dma_transfer_params);
 EXPORT_SYMBOL(omap_set_dma_color_mode);
+EXPORT_SYMBOL(omap_set_dma_write_mode);
 
 EXPORT_SYMBOL(omap_set_dma_src_params);
 EXPORT_SYMBOL(omap_set_dma_src_index);
@@ -1440,7 +1488,6 @@ EXPORT_SYMBOL(omap_free_lcd_dma);
 EXPORT_SYMBOL(omap_enable_lcd_dma);
 EXPORT_SYMBOL(omap_setup_lcd_dma);
 EXPORT_SYMBOL(omap_stop_lcd_dma);
-EXPORT_SYMBOL(omap_lcd_dma_ext_running);
 EXPORT_SYMBOL(omap_set_lcd_dma_b1);
 EXPORT_SYMBOL(omap_set_lcd_dma_single_transfer);
 EXPORT_SYMBOL(omap_set_lcd_dma_ext_controller);

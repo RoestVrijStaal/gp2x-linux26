@@ -20,6 +20,7 @@
 #include <linux/interrupt.h>
 #include <linux/mmc/host.h>
 #include <linux/pm.h>
+#include <linux/backlight.h>
 
 #include <asm/setup.h>
 #include <asm/memory.h>
@@ -44,6 +45,7 @@
 #include <asm/hardware/scoop.h>
 
 #include "generic.h"
+#include "devices.h"
 #include "sharpsl.h"
 
 
@@ -141,15 +143,28 @@ struct corgissp_machinfo corgi_ssp_machinfo = {
 /*
  * Corgi Backlight Device
  */
-static struct corgibl_machinfo corgi_bl_machinfo = {
+static void corgi_bl_kick_battery(void)
+{
+	void (*kick_batt)(void);
+
+	kick_batt = symbol_get(sharpsl_battery_kick);
+	if (kick_batt) {
+		kick_batt();
+		symbol_put(sharpsl_battery_kick);
+	}
+}
+
+static struct generic_bl_info corgi_bl_machinfo = {
+	.name = "corgi-bl",
 	.max_intensity = 0x2f,
 	.default_intensity = 0x1f,
 	.limit_mask = 0x0b,
 	.set_bl_intensity = corgi_bl_set_intensity,
+	.kick_battery = corgi_bl_kick_battery,
 };
 
 static struct platform_device corgibl_device = {
-	.name		= "corgi-bl",
+	.name		= "generic-bl",
 	.dev		= {
  		.parent = &corgifb_device.dev,
 		.platform_data	= &corgi_bl_machinfo,
@@ -212,7 +227,7 @@ static struct platform_device corgits_device = {
  */
 static struct pxamci_platform_data corgi_mci_platform_data;
 
-static int corgi_mci_init(struct device *dev, irqreturn_t (*corgi_detect_int)(int, void *, struct pt_regs *), void *data)
+static int corgi_mci_init(struct device *dev, irq_handler_t corgi_detect_int, void *data)
 {
 	int err;
 
@@ -284,21 +299,9 @@ static struct pxaficp_platform_data corgi_ficp_platform_data = {
 /*
  * USB Device Controller
  */
-static void corgi_udc_command(int cmd)
-{
-	switch(cmd)	{
-	case PXA2XX_UDC_CMD_CONNECT:
-		GPSR(CORGI_GPIO_USB_PULLUP) = GPIO_bit(CORGI_GPIO_USB_PULLUP);
-		break;
-	case PXA2XX_UDC_CMD_DISCONNECT:
-		GPCR(CORGI_GPIO_USB_PULLUP) = GPIO_bit(CORGI_GPIO_USB_PULLUP);
-		break;
-	}
-}
-
 static struct pxa2xx_udc_mach_info udc_info __initdata = {
 	/* no connect GPIO; corgi can't tell connection status */
-	.udc_command		= corgi_udc_command,
+	.gpio_pullup		= CORGI_GPIO_USB_PULLUP,
 };
 
 
@@ -350,7 +353,6 @@ static void __init corgi_init(void)
 	corgi_ssp_set_machinfo(&corgi_ssp_machinfo);
 
 	pxa_gpio_mode(CORGI_GPIO_IR_ON | GPIO_OUT);
-	pxa_gpio_mode(CORGI_GPIO_USB_PULLUP | GPIO_OUT);
 	pxa_gpio_mode(CORGI_GPIO_HSYNC | GPIO_IN);
 
  	pxa_set_udc_info(&udc_info);
@@ -381,7 +383,7 @@ MACHINE_START(CORGI, "SHARP Corgi")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -393,7 +395,7 @@ MACHINE_START(SHEPHERD, "SHARP Shepherd")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END
@@ -405,7 +407,7 @@ MACHINE_START(HUSKY, "SHARP Husky")
 	.io_pg_offst	= (io_p2v(0x40000000) >> 18) & 0xfffc,
 	.fixup		= fixup_corgi,
 	.map_io		= pxa_map_io,
-	.init_irq	= pxa_init_irq,
+	.init_irq	= pxa25x_init_irq,
 	.init_machine	= corgi_init,
 	.timer		= &pxa_timer,
 MACHINE_END

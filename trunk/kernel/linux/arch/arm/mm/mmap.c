@@ -5,7 +5,7 @@
 #include <linux/mm.h>
 #include <linux/mman.h>
 #include <linux/shm.h>
-
+#include <linux/sched.h>
 #include <asm/system.h>
 
 #define COLOUR_ALIGN(addr,pgoff)		\
@@ -49,8 +49,7 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 #endif
 
 	/*
-	 * We should enforce the MAP_FIXED case.  However, currently
-	 * the generic kernel code doesn't allow us to handle this.
+	 * We enforce the MAP_FIXED case.
 	 */
 	if (flags & MAP_FIXED) {
 		if (aliasing && flags & MAP_SHARED && addr & (SHMLBA - 1))
@@ -114,3 +113,25 @@ full_search:
 	}
 }
 
+
+/*
+ * You really shouldn't be using read() or write() on /dev/mem.  This
+ * might go away in the future.
+ */
+int valid_phys_addr_range(unsigned long addr, size_t size)
+{
+	if (addr + size > __pa(high_memory))
+		return 0;
+
+	return 1;
+}
+
+/*
+ * We don't use supersection mappings for mmap() on /dev/mem, which
+ * means that we can't map the memory area above the 4G barrier into
+ * userspace.
+ */
+int valid_mmap_phys_addr_range(unsigned long pfn, size_t size)
+{
+	return !(pfn + (size >> PAGE_SHIFT) > 0x00100000);
+}

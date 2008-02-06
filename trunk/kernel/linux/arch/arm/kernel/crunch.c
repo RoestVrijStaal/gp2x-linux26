@@ -10,7 +10,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/config.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
@@ -76,6 +75,7 @@ static struct notifier_block crunch_notifier_block = {
 static int __init crunch_init(void)
 {
 	thread_register_notifier(&crunch_notifier_block);
+	elf_hwcap |= HWCAP_CRUNCH;
 
 	return 0;
 }

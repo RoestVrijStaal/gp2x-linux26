@@ -22,7 +22,6 @@
  */
 #include <linux/kernel.h>
 #include <linux/pci.h>
-#include <linux/ptrace.h>
 #include <linux/slab.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
@@ -34,6 +33,7 @@
 #include <asm/irq.h>
 #include <asm/system.h>
 #include <asm/mach/pci.h>
+#include <asm/irq_regs.h>
 
 #include <asm/hardware/pci_v3.h>
 
@@ -440,9 +440,10 @@ v3_pci_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	return 1;
 }
 
-static irqreturn_t v3_irq(int irq, void *devid, struct pt_regs *regs)
+static irqreturn_t v3_irq(int irq, void *devid)
 {
 #ifdef CONFIG_DEBUG_LL
+	struct pt_regs *regs = get_irq_regs();
 	unsigned long pc = instruction_pointer(regs);
 	unsigned long instr = *(unsigned long *)pc;
 	char buf[128];

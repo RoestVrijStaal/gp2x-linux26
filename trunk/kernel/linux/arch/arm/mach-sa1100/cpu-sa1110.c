@@ -82,6 +82,14 @@ static struct sdram_params sdram_tbl[] __initdata = {
 		.twr		= 9,
 		.refresh	= 64000,
 		.cas_latency	= 3,
+	}, {    /* Samsung K4S281632B-1H */
+	        .name           = "K4S281632B-1H",
+		.rows           = 12,
+		.tck            = 10,
+		.trp            = 20,
+		.twr            = 10,
+		.refresh        = 64000,
+		.cas_latency    = 3,
 	}, {	/* Samsung KM416S4030CT */
 		.name		= "KM416S4030CT",
 		.rows		= 13,
@@ -323,7 +331,6 @@ static int __init sa1110_cpu_init(struct cpufreq_policy *policy)
 	if (policy->cpu != 0)
 		return -EINVAL;
 	policy->cur = policy->min = policy->max = sa11x0_getspeed(0);
-	policy->governor = CPUFREQ_DEFAULT_GOVERNOR;
 	policy->cpuinfo.min_freq = 59000;
 	policy->cpuinfo.max_freq = 287000;
 	policy->cpuinfo.transition_latency = CPUFREQ_ETERNAL;
@@ -366,6 +373,8 @@ static int __init sa1110_clk_init(void)
 
 		if (machine_is_h3100())
 			name = "KM416S4030CT";
+		if (machine_is_jornada720())
+		        name = "K4S281632B-1H";
 	}
 
 	sdram = sa1110_find_sdram(name);

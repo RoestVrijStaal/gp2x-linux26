@@ -1,5 +1,5 @@
 /*
- * arch/arch/mach-ixp4xx/ixdpg425-pci.c
+ * arch/arm/mach-ixp4xx/ixdpg425-pci.c
  *
  * PCI setup routines for Intel IXDPG425 Platform
  *
@@ -22,10 +22,6 @@
 #include <asm/hardware.h>
 
 #include <asm/mach/pci.h>
-
-extern void ixp4xx_pci_preinit(void);
-extern int ixp4xx_setup(int nr, struct pci_sys_data *sys);
-extern struct pci_bus *ixp4xx_scan_bus(int nr, struct pci_sys_data *sys);
 
 void __init ixdpg425_pci_preinit(void)
 {

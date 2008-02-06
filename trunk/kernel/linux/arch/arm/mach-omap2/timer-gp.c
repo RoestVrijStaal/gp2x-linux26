@@ -5,7 +5,7 @@
  *
  * Copyright (C) 2005 Nokia Corporation
  * Author: Paul Mundt <paul.mundt@nokia.com>
- *         Juha Yrjölä <juha.yrjola@nokia.com>
+ *         Juha YrjÃ¶lÃ¤ <juha.yrjola@nokia.com>
  * OMAP Dual-mode timer framework support by Timo Teras
  *
  * Some parts based off of TI's 24xx code:
@@ -24,6 +24,7 @@
 #include <linux/err.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/irq.h>
 
 #include <asm/mach/time.h>
 #include <asm/arch/dmtimer.h>
@@ -37,13 +38,12 @@ static inline void omap2_gp_timer_start(unsigned long load_val)
 	omap_dm_timer_start(gptimer);
 }
 
-static irqreturn_t omap2_gp_timer_interrupt(int irq, void *dev_id,
-					    struct pt_regs *regs)
+static irqreturn_t omap2_gp_timer_interrupt(int irq, void *dev_id)
 {
 	write_seqlock(&xtime_lock);
 
 	omap_dm_timer_write_status(gptimer, OMAP_TIMER_INT_OVERFLOW);
-	timer_tick(regs);
+	timer_tick();
 
 	write_sequnlock(&xtime_lock);
 
@@ -52,7 +52,7 @@ static irqreturn_t omap2_gp_timer_interrupt(int irq, void *dev_id,
 
 static struct irqaction omap2_gp_timer_irq = {
 	.name		= "gp timer",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= omap2_gp_timer_interrupt,
 };
 
@@ -65,7 +65,7 @@ static void __init omap2_gp_timer_init(void)
 	BUG_ON(gptimer == NULL);
 
 	omap_dm_timer_set_source(gptimer, OMAP_TIMER_SRC_SYS_CLK);
-	tick_period = clk_get_rate(omap_dm_timer_get_fclk(gptimer)) / 100;
+	tick_period = clk_get_rate(omap_dm_timer_get_fclk(gptimer)) / HZ;
 	tick_period -= 1;
 
 	setup_irq(omap_dm_timer_get_irq(gptimer), &omap2_gp_timer_irq);

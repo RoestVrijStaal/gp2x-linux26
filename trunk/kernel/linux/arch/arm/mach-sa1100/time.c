@@ -21,25 +21,6 @@
 #define RTC_DEF_DIVIDER		(32768 - 1)
 #define RTC_DEF_TRIM            0
 
-static unsigned long __init sa1100_get_rtc_time(void)
-{
-	/*
-	 * According to the manual we should be able to let RTTR be zero
-	 * and then a default diviser for a 32.768KHz clock is used.
-	 * Apparently this doesn't work, at least for my SA1110 rev 5.
-	 * If the clock divider is uninitialized then reset it to the
-	 * default value to get the 1Hz clock.
-	 */
-	if (RTTR == 0) {
-		RTTR = RTC_DEF_DIVIDER + (RTC_DEF_TRIM << 16);
-		printk(KERN_WARNING "Warning: uninitialized Real Time Clock\n");
-		/* The current RTC value probably doesn't make sense either */
-		RCNR = 0;
-		return 0;
-	}
-	return RCNR;
-}
-
 static int sa1100_set_rtc(void)
 {
 	unsigned long current_time = xtime.tv_sec;
@@ -77,7 +58,7 @@ static int match_posponed;
 #endif
 
 static irqreturn_t
-sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+sa1100_timer_interrupt(int irq, void *dev_id)
 {
 	unsigned int next_match;
 
@@ -99,7 +80,7 @@ sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	 * handlers.
 	 */
 	do {
-		timer_tick(regs);
+		timer_tick();
 		OSSR = OSSR_M0;  /* Clear match on timer 0 */
 		next_match = (OSMR0 += LATCH);
 	} while ((signed long)(next_match - OSCR) <= 0);
@@ -111,27 +92,23 @@ sa1100_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 static struct irqaction sa1100_timer_irq = {
 	.name		= "SA11xx Timer Tick",
-	.flags		= IRQF_DISABLED | IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler	= sa1100_timer_interrupt,
 };
 
 static void __init sa1100_timer_init(void)
 {
-	struct timespec tv;
+	unsigned long flags;
 
 	set_rtc = sa1100_set_rtc;
 
-	tv.tv_nsec = 0;
-	tv.tv_sec = sa1100_get_rtc_time();
-	do_settimeofday(&tv);
-
 	OIER = 0;		/* disable any timer interrupts */
-	OSCR = LATCH*2;		/* push OSCR out of the way */
-	OSMR0 = LATCH;		/* set initial match */
 	OSSR = 0xf;		/* clear status on all timers */
 	setup_irq(IRQ_OST0, &sa1100_timer_irq);
+	local_irq_save(flags);
 	OIER = OIER_E0;		/* enable match on timer 0 to cause interrupts */
-	OSCR = 0;		/* initialize free-running timer */
+	OSMR0 = OSCR + LATCH;	/* set initial match */
+	local_irq_restore(flags);
 }
 
 #ifdef CONFIG_NO_IDLE_HZ
@@ -151,13 +128,13 @@ static void sa1100_dyn_tick_reprogram(unsigned long ticks)
 }
 
 static irqreturn_t
-sa1100_dyn_tick_handler(int irq, void *dev_id, struct pt_regs *regs)
+sa1100_dyn_tick_handler(int irq, void *dev_id)
 {
 	if (match_posponed) {
 		match_posponed = 0;
 		OSMR0 = initial_match;
 		if ((signed long)(initial_match - OSCR) <= 0)
-			return sa1100_timer_interrupt(irq, dev_id, regs);
+			return sa1100_timer_interrupt(irq, dev_id);
 	}
 	return IRQ_NONE;
 }

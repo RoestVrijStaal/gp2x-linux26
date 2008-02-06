@@ -11,7 +11,6 @@
  * or implied.
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/delay.h>
@@ -48,15 +47,14 @@ static unsigned long pnx4008_gettimeoffset(void)
 /*!
  * IRQ handler for the timer
  */
-static irqreturn_t pnx4008_timer_interrupt(int irq, void *dev_id,
-					   struct pt_regs *regs)
+static irqreturn_t pnx4008_timer_interrupt(int irq, void *dev_id)
 {
 	if (__raw_readl(HSTIM_INT) & MATCH0_INT) {
 
 		write_seqlock(&xtime_lock);
 
 		do {
-			timer_tick(regs);
+			timer_tick();
 
 			/*
 			 * this algorithm takes care of possible delay
@@ -84,7 +82,7 @@ static irqreturn_t pnx4008_timer_interrupt(int irq, void *dev_id,
 
 static struct irqaction pnx4008_timer_irq = {
 	.name = "PNX4008 Tick Timer",
-	.flags = IRQF_DISABLED | IRQF_TIMER,
+	.flags = IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL,
 	.handler = pnx4008_timer_interrupt
 };
 

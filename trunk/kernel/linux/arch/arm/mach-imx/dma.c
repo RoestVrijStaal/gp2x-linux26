@@ -131,7 +131,7 @@ imx_dma_setup_sg_base(imx_dmach_t dma_ch,
  * The function setups DMA channel source and destination addresses for transfer
  * specified by provided parameters. The scatter-gather emulation is disabled,
  * because linear data block
- * form the physical address range is transfered.
+ * form the physical address range is transferred.
  * Return value: if incorrect parameters are provided -%EINVAL.
  *		Zero indicates success.
  */
@@ -192,7 +192,7 @@ imx_dma_setup_single(imx_dmach_t dma_ch, dma_addr_t dma_address,
  * @dmamode: DMA transfer mode, %DMA_MODE_READ from the device to the memory
  *           or %DMA_MODE_WRITE from memory to the device
  *
- * The function setups DMA channel state and registers to be ready for transfer
+ * The function sets up DMA channel state and registers to be ready for transfer
  * specified by provided parameters. The scatter-gather emulation is set up
  * according to the parameters.
  *
@@ -212,7 +212,7 @@ imx_dma_setup_single(imx_dmach_t dma_ch, dma_addr_t dma_address,
  *
  * %CCR_SMOD_LINEAR | %CCR_SSIZ_32 | %CCR_DMOD_FIFO | %CCR_DSIZ_x
  *
- * Be carefull there and do not mistakenly mix source and target device
+ * Be careful here and do not mistakenly mix source and target device
  * port sizes constants, they are really different:
  * %CCR_SSIZ_8, %CCR_SSIZ_16, %CCR_SSIZ_32,
  * %CCR_DSIZ_8, %CCR_DSIZ_16, %CCR_DSIZ_32
@@ -279,8 +279,8 @@ imx_dma_setup_sg(imx_dmach_t dma_ch,
  */
 int
 imx_dma_setup_handlers(imx_dmach_t dma_ch,
-		       void (*irq_handler) (int, void *, struct pt_regs *),
-		       void (*err_handler) (int, void *, struct pt_regs *, int),
+		       void (*irq_handler) (int, void *),
+		       void (*err_handler) (int, void *, int),
 		       void *data)
 {
 	struct imx_dma_channel *imxdma = &imx_dma_channels[dma_ch];
@@ -461,7 +461,7 @@ imx_dma_request_by_prio(imx_dmach_t * pdma_ch, const char *name,
 	return -ENODEV;
 }
 
-static irqreturn_t dma_err_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t dma_err_handler(int irq, void *dev_id)
 {
 	int i, disr = DISR;
 	struct imx_dma_channel *channel;
@@ -495,12 +495,12 @@ static irqreturn_t dma_err_handler(int irq, void *dev_id, struct pt_regs *regs)
 		/*
 		 * The cleaning of @sg field would be questionable
 		 * there, because its value can help to compute
-		 * remaining/transfered bytes count in the handler
+		 * remaining/transferred bytes count in the handler
 		 */
 		/*imx_dma_channels[i].sg = NULL;*/
 
 		if (channel->name && channel->err_handler) {
-			channel->err_handler(i, channel->data, regs, errcode);
+			channel->err_handler(i, channel->data, errcode);
 			continue;
 		}
 
@@ -517,7 +517,7 @@ static irqreturn_t dma_err_handler(int irq, void *dev_id, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t dma_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t dma_irq_handler(int irq, void *dev_id)
 {
 	int i, disr = DISR;
 
@@ -536,7 +536,7 @@ static irqreturn_t dma_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
 				} else {
 					if (channel->irq_handler)
 						channel->irq_handler(i,
-							channel->data, regs);
+							channel->data);
 				}
 			} else {
 				/*
