@@ -32,8 +32,6 @@
 #include <asm/page.h>
 #include <asm/mmu.h>
 #include <asm/pgtable.h>
-#include <asm/ibm4xx.h>
-#include <asm/ibm44x.h>
 #include <asm/cputable.h>
 #include <asm/thread_info.h>
 #include <asm/ppc_asm.h>
@@ -52,9 +50,9 @@
  *   r7 - End of kernel command line string
  *
  */
-	.text
-_GLOBAL(_stext)
-_GLOBAL(_start)
+	.section	.text.head, "ax"
+_ENTRY(_stext);
+_ENTRY(_start);
 	/*
 	 * Reserve a word at a fixed location to store the address
 	 * of abatron_pteptrs
@@ -122,8 +120,8 @@ skpinv:	addi	r4,r4,1				/* Increment */
  * Configure and load pinned entry into TLB slot 63.
  */
 
-	lis	r3,KERNELBASE@h		/* Load the kernel virtual address */
-	ori	r3,r3,KERNELBASE@l
+	lis	r3,PAGE_OFFSET@h
+	ori	r3,r3,PAGE_OFFSET@l
 
 	/* Kernel is at the base of RAM */
 	li r4, 0			/* Load the kernel physical address */
@@ -174,36 +172,28 @@ skpinv:	addi	r4,r4,1				/* Increment */
 	isync
 
 4:
-#ifdef CONFIG_SERIAL_TEXT_DEBUG
-	/*
-	 * Add temporary UART mapping for early debug.
-	 * We can map UART registers wherever we want as long as they don't
-	 * interfere with other system mappings (e.g. with pinned entries).
-	 * For an example of how we handle this - see ocotea.h.       --ebs
-	 */
+#ifdef CONFIG_PPC_EARLY_DEBUG_44x
+	/* Add UART mapping for early debug. */
+
  	/* pageid fields */
-	lis	r3,UART0_IO_BASE@h
-	ori	r3,r3,PPC44x_TLB_VALID | PPC44x_TLB_4K
+	lis	r3,PPC44x_EARLY_DEBUG_VIRTADDR@h
+	ori	r3,r3,PPC44x_TLB_VALID|PPC44x_TLB_TS|PPC44x_TLB_64K
 
 	/* xlat fields */
-	lis	r4,UART0_PHYS_IO_BASE@h		/* RPN depends on SoC */
-#ifndef CONFIG_440EP
-	ori	r4,r4,0x0001		/* ERPN is 1 for second 4GB page */
-#endif
+	lis	r4,CONFIG_PPC_EARLY_DEBUG_44x_PHYSLOW@h
+	ori	r4,r4,CONFIG_PPC_EARLY_DEBUG_44x_PHYSHIGH
 
 	/* attrib fields */
-	li	r5,0
-	ori	r5,r5,(PPC44x_TLB_SW | PPC44x_TLB_SR | PPC44x_TLB_I | PPC44x_TLB_G)
+	li	r5,(PPC44x_TLB_SW|PPC44x_TLB_SR|PPC44x_TLB_I|PPC44x_TLB_G)
+        li      r0,62                    /* TLB slot 0 */
 
-        li      r0,0                    /* TLB slot 0 */
-
-	tlbwe	r3,r0,PPC44x_TLB_PAGEID	/* Load the pageid fields */
-	tlbwe	r4,r0,PPC44x_TLB_XLAT	/* Load the translation fields */
-	tlbwe	r5,r0,PPC44x_TLB_ATTRIB	/* Load the attrib/access fields */
+	tlbwe	r3,r0,PPC44x_TLB_PAGEID
+	tlbwe	r4,r0,PPC44x_TLB_XLAT
+	tlbwe	r5,r0,PPC44x_TLB_ATTRIB
 
 	/* Force context change */
 	isync
-#endif /* CONFIG_SERIAL_TEXT_DEBUG */
+#endif /* CONFIG_PPC_EARLY_DEBUG_44x */
 
 	/* Establish the interrupt vector offsets */
 	SET_IVOR(0,  CriticalInput);
@@ -226,16 +216,6 @@ skpinv:	addi	r4,r4,1				/* Increment */
 	/* Establish the interrupt vector base */
 	lis	r4,interrupt_base@h	/* IVPR only uses the high 16-bits */
 	mtspr	SPRN_IVPR,r4
-
-#ifdef CONFIG_440EP
-	/* Clear DAPUIB flag in CCR0 (enable APU between CPU and FPU) */
-	mfspr	r2,SPRN_CCR0
-	lis	r3,0xffef
-	ori	r3,r3,0xffff
-	and	r2,r2,r3
-	mtspr	SPRN_CCR0,r2
-	isync
-#endif
 
 	/*
 	 * This is where the main kernel code starts.
@@ -339,7 +319,7 @@ interrupt_base:
 	/* If we are faulting a kernel address, we have to use the
 	 * kernel page tables.
 	 */
-	lis	r11, TASK_SIZE@h
+	lis	r11, PAGE_OFFSET@h
 	cmplw	r10, r11
 	blt+	3f
 	lis	r11, swapper_pg_dir@h
@@ -478,7 +458,7 @@ interrupt_base:
 	/* If we are faulting a kernel address, we have to use the
 	 * kernel page tables.
 	 */
-	lis	r11, TASK_SIZE@h
+	lis	r11, PAGE_OFFSET@h
 	cmplw	r10, r11
 	blt+	3f
 	lis	r11, swapper_pg_dir@h
@@ -548,7 +528,7 @@ interrupt_base:
 	/* If we are faulting a kernel address, we have to use the
 	 * kernel page tables.
 	 */
-	lis	r11, TASK_SIZE@h
+	lis	r11, PAGE_OFFSET@h
 	cmplw	r10, r11
 	blt+	3f
 	lis	r11, swapper_pg_dir@h
@@ -711,16 +691,6 @@ _GLOBAL(giveup_fpu)
 	blr
 #endif
 
-/*
- * extern void abort(void)
- *
- * At present, this routine just applies a system reset.
- */
-_GLOBAL(abort)
-        mfspr   r13,SPRN_DBCR0
-        oris    r13,r13,DBCR0_RST_SYSTEM@h
-        mtspr   SPRN_DBCR0,r13
-
 _GLOBAL(set_context)
 
 #ifdef CONFIG_BDI_SWITCH
@@ -752,7 +722,7 @@ empty_zero_page:
  */
 	.globl	swapper_pg_dir
 swapper_pg_dir:
-	.space	8192
+	.space	PGD_TABLE_SIZE
 
 /* Reserved 4k for the critical exception stack & 4k for the machine
  * check stack per CPU for kernel mode exceptions */
@@ -762,14 +732,6 @@ exception_stack_bottom:
 	.space	BOOKE_EXCEPTION_STACK_SIZE
 	.globl	exception_stack_top
 exception_stack_top:
-
-/*
- * This space gets a copy of optional info passed to us by the bootstrap
- * which is used to pass parameters into the kernel like root=/dev/sda1, etc.
- */
-	.globl	cmd_line
-cmd_line:
-	.space	512
 
 /*
  * Room for two PTE pointers, usually the kernel and current user pointers

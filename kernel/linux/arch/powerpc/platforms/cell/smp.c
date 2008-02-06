@@ -44,6 +44,7 @@
 #include <asm/rtas.h>
 
 #include "interrupt.h"
+#include <asm/udbg.h>
 
 #ifdef DEBUG
 #define DBG(fmt...) udbg_printf(fmt)
@@ -57,7 +58,7 @@
  */
 static cpumask_t of_spin_map;
 
-extern void pSeries_secondary_smp_init(unsigned long);
+extern void generic_secondary_smp_init(unsigned long);
 
 /**
  * smp_startup_cpu() - start the given cpu
@@ -74,7 +75,7 @@ static inline int __devinit smp_startup_cpu(unsigned int lcpu)
 {
 	int status;
 	unsigned long start_here = __pa((u32)*((unsigned long *)
-					       pSeries_secondary_smp_init));
+					       generic_secondary_smp_init));
 	unsigned int pcpu;
 	int start_cpu;
 

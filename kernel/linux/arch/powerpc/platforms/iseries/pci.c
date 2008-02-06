@@ -24,7 +24,6 @@
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/module.h>
-#include <linux/ide.h>
 #include <linux/pci.h>
 
 #include <asm/io.h>
@@ -34,6 +33,7 @@
 #include <asm/pci-bridge.h>
 #include <asm/iommu.h>
 #include <asm/abs_addr.h>
+#include <asm/firmware.h>
 
 #include <asm/iseries/hv_call_xm.h>
 #include <asm/iseries/mf.h>
@@ -155,53 +155,6 @@ static void pci_Log_Error(char *Error_Text, int Bus, int SubBus,
 }
 
 /*
- * iSeries_pcibios_init
- *
- * Description:
- *   This function checks for all possible system PCI host bridges that connect
- *   PCI buses.  The system hypervisor is queried as to the guest partition
- *   ownership status.  A pci_controller is built for any bus which is partially
- *   owned or fully owned by this guest partition.
- */
-void iSeries_pcibios_init(void)
-{
-	struct pci_controller *phb;
-	struct device_node *root = of_find_node_by_path("/");
-	struct device_node *node = NULL;
-
-	if (root == NULL) {
-		printk(KERN_CRIT "iSeries_pcibios_init: can't find root "
-				"of device tree\n");
-		return;
-	}
-	while ((node = of_get_next_child(root, node)) != NULL) {
-		HvBusNumber bus;
-		u32 *busp;
-
-		if ((node->type == NULL) || (strcmp(node->type, "pci") != 0))
-			continue;
-
-		busp = (u32 *)get_property(node, "bus-range", NULL);
-		if (busp == NULL)
-			continue;
-		bus = *busp;
-		printk("bus %d appears to exist\n", bus);
-		phb = pcibios_alloc_controller(node);
-		if (phb == NULL)
-			continue;
-
-		phb->pci_mem_offset = phb->local_number = bus;
-		phb->first_busno = bus;
-		phb->last_busno = bus;
-		phb->ops = &iSeries_pci_ops;
-	}
-
-	of_node_put(root);
-
-	pci_devs_phb_init();
-}
-
-/*
  * iSeries_pci_final_fixup(void)
  */
 void __init iSeries_pci_final_fixup(void)
@@ -221,10 +174,9 @@ void __init iSeries_pci_final_fixup(void)
 
 		if (node != NULL) {
 			struct pci_dn *pdn = PCI_DN(node);
-			u32 *agent;
+			const u32 *agent;
 
-			agent = (u32 *)get_property(node, "linux,agent-id",
-					NULL);
+			agent = of_get_property(node, "linux,agent-id", NULL);
 			if ((pdn != NULL) && (agent != NULL)) {
 				u8 irq = iSeries_allocate_IRQ(pdn->busno, 0,
 						pdn->bussubno);
@@ -253,7 +205,7 @@ void __init iSeries_pci_final_fixup(void)
 			PCI_DN(node)->pcidev = pdev;
 			allocate_device_bars(pdev);
 			iSeries_Device_Information(pdev, DeviceCount);
-			iommu_devnode_init_iSeries(node);
+			iommu_devnode_init_iSeries(pdev, node);
 		} else
 			printk("PCI: Device Tree not found for 0x%016lX\n",
 					(unsigned long)pdev);
@@ -261,54 +213,6 @@ void __init iSeries_pci_final_fixup(void)
 	iSeries_activate_IRQs();
 	mf_display_src(0xC9000200);
 }
-
-void pcibios_fixup_bus(struct pci_bus *PciBus)
-{
-}
-
-void pcibios_fixup_resources(struct pci_dev *pdev)
-{
-}
-
-/*
- * I/0 Memory copy MUST use mmio commands on iSeries
- * To do; For performance, include the hv call directly
- */
-void iSeries_memset_io(volatile void __iomem *dest, char c, size_t Count)
-{
-	u8 ByteValue = c;
-	long NumberOfBytes = Count;
-
-	while (NumberOfBytes > 0) {
-		iSeries_Write_Byte(ByteValue, dest++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memset_io);
-
-void iSeries_memcpy_toio(volatile void __iomem *dest, void *source, size_t count)
-{
-	char *src = source;
-	long NumberOfBytes = count;
-
-	while (NumberOfBytes > 0) {
-		iSeries_Write_Byte(*src++, dest++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memcpy_toio);
-
-void iSeries_memcpy_fromio(void *dest, const volatile void __iomem *src, size_t count)
-{
-	char *dst = dest;
-	long NumberOfBytes = count;
-
-	while (NumberOfBytes > 0) {
-		*dst++ = iSeries_Read_Byte(src++);
-		-- NumberOfBytes;
-	}
-}
-EXPORT_SYMBOL(iSeries_memcpy_fromio);
 
 /*
  * Look down the chain to find the matching Device Device
@@ -486,13 +390,9 @@ static inline struct device_node *xlate_iomm_address(
 /*
  * Read MM I/O Instructions for the iSeries
  * On MM I/O error, all ones are returned and iSeries_pci_IoError is cal
- * else, data is returned in big Endian format.
- *
- * iSeries_Read_Byte = Read Byte  ( 8 bit)
- * iSeries_Read_Word = Read Word  (16 bit)
- * iSeries_Read_Long = Read Long  (32 bit)
+ * else, data is returned in Big Endian format.
  */
-u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
+static u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -510,18 +410,18 @@ u8 iSeries_Read_Byte(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Byte: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Byte: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xff;
 	}
 	do {
 		HvCall3Ret16(HvCallPciBarLoad8, &ret, dsa, BarOffset, 0);
 	} while (CheckReturnCode("RDB", DevNode, &retry, ret.rc) != 0);
 
-	return (u8)ret.value;
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Byte);
 
-u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
+static u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -539,7 +439,8 @@ u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Word: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Word: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xffff;
 	}
 	do {
@@ -547,11 +448,10 @@ u16 iSeries_Read_Word(const volatile void __iomem *IoAddress)
 				BarOffset, 0);
 	} while (CheckReturnCode("RDW", DevNode, &retry, ret.rc) != 0);
 
-	return swab16((u16)ret.value);
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Word);
 
-u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
+static u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -569,7 +469,8 @@ u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Read_Long: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Read_Long: invalid access at IO address %p\n",
+			       IoAddress);
 		return 0xffffffff;
 	}
 	do {
@@ -577,18 +478,14 @@ u32 iSeries_Read_Long(const volatile void __iomem *IoAddress)
 				BarOffset, 0);
 	} while (CheckReturnCode("RDL", DevNode, &retry, ret.rc) != 0);
 
-	return swab32((u32)ret.value);
+	return ret.value;
 }
-EXPORT_SYMBOL(iSeries_Read_Long);
 
 /*
  * Write MM I/O Instructions for the iSeries
  *
- * iSeries_Write_Byte = Write Byte (8 bit)
- * iSeries_Write_Word = Write Word(16 bit)
- * iSeries_Write_Long = Write Long(32 bit)
  */
-void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -613,9 +510,8 @@ void iSeries_Write_Byte(u8 data, volatile void __iomem *IoAddress)
 		rc = HvCall4(HvCallPciBarStore8, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWB", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Byte);
 
-void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -633,16 +529,16 @@ void iSeries_Write_Word(u16 data, volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Write_Word: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Write_Word: invalid access at IO address %p\n",
+			       IoAddress);
 		return;
 	}
 	do {
-		rc = HvCall4(HvCallPciBarStore16, dsa, BarOffset, swab16(data), 0);
+		rc = HvCall4(HvCallPciBarStore16, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWW", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Word);
 
-void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
+static void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
 {
 	u64 BarOffset;
 	u64 dsa;
@@ -660,11 +556,226 @@ void iSeries_Write_Long(u32 data, volatile void __iomem *IoAddress)
 			num_printed = 0;
 		}
 		if (num_printed++ < 10)
-			printk(KERN_ERR "iSeries_Write_Long: invalid access at IO address %p\n", IoAddress);
+			printk(KERN_ERR "iSeries_Write_Long: invalid access at IO address %p\n",
+			       IoAddress);
 		return;
 	}
 	do {
-		rc = HvCall4(HvCallPciBarStore32, dsa, BarOffset, swab32(data), 0);
+		rc = HvCall4(HvCallPciBarStore32, dsa, BarOffset, data, 0);
 	} while (CheckReturnCode("WWL", DevNode, &retry, rc) != 0);
 }
-EXPORT_SYMBOL(iSeries_Write_Long);
+
+static u8 iseries_readb(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Byte(addr);
+}
+
+static u16 iseries_readw(const volatile void __iomem *addr)
+{
+	return le16_to_cpu(iSeries_Read_Word(addr));
+}
+
+static u32 iseries_readl(const volatile void __iomem *addr)
+{
+	return le32_to_cpu(iSeries_Read_Long(addr));
+}
+
+static u16 iseries_readw_be(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Word(addr);
+}
+
+static u32 iseries_readl_be(const volatile void __iomem *addr)
+{
+	return iSeries_Read_Long(addr);
+}
+
+static void iseries_writeb(u8 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Byte(data, addr);
+}
+
+static void iseries_writew(u16 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Word(cpu_to_le16(data), addr);
+}
+
+static void iseries_writel(u32 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Long(cpu_to_le32(data), addr);
+}
+
+static void iseries_writew_be(u16 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Word(data, addr);
+}
+
+static void iseries_writel_be(u32 data, volatile void __iomem *addr)
+{
+	iSeries_Write_Long(data, addr);
+}
+
+static void iseries_readsb(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u8 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Byte(addr);
+}
+
+static void iseries_readsw(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u16 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Word(addr);
+}
+
+static void iseries_readsl(const volatile void __iomem *addr, void *buf,
+			   unsigned long count)
+{
+	u32 *dst = buf;
+	while(count-- > 0)
+		*(dst++) = iSeries_Read_Long(addr);
+}
+
+static void iseries_writesb(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u8 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Byte(*(src++), addr);
+}
+
+static void iseries_writesw(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u16 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Word(*(src++), addr);
+}
+
+static void iseries_writesl(volatile void __iomem *addr, const void *buf,
+			    unsigned long count)
+{
+	const u32 *src = buf;
+	while(count-- > 0)
+		iSeries_Write_Long(*(src++), addr);
+}
+
+static void iseries_memset_io(volatile void __iomem *addr, int c,
+			      unsigned long n)
+{
+	volatile char __iomem *d = addr;
+
+	while (n-- > 0)
+		iSeries_Write_Byte(c, d++);
+}
+
+static void iseries_memcpy_fromio(void *dest, const volatile void __iomem *src,
+				  unsigned long n)
+{
+	char *d = dest;
+	const volatile char __iomem *s = src;
+
+	while (n-- > 0)
+		*d++ = iSeries_Read_Byte(s++);
+}
+
+static void iseries_memcpy_toio(volatile void __iomem *dest, const void *src,
+				unsigned long n)
+{
+	const char *s = src;
+	volatile char __iomem *d = dest;
+
+	while (n-- > 0)
+		iSeries_Write_Byte(*s++, d++);
+}
+
+/* We only set MMIO ops. The default PIO ops will be default
+ * to the MMIO ops + pci_io_base which is 0 on iSeries as
+ * expected so both should work.
+ *
+ * Note that we don't implement the readq/writeq versions as
+ * I don't know of an HV call for doing so. Thus, the default
+ * operation will be used instead, which will fault a the value
+ * return by iSeries for MMIO addresses always hits a non mapped
+ * area. This is as good as the BUG() we used to have there.
+ */
+static struct ppc_pci_io __initdata iseries_pci_io = {
+	.readb = iseries_readb,
+	.readw = iseries_readw,
+	.readl = iseries_readl,
+	.readw_be = iseries_readw_be,
+	.readl_be = iseries_readl_be,
+	.writeb = iseries_writeb,
+	.writew = iseries_writew,
+	.writel = iseries_writel,
+	.writew_be = iseries_writew_be,
+	.writel_be = iseries_writel_be,
+	.readsb = iseries_readsb,
+	.readsw = iseries_readsw,
+	.readsl = iseries_readsl,
+	.writesb = iseries_writesb,
+	.writesw = iseries_writesw,
+	.writesl = iseries_writesl,
+	.memset_io = iseries_memset_io,
+	.memcpy_fromio = iseries_memcpy_fromio,
+	.memcpy_toio = iseries_memcpy_toio,
+};
+
+/*
+ * iSeries_pcibios_init
+ *
+ * Description:
+ *   This function checks for all possible system PCI host bridges that connect
+ *   PCI buses.  The system hypervisor is queried as to the guest partition
+ *   ownership status.  A pci_controller is built for any bus which is partially
+ *   owned or fully owned by this guest partition.
+ */
+void __init iSeries_pcibios_init(void)
+{
+	struct pci_controller *phb;
+	struct device_node *root = of_find_node_by_path("/");
+	struct device_node *node = NULL;
+
+	/* Install IO hooks */
+	ppc_pci_io = iseries_pci_io;
+
+	/* iSeries has no IO space in the common sense, it needs to set
+	 * the IO base to 0
+	 */
+	pci_io_base = 0;
+
+	if (root == NULL) {
+		printk(KERN_CRIT "iSeries_pcibios_init: can't find root "
+				"of device tree\n");
+		return;
+	}
+	while ((node = of_get_next_child(root, node)) != NULL) {
+		HvBusNumber bus;
+		const u32 *busp;
+
+		if ((node->type == NULL) || (strcmp(node->type, "pci") != 0))
+			continue;
+
+		busp = of_get_property(node, "bus-range", NULL);
+		if (busp == NULL)
+			continue;
+		bus = *busp;
+		printk("bus %d appears to exist\n", bus);
+		phb = pcibios_alloc_controller(node);
+		if (phb == NULL)
+			continue;
+
+		phb->pci_mem_offset = bus;
+		phb->first_busno = bus;
+		phb->last_busno = bus;
+		phb->ops = &iSeries_pci_ops;
+	}
+
+	of_node_put(root);
+
+	pci_devs_phb_init();
+}
+

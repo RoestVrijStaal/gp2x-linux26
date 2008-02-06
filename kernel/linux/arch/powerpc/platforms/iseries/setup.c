@@ -21,12 +21,13 @@
 #include <linux/smp.h>
 #include <linux/param.h>
 #include <linux/string.h>
-#include <linux/initrd.h>
 #include <linux/seq_file.h>
 #include <linux/kdev_t.h>
 #include <linux/major.h>
 #include <linux/root_dev.h>
 #include <linux/kernel.h>
+#include <linux/hrtimer.h>
+#include <linux/tick.h>
 
 #include <asm/processor.h>
 #include <asm/machdep.h>
@@ -42,7 +43,6 @@
 #include <asm/time.h>
 #include <asm/paca.h>
 #include <asm/cache.h>
-#include <asm/sections.h>
 #include <asm/abs_addr.h>
 #include <asm/iseries/hv_lp_config.h>
 #include <asm/iseries/hv_call_event.h>
@@ -59,6 +59,7 @@
 #include "irq.h"
 #include "vpd_areas.h"
 #include "processor_vpd.h"
+#include "it_lp_naca.h"
 #include "main_store.h"
 #include "call_sm.h"
 #include "call_hpt.h"
@@ -79,10 +80,6 @@ extern void iSeries_pci_final_fixup(void);
 static void iSeries_pci_final_fixup(void) { }
 #endif
 
-extern int rd_size;		/* Defined in drivers/block/rd.c */
-
-extern unsigned long iSeries_recal_tb;
-extern unsigned long iSeries_recal_titan;
 
 struct MemoryBlock {
 	unsigned long absStart;
@@ -294,26 +291,8 @@ static void __init iSeries_init_early(void)
 {
 	DBG(" -> iSeries_init_early()\n");
 
-#if defined(CONFIG_BLK_DEV_INITRD)
-	/*
-	 * If the init RAM disk has been configured and there is
-	 * a non-zero starting address for it, set it up
-	 */
-	if (naca.xRamDisk) {
-		initrd_start = (unsigned long)__va(naca.xRamDisk);
-		initrd_end = initrd_start + naca.xRamDiskSize * HW_PAGE_SIZE;
-		initrd_below_start_ok = 1;	// ramdisk in kernel space
-		ROOT_DEV = Root_RAM0;
-		if (((rd_size * 1024) / HW_PAGE_SIZE) < naca.xRamDiskSize)
-			rd_size = (naca.xRamDiskSize * HW_PAGE_SIZE) / 1024;
-	} else
-#endif /* CONFIG_BLK_DEV_INITRD */
-	{
-	    /* ROOT_DEV = MKDEV(VIODASD_MAJOR, 1); */
-	}
-
-	iSeries_recal_tb = get_tb();
-	iSeries_recal_titan = HvCallXm_loadTod();
+	/* Snapshot the timebase, for use in later recalibration */
+	iSeries_time_init_early();
 
 	/*
 	 * Initialize the DMA/TCE management
@@ -329,17 +308,6 @@ static void __init iSeries_init_early(void)
 	HvCallEvent_setLpEventQueueInterruptProc(0, 0);
 
 	mf_init();
-
-	/* If we were passed an initrd, set the ROOT_DEV properly if the values
-	 * look sensible. If not, clear initrd reference.
-	 */
-#ifdef CONFIG_BLK_DEV_INITRD
-	if (initrd_start >= KERNELBASE && initrd_end >= KERNELBASE &&
-	    initrd_end > initrd_start)
-		ROOT_DEV = Root_RAM0;
-	else
-		initrd_start = initrd_end = 0;
-#endif /* CONFIG_BLK_DEV_INITRD */
 
 	DBG(" <- iSeries_init_early()\n");
 }
@@ -558,7 +526,8 @@ static void __init iSeries_fixup_klimit(void)
 static int __init iSeries_src_init(void)
 {
         /* clear the progress line */
-        ppc_md.progress(" ", 0xffff);
+	if (firmware_has_feature(FW_FEATURE_ISERIES))
+		ppc_md.progress(" ", 0xffff);
         return 0;
 }
 
@@ -594,6 +563,7 @@ static void yield_shared_processor(void)
 static void iseries_shared_idle(void)
 {
 	while (1) {
+		tick_nohz_stop_sched_tick();
 		while (!need_resched() && !hvlpevent_is_pending()) {
 			local_irq_disable();
 			ppc64_runlatch_off();
@@ -607,6 +577,7 @@ static void iseries_shared_idle(void)
 		}
 
 		ppc64_runlatch_on();
+		tick_nohz_restart_sched_tick();
 
 		if (hvlpevent_is_pending())
 			process_iSeries_events();
@@ -622,6 +593,7 @@ static void iseries_dedicated_idle(void)
 	set_thread_flag(TIF_POLLING_NRFLAG);
 
 	while (1) {
+		tick_nohz_stop_sched_tick();
 		if (!need_resched()) {
 			while (!need_resched()) {
 				ppc64_runlatch_off();
@@ -638,15 +610,22 @@ static void iseries_dedicated_idle(void)
 		}
 
 		ppc64_runlatch_on();
+		tick_nohz_restart_sched_tick();
 		preempt_enable_no_resched();
 		schedule();
 		preempt_disable();
 	}
 }
 
-#ifndef CONFIG_PCI
-void __init iSeries_init_IRQ(void) { }
-#endif
+static void __iomem *iseries_ioremap(phys_addr_t address, unsigned long size,
+				     unsigned long flags)
+{
+	return (void __iomem *)address;
+}
+
+static void iseries_iounmap(volatile void __iomem *token)
+{
+}
 
 static int __init iseries_probe(void)
 {
@@ -654,10 +633,9 @@ static int __init iseries_probe(void)
 	if (!of_flat_dt_is_compatible(root, "IBM,iSeries"))
 		return 0;
 
-	powerpc_firmware_features |= FW_FEATURE_ISERIES;
-	powerpc_firmware_features |= FW_FEATURE_LPAR;
-
 	hpte_init_iSeries();
+	/* iSeries does not support 16M pages */
+	cur_cpu_spec->cpu_features &= ~CPU_FTR_16M_PAGE;
 
 	return 1;
 }
@@ -679,12 +657,22 @@ define_machine(iseries) {
 	.calibrate_decr	= generic_calibrate_decr,
 	.progress	= iSeries_progress,
 	.probe		= iseries_probe,
+	.ioremap	= iseries_ioremap,
+	.iounmap	= iseries_iounmap,
 	/* XXX Implement enable_pmcs for iSeries */
 };
 
 void * __init iSeries_early_setup(void)
 {
 	unsigned long phys_mem_size;
+
+	/* Identify CPU type. This is done again by the common code later
+	 * on but calling this function multiple times is fine.
+	 */
+	identify_cpu(0, mfspr(SPRN_PVR));
+
+	powerpc_firmware_features |= FW_FEATURE_ISERIES;
+	powerpc_firmware_features |= FW_FEATURE_LPAR;
 
 	iSeries_fixup_klimit();
 

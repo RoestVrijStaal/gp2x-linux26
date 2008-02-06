@@ -133,10 +133,12 @@ _GLOBAL(swsusp_arch_suspend)
 /* Resume code */
 _GLOBAL(swsusp_arch_resume)
 
+#ifdef CONFIG_ALTIVEC
 	/* Stop pending alitvec streams and memory accesses */
 BEGIN_FTR_SECTION
 	DSSALL
 END_FTR_SECTION_IFSET(CPU_FTR_ALTIVEC)
+#endif
  	sync
 
 	/* Disable MSR:DR to make sure we don't take a TLB or
@@ -159,8 +161,8 @@ END_FTR_SECTION_IFSET(CPU_FTR_ALTIVEC)
 	isync
 
 	/* Load ptr the list of pages to copy in r3 */
-	lis	r11,(pagedir_nosave - KERNELBASE)@h
-	ori	r11,r11,pagedir_nosave@l
+	lis	r11,(restore_pblist - KERNELBASE)@h
+	ori	r11,r11,restore_pblist@l
 	lwz	r10,0(r11)
 
 	/* Copy the pages. This is a very basic implementation, to
