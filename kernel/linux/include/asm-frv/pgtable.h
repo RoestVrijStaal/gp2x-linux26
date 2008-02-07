@@ -25,7 +25,7 @@
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
-struct mm_struct;
+#include <linux/sched.h>
 struct vm_area_struct;
 #endif
 
@@ -70,7 +70,11 @@ static inline int pte_file(pte_t pte) { return 0; }
 
 #define swapper_pg_dir		((pgd_t *) NULL)
 
-#define pgtable_cache_init()	do {} while(0)
+#define pgtable_cache_init()		do {} while (0)
+#define arch_enter_lazy_mmu_mode()	do {} while (0)
+#define arch_leave_lazy_mmu_mode()	do {} while (0)
+#define arch_enter_lazy_cpu_mode()	do {} while (0)
+#define arch_leave_lazy_cpu_mode()	do {} while (0)
 
 #else /* !CONFIG_MMU */
 /*****************************************************************************/
@@ -176,8 +180,6 @@ do {							\
 } while(0)
 #define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
 
-#define set_pte_atomic(pteptr, pteval)		set_pte((pteptr), (pteval))
-
 /*
  * pgd_offset() returns a (pgd_t *)
  * pgd_index() is used get the offset into the pgd page's array of pgd_t's;
@@ -217,7 +219,7 @@ static inline pud_t *pud_offset(pgd_t *pgd, unsigned long address)
 }
 
 #define pgd_page(pgd)				(pud_page((pud_t){ pgd }))
-#define pgd_page_kernel(pgd)			(pud_page_kernel((pud_t){ pgd }))
+#define pgd_page_vaddr(pgd)			(pud_page_vaddr((pud_t){ pgd }))
 
 /*
  * allocating and freeing a pud is trivial: the 1-entry pud is
@@ -246,7 +248,7 @@ static inline void pud_clear(pud_t *pud)	{ }
 #define set_pud(pudptr, pudval)			set_pmd((pmd_t *)(pudptr), (pmd_t) { pudval })
 
 #define pud_page(pud)				(pmd_page((pmd_t){ pud }))
-#define pud_page_kernel(pud)			(pmd_page_kernel((pmd_t){ pud }))
+#define pud_page_vaddr(pud)			(pmd_page_vaddr((pmd_t){ pud }))
 
 /*
  * (pmds are folded into pgds so this doesn't get actually called,
@@ -362,7 +364,7 @@ static inline pmd_t *pmd_offset(pud_t *dir, unsigned long address)
 #define	pmd_bad(x)	(pmd_val(x) & xAMPRx_SS)
 #define pmd_clear(xp)	do { __set_pmd(xp, 0); } while(0)
 
-#define pmd_page_kernel(pmd) \
+#define pmd_page_vaddr(pmd) \
 	((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
 
 #ifndef CONFIG_DISCONTIGMEM
@@ -375,29 +377,16 @@ static inline pmd_t *pmd_offset(pud_t *dir, unsigned long address)
  * The following only work if pte_present() is true.
  * Undefined behaviour if not..
  */
-static inline int pte_read(pte_t pte)		{ return !((pte).pte & _PAGE_SUPER); }
-static inline int pte_exec(pte_t pte)		{ return !((pte).pte & _PAGE_SUPER); }
 static inline int pte_dirty(pte_t pte)		{ return (pte).pte & _PAGE_DIRTY; }
 static inline int pte_young(pte_t pte)		{ return (pte).pte & _PAGE_ACCESSED; }
 static inline int pte_write(pte_t pte)		{ return !((pte).pte & _PAGE_WP); }
 
-static inline pte_t pte_rdprotect(pte_t pte)	{ (pte).pte |= _PAGE_SUPER; return pte; }
-static inline pte_t pte_exprotect(pte_t pte)	{ (pte).pte |= _PAGE_SUPER; return pte; }
 static inline pte_t pte_mkclean(pte_t pte)	{ (pte).pte &= ~_PAGE_DIRTY; return pte; }
 static inline pte_t pte_mkold(pte_t pte)	{ (pte).pte &= ~_PAGE_ACCESSED; return pte; }
 static inline pte_t pte_wrprotect(pte_t pte)	{ (pte).pte |= _PAGE_WP; return pte; }
-static inline pte_t pte_mkread(pte_t pte)	{ (pte).pte &= ~_PAGE_SUPER; return pte; }
-static inline pte_t pte_mkexec(pte_t pte)	{ (pte).pte &= ~_PAGE_SUPER; return pte; }
 static inline pte_t pte_mkdirty(pte_t pte)	{ (pte).pte |= _PAGE_DIRTY; return pte; }
 static inline pte_t pte_mkyoung(pte_t pte)	{ (pte).pte |= _PAGE_ACCESSED; return pte; }
 static inline pte_t pte_mkwrite(pte_t pte)	{ (pte).pte &= ~_PAGE_WP; return pte; }
-
-static inline int ptep_test_and_clear_dirty(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
-{
-	int i = test_and_clear_bit(_PAGE_BIT_DIRTY, ptep);
-	asm volatile("dcf %M0" :: "U"(*ptep));
-	return i;
-}
 
 static inline int ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
 {
@@ -458,7 +447,7 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 #define pte_index(address) \
 		(((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
 #define pte_offset_kernel(dir, address) \
-	((pte_t *) pmd_page_kernel(*(dir)) +  pte_index(address))
+	((pte_t *) pmd_page_vaddr(*(dir)) +  pte_index(address))
 
 #if defined(CONFIG_HIGHPTE)
 #define pte_offset_map(dir, address) \
@@ -507,12 +496,7 @@ static inline int pte_file(pte_t pte)
 #define io_remap_pfn_range(vma, vaddr, pfn, size, prot)		\
 		remap_pfn_range(vma, vaddr, pfn, size, prot)
 
-#define MK_IOSPACE_PFN(space, pfn)	(pfn)
-#define GET_IOSPACE(pfn)		0
-#define GET_PFN(pfn)			(pfn)
-
 #define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
-#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
 #define __HAVE_ARCH_PTEP_GET_AND_CLEAR
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
 #define __HAVE_ARCH_PTE_SAME
