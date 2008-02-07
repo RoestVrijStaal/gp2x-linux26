@@ -142,20 +142,6 @@ void put_driver(struct device_driver * drv)
 	kobject_put(&drv->kobj);
 }
 
-static void klist_devices_get(struct klist_node *n)
-{
-	struct device *dev = container_of(n, struct device, knode_driver);
-
-	get_device(dev);
-}
-
-static void klist_devices_put(struct klist_node *n)
-{
-	struct device *dev = container_of(n, struct device, knode_driver);
-
-	put_device(dev);
-}
-
 /**
  *	driver_register - register driver with bus
  *	@drv:	driver to register
@@ -163,10 +149,6 @@ static void klist_devices_put(struct klist_node *n)
  *	We pass off most of the work to the bus_add_driver() call,
  *	since most of the things we have to do deal with the bus
  *	structures.
- *
- *	The one interesting aspect is that we setup @drv->unloaded
- *	as a completion that gets complete when the driver reference
- *	count reaches 0.
  */
 int driver_register(struct device_driver * drv)
 {
@@ -175,29 +157,20 @@ int driver_register(struct device_driver * drv)
 	    (drv->bus->shutdown && drv->shutdown)) {
 		printk(KERN_WARNING "Driver '%s' needs updating - please use bus_type methods\n", drv->name);
 	}
-	klist_init(&drv->klist_devices, klist_devices_get, klist_devices_put);
-	init_completion(&drv->unloaded);
+	klist_init(&drv->klist_devices, NULL, NULL);
 	return bus_add_driver(drv);
 }
-
 
 /**
  *	driver_unregister - remove driver from system.
  *	@drv:	driver.
  *
  *	Again, we pass off most of the work to the bus-level call.
- *
- *	Though, once that is done, we wait until @drv->unloaded is completed.
- *	This will block until the driver refcount reaches 0, and it is
- *	released. Only modular drivers will call this function, and we
- *	have to guarantee that it won't complete, letting the driver
- *	unload until all references are gone.
  */
 
 void driver_unregister(struct device_driver * drv)
 {
 	bus_remove_driver(drv);
-	wait_for_completion(&drv->unloaded);
 }
 
 /**
