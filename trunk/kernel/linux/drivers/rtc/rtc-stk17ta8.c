@@ -1,7 +1,10 @@
 /*
- * An rtc driver for the Dallas DS1553
+ * A RTC driver for the Simtek STK17TA8
  *
- * Copyright (C) 2006 Atsushi Nemoto <anemo@mba.ocn.ne.jp>
+ * By Thomas Hommel <thomas.hommel@gefanuc.com>
+ *
+ * Based on the DS1553 driver from
+ * Atsushi Nemoto <anemo@mba.ocn.ne.jp>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -18,20 +21,20 @@
 #include <linux/platform_device.h>
 #include <linux/io.h>
 
-#define DRV_VERSION "0.2"
+#define DRV_VERSION "0.1"
 
-#define RTC_REG_SIZE		0x2000
-#define RTC_OFFSET		0x1ff0
+#define RTC_REG_SIZE		0x20000
+#define RTC_OFFSET		0x1fff0
 
 #define RTC_FLAGS		(RTC_OFFSET + 0)
+#define RTC_CENTURY		(RTC_OFFSET + 1)
 #define RTC_SECONDS_ALARM	(RTC_OFFSET + 2)
 #define RTC_MINUTES_ALARM	(RTC_OFFSET + 3)
 #define RTC_HOURS_ALARM		(RTC_OFFSET + 4)
 #define RTC_DATE_ALARM		(RTC_OFFSET + 5)
 #define RTC_INTERRUPTS		(RTC_OFFSET + 6)
 #define RTC_WATCHDOG		(RTC_OFFSET + 7)
-#define RTC_CONTROL		(RTC_OFFSET + 8)
-#define RTC_CENTURY		(RTC_OFFSET + 8)
+#define RTC_CALIBRATION		(RTC_OFFSET + 8)
 #define RTC_SECONDS		(RTC_OFFSET + 9)
 #define RTC_MINUTES		(RTC_OFFSET + 10)
 #define RTC_HOURS		(RTC_OFFSET + 11)
@@ -40,28 +43,26 @@
 #define RTC_MONTH		(RTC_OFFSET + 14)
 #define RTC_YEAR		(RTC_OFFSET + 15)
 
-#define RTC_CENTURY_MASK	0x3f
 #define RTC_SECONDS_MASK	0x7f
 #define RTC_DAY_MASK		0x07
+#define RTC_CAL_MASK		0x3f
 
-/* Bits in the Control/Century register */
-#define RTC_WRITE		0x80
-#define RTC_READ		0x40
-
-/* Bits in the Seconds register */
+/* Bits in the Calibration register */
 #define RTC_STOP		0x80
 
 /* Bits in the Flags register */
 #define RTC_FLAGS_AF		0x40
-#define RTC_FLAGS_BLF		0x10
+#define RTC_FLAGS_PF		0x20
+#define RTC_WRITE		0x02
+#define RTC_READ		0x01
 
 /* Bits in the Interrupts register */
-#define RTC_INTS_AE		0x80
+#define RTC_INTS_AIE		0x40
 
 struct rtc_plat_data {
 	struct rtc_device *rtc;
 	void __iomem *ioaddr;
-	resource_size_t baseaddr;
+	unsigned long baseaddr;
 	unsigned long last_jiffies;
 	int irq;
 	unsigned int irqen;
@@ -71,16 +72,15 @@ struct rtc_plat_data {
 	int alrm_mday;
 };
 
-static int ds1553_rtc_set_time(struct device *dev, struct rtc_time *tm)
+static int stk17ta8_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 	void __iomem *ioaddr = pdata->ioaddr;
-	u8 century;
+	u8 flags;
 
-	century = BIN2BCD((tm->tm_year + 1900) / 100);
-
-	writeb(RTC_WRITE, pdata->ioaddr + RTC_CONTROL);
+	flags = readb(pdata->ioaddr + RTC_FLAGS);
+	writeb(flags | RTC_WRITE, pdata->ioaddr + RTC_FLAGS);
 
 	writeb(BIN2BCD(tm->tm_year % 100), ioaddr + RTC_YEAR);
 	writeb(BIN2BCD(tm->tm_mon + 1), ioaddr + RTC_MONTH);
@@ -89,26 +89,28 @@ static int ds1553_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	writeb(BIN2BCD(tm->tm_hour), ioaddr + RTC_HOURS);
 	writeb(BIN2BCD(tm->tm_min), ioaddr + RTC_MINUTES);
 	writeb(BIN2BCD(tm->tm_sec) & RTC_SECONDS_MASK, ioaddr + RTC_SECONDS);
+	writeb(BIN2BCD((tm->tm_year + 1900) / 100), ioaddr + RTC_CENTURY);
 
-	/* RTC_CENTURY and RTC_CONTROL share same register */
-	writeb(RTC_WRITE | (century & RTC_CENTURY_MASK), ioaddr + RTC_CENTURY);
-	writeb(century & RTC_CENTURY_MASK, ioaddr + RTC_CONTROL);
+	writeb(flags & ~RTC_WRITE, pdata->ioaddr + RTC_FLAGS);
 	return 0;
 }
 
-static int ds1553_rtc_read_time(struct device *dev, struct rtc_time *tm)
+static int stk17ta8_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 	void __iomem *ioaddr = pdata->ioaddr;
 	unsigned int year, month, day, hour, minute, second, week;
 	unsigned int century;
+	u8 flags;
 
 	/* give enough time to update RTC in case of continuous read */
 	if (pdata->last_jiffies == jiffies)
 		msleep(1);
 	pdata->last_jiffies = jiffies;
-	writeb(RTC_READ, ioaddr + RTC_CONTROL);
+
+	flags = readb(pdata->ioaddr + RTC_FLAGS);
+	writeb(flags | RTC_READ, ioaddr + RTC_FLAGS);
 	second = readb(ioaddr + RTC_SECONDS) & RTC_SECONDS_MASK;
 	minute = readb(ioaddr + RTC_MINUTES);
 	hour = readb(ioaddr + RTC_HOURS);
@@ -116,8 +118,8 @@ static int ds1553_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	week = readb(ioaddr + RTC_DAY) & RTC_DAY_MASK;
 	month = readb(ioaddr + RTC_MONTH);
 	year = readb(ioaddr + RTC_YEAR);
-	century = readb(ioaddr + RTC_CENTURY) & RTC_CENTURY_MASK;
-	writeb(0, ioaddr + RTC_CONTROL);
+	century = readb(ioaddr + RTC_CENTURY);
+	writeb(flags & ~RTC_READ, ioaddr + RTC_FLAGS);
 	tm->tm_sec = BCD2BIN(second);
 	tm->tm_min = BCD2BIN(minute);
 	tm->tm_hour = BCD2BIN(hour);
@@ -134,12 +136,17 @@ static int ds1553_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static void ds1553_rtc_update_alarm(struct rtc_plat_data *pdata)
+static void stk17ta8_rtc_update_alarm(struct rtc_plat_data *pdata)
 {
 	void __iomem *ioaddr = pdata->ioaddr;
-	unsigned long flags;
+	unsigned long irqflags;
+	u8 flags;
 
-	spin_lock_irqsave(&pdata->rtc->irq_lock, flags);
+	spin_lock_irqsave(&pdata->rtc->irq_lock, irqflags);
+
+	flags = readb(ioaddr + RTC_FLAGS);
+	writeb(flags | RTC_WRITE, ioaddr + RTC_FLAGS);
+
 	writeb(pdata->alrm_mday < 0 || (pdata->irqen & RTC_UF) ?
 	       0x80 : BIN2BCD(pdata->alrm_mday),
 	       ioaddr + RTC_DATE_ALARM);
@@ -152,12 +159,13 @@ static void ds1553_rtc_update_alarm(struct rtc_plat_data *pdata)
 	writeb(pdata->alrm_sec < 0 || (pdata->irqen & RTC_UF) ?
 	       0x80 : BIN2BCD(pdata->alrm_sec),
 	       ioaddr + RTC_SECONDS_ALARM);
-	writeb(pdata->irqen ? RTC_INTS_AE : 0, ioaddr + RTC_INTERRUPTS);
+	writeb(pdata->irqen ? RTC_INTS_AIE : 0, ioaddr + RTC_INTERRUPTS);
 	readb(ioaddr + RTC_FLAGS);	/* clear interrupts */
-	spin_unlock_irqrestore(&pdata->rtc->irq_lock, flags);
+	writeb(flags & ~RTC_WRITE, ioaddr + RTC_FLAGS);
+	spin_unlock_irqrestore(&pdata->rtc->irq_lock, irqflags);
 }
 
-static int ds1553_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+static int stk17ta8_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
@@ -170,11 +178,11 @@ static int ds1553_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	pdata->alrm_sec = alrm->time.tm_sec;
 	if (alrm->enabled)
 		pdata->irqen |= RTC_AF;
-	ds1553_rtc_update_alarm(pdata);
+	stk17ta8_rtc_update_alarm(pdata);
 	return 0;
 }
 
-static int ds1553_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
+static int stk17ta8_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
@@ -189,7 +197,7 @@ static int ds1553_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	return 0;
 }
 
-static irqreturn_t ds1553_rtc_interrupt(int irq, void *dev_id)
+static irqreturn_t stk17ta8_rtc_interrupt(int irq, void *dev_id)
 {
 	struct platform_device *pdev = dev_id;
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
@@ -207,18 +215,18 @@ static irqreturn_t ds1553_rtc_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void ds1553_rtc_release(struct device *dev)
+static void stk17ta8_rtc_release(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 
 	if (pdata->irq >= 0) {
 		pdata->irqen = 0;
-		ds1553_rtc_update_alarm(pdata);
+		stk17ta8_rtc_update_alarm(pdata);
 	}
 }
 
-static int ds1553_rtc_ioctl(struct device *dev, unsigned int cmd,
+static int stk17ta8_rtc_ioctl(struct device *dev, unsigned int cmd,
 			    unsigned long arg)
 {
 	struct platform_device *pdev = to_platform_device(dev);
@@ -229,19 +237,11 @@ static int ds1553_rtc_ioctl(struct device *dev, unsigned int cmd,
 	switch (cmd) {
 	case RTC_AIE_OFF:
 		pdata->irqen &= ~RTC_AF;
-		ds1553_rtc_update_alarm(pdata);
+		stk17ta8_rtc_update_alarm(pdata);
 		break;
 	case RTC_AIE_ON:
 		pdata->irqen |= RTC_AF;
-		ds1553_rtc_update_alarm(pdata);
-		break;
-	case RTC_UIE_OFF:
-		pdata->irqen &= ~RTC_UF;
-		ds1553_rtc_update_alarm(pdata);
-		break;
-	case RTC_UIE_ON:
-		pdata->irqen |= RTC_UF;
-		ds1553_rtc_update_alarm(pdata);
+		stk17ta8_rtc_update_alarm(pdata);
 		break;
 	default:
 		return -ENOIOCTLCMD;
@@ -249,18 +249,18 @@ static int ds1553_rtc_ioctl(struct device *dev, unsigned int cmd,
 	return 0;
 }
 
-static const struct rtc_class_ops ds1553_rtc_ops = {
-	.read_time	= ds1553_rtc_read_time,
-	.set_time	= ds1553_rtc_set_time,
-	.read_alarm	= ds1553_rtc_read_alarm,
-	.set_alarm	= ds1553_rtc_set_alarm,
-	.release	= ds1553_rtc_release,
-	.ioctl		= ds1553_rtc_ioctl,
+static const struct rtc_class_ops stk17ta8_rtc_ops = {
+	.read_time	= stk17ta8_rtc_read_time,
+	.set_time	= stk17ta8_rtc_set_time,
+	.read_alarm	= stk17ta8_rtc_read_alarm,
+	.set_alarm	= stk17ta8_rtc_set_alarm,
+	.release	= stk17ta8_rtc_release,
+	.ioctl		= stk17ta8_rtc_ioctl,
 };
 
-static ssize_t ds1553_nvram_read(struct kobject *kobj,
-				 struct bin_attribute *bin_attr,
-				 char *buf, loff_t pos, size_t size)
+static ssize_t stk17ta8_nvram_read(struct kobject *kobj,
+				 struct bin_attribute *attr, char *buf,
+				 loff_t pos, size_t size)
 {
 	struct platform_device *pdev =
 		to_platform_device(container_of(kobj, struct device, kobj));
@@ -273,9 +273,9 @@ static ssize_t ds1553_nvram_read(struct kobject *kobj,
 	return count;
 }
 
-static ssize_t ds1553_nvram_write(struct kobject *kobj,
-				  struct bin_attribute *bin_attr,
-				  char *buf, loff_t pos, size_t size)
+static ssize_t stk17ta8_nvram_write(struct kobject *kobj,
+				  struct bin_attribute *attr, char *buf,
+				  loff_t pos, size_t size)
 {
 	struct platform_device *pdev =
 		to_platform_device(container_of(kobj, struct device, kobj));
@@ -288,28 +288,31 @@ static ssize_t ds1553_nvram_write(struct kobject *kobj,
 	return count;
 }
 
-static struct bin_attribute ds1553_nvram_attr = {
+static struct bin_attribute stk17ta8_nvram_attr = {
 	.attr = {
 		.name = "nvram",
 		.mode = S_IRUGO | S_IWUSR,
+		.owner = THIS_MODULE,
 	},
 	.size = RTC_OFFSET,
-	.read = ds1553_nvram_read,
-	.write = ds1553_nvram_write,
+	.read = stk17ta8_nvram_read,
+	.write = stk17ta8_nvram_write,
 };
 
-static int __devinit ds1553_rtc_probe(struct platform_device *pdev)
+static int __init stk17ta8_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
 	struct resource *res;
-	unsigned int cen, sec;
-	struct rtc_plat_data *pdata = NULL;
+	unsigned int cal;
+	unsigned int flags;
+	struct rtc_plat_data *pdata;
 	void __iomem *ioaddr = NULL;
 	int ret = 0;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
 		return -ENODEV;
+
 	pdata = kzalloc(sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
@@ -328,20 +331,20 @@ static int __devinit ds1553_rtc_probe(struct platform_device *pdev)
 	pdata->irq = platform_get_irq(pdev, 0);
 
 	/* turn RTC on if it was not on */
-	sec = readb(ioaddr + RTC_SECONDS);
-	if (sec & RTC_STOP) {
-		sec &= RTC_SECONDS_MASK;
-		cen = readb(ioaddr + RTC_CENTURY) & RTC_CENTURY_MASK;
-		writeb(RTC_WRITE, ioaddr + RTC_CONTROL);
-		writeb(sec, ioaddr + RTC_SECONDS);
-		writeb(cen & RTC_CENTURY_MASK, ioaddr + RTC_CONTROL);
+	cal = readb(ioaddr + RTC_CALIBRATION);
+	if (cal & RTC_STOP) {
+		cal &= RTC_CAL_MASK;
+		flags = readb(ioaddr + RTC_FLAGS);
+		writeb(flags | RTC_WRITE, ioaddr + RTC_FLAGS);
+		writeb(cal, ioaddr + RTC_CALIBRATION);
+		writeb(flags & ~RTC_WRITE, ioaddr + RTC_FLAGS);
 	}
-	if (readb(ioaddr + RTC_FLAGS) & RTC_FLAGS_BLF)
+	if (readb(ioaddr + RTC_FLAGS) & RTC_FLAGS_PF)
 		dev_warn(&pdev->dev, "voltage-low detected.\n");
 
 	if (pdata->irq >= 0) {
 		writeb(0, ioaddr + RTC_INTERRUPTS);
-		if (request_irq(pdata->irq, ds1553_rtc_interrupt,
+		if (request_irq(pdata->irq, stk17ta8_rtc_interrupt,
 				IRQF_DISABLED | IRQF_SHARED,
 				pdev->name, pdev) < 0) {
 			dev_warn(&pdev->dev, "interrupt not available.\n");
@@ -350,7 +353,7 @@ static int __devinit ds1553_rtc_probe(struct platform_device *pdev)
 	}
 
 	rtc = rtc_device_register(pdev->name, &pdev->dev,
-				  &ds1553_rtc_ops, THIS_MODULE);
+				  &stk17ta8_rtc_ops, THIS_MODULE);
 	if (IS_ERR(rtc)) {
 		ret = PTR_ERR(rtc);
 		goto out;
@@ -358,7 +361,7 @@ static int __devinit ds1553_rtc_probe(struct platform_device *pdev)
 	pdata->rtc = rtc;
 	pdata->last_jiffies = jiffies;
 	platform_set_drvdata(pdev, pdata);
-	ret = sysfs_create_bin_file(&pdev->dev.kobj, &ds1553_nvram_attr);
+	ret = sysfs_create_bin_file(&pdev->dev.kobj, &stk17ta8_nvram_attr);
 	if (ret)
 		goto out;
 	return 0;
@@ -375,11 +378,11 @@ static int __devinit ds1553_rtc_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int __devexit ds1553_rtc_remove(struct platform_device *pdev)
+static int __devexit stk17ta8_rtc_remove(struct platform_device *pdev)
 {
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 
-	sysfs_remove_bin_file(&pdev->dev.kobj, &ds1553_nvram_attr);
+	sysfs_remove_bin_file(&pdev->dev.kobj, &stk17ta8_nvram_attr);
 	rtc_device_unregister(pdata->rtc);
 	if (pdata->irq >= 0) {
 		writeb(0, pdata->ioaddr + RTC_INTERRUPTS);
@@ -391,29 +394,29 @@ static int __devexit ds1553_rtc_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver ds1553_rtc_driver = {
-	.probe		= ds1553_rtc_probe,
-	.remove		= __devexit_p(ds1553_rtc_remove),
+static struct platform_driver stk17ta8_rtc_driver = {
+	.probe		= stk17ta8_rtc_probe,
+	.remove		= __devexit_p(stk17ta8_rtc_remove),
 	.driver		= {
-		.name	= "rtc-ds1553",
+		.name	= "stk17ta8",
 		.owner	= THIS_MODULE,
 	},
 };
 
-static __init int ds1553_init(void)
+static __init int stk17ta8_init(void)
 {
-	return platform_driver_register(&ds1553_rtc_driver);
+	return platform_driver_register(&stk17ta8_rtc_driver);
 }
 
-static __exit void ds1553_exit(void)
+static __exit void stk17ta8_exit(void)
 {
-	platform_driver_unregister(&ds1553_rtc_driver);
+	return platform_driver_unregister(&stk17ta8_rtc_driver);
 }
 
-module_init(ds1553_init);
-module_exit(ds1553_exit);
+module_init(stk17ta8_init);
+module_exit(stk17ta8_exit);
 
-MODULE_AUTHOR("Atsushi Nemoto <anemo@mba.ocn.ne.jp>");
-MODULE_DESCRIPTION("Dallas DS1553 RTC driver");
+MODULE_AUTHOR("Thomas Hommel <thomas.hommel@gefanuc.com>");
+MODULE_DESCRIPTION("Simtek STK17TA8 RTC driver");
 MODULE_LICENSE("GPL");
 MODULE_VERSION(DRV_VERSION);

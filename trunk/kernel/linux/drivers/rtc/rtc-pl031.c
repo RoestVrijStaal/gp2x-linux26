@@ -21,11 +21,11 @@
 #include <linux/interrupt.h>
 #include <linux/string.h>
 #include <linux/pm.h>
+#include <linux/bitops.h>
 
 #include <linux/amba/bus.h>
 
 #include <asm/io.h>
-#include <asm/bitops.h>
 #include <asm/hardware.h>
 #include <asm/irq.h>
 #include <asm/rtc.h>
@@ -47,11 +47,11 @@ struct pl031_local {
 	void __iomem *base;
 };
 
-static irqreturn_t pl031_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pl031_interrupt(int irq, void *dev_id)
 {
 	struct rtc_device *rtc = dev_id;
 
-	rtc_update_irq(&rtc->class_dev, 1, RTC_AF);
+	rtc_update_irq(rtc, 1, RTC_AF);
 
 	return IRQ_HANDLED;
 }
@@ -128,7 +128,7 @@ static int pl031_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	return 0;
 }
 
-static struct rtc_class_ops pl031_ops = {
+static const struct rtc_class_ops pl031_ops = {
 	.open = pl031_open,
 	.release = pl031_release,
 	.ioctl = pl031_ioctl,

@@ -33,6 +33,8 @@
 
 #include <asm/mach/time.h>
 
+#include <asm/arch/at91_rtc.h>
+
 
 #define AT91_RTC_FREQ		1
 #define AT91_RTC_EPOCH		1900UL	/* just like arch/arm/common/rtctime.c */
@@ -137,6 +139,9 @@ static int at91_rtc_readalarm(struct device *dev, struct rtc_wkalrm *alrm)
 	tm->tm_yday = rtc_year_days(tm->tm_mday, tm->tm_mon, tm->tm_year);
 	tm->tm_year = at91_alarm_year - 1900;
 
+	alrm->enabled = (at91_sys_read(AT91_RTC_IMR) & AT91_RTC_ALARM)
+			? 1 : 0;
+
 	pr_debug("%s(): %4d-%02d-%02d %02d:%02d:%02d\n", __FUNCTION__,
 		1900 + tm->tm_year, tm->tm_mon, tm->tm_mday,
 		tm->tm_hour, tm->tm_min, tm->tm_sec);
@@ -159,6 +164,7 @@ static int at91_rtc_setalarm(struct device *dev, struct rtc_wkalrm *alrm)
 	tm.tm_min = alrm->time.tm_min;
 	tm.tm_sec = alrm->time.tm_sec;
 
+	at91_sys_write(AT91_RTC_IDR, AT91_RTC_ALARM);
 	at91_sys_write(AT91_RTC_TIMALR,
 		  BIN2BCD(tm.tm_sec) << 0
 		| BIN2BCD(tm.tm_min) << 8
@@ -168,6 +174,9 @@ static int at91_rtc_setalarm(struct device *dev, struct rtc_wkalrm *alrm)
 		  BIN2BCD(tm.tm_mon + 1) << 16		/* tm_mon starts at zero */
 		| BIN2BCD(tm.tm_mday) << 24
 		| AT91_RTC_DATEEN | AT91_RTC_MTHEN);
+
+	if (alrm->enabled)
+		at91_sys_write(AT91_RTC_IER, AT91_RTC_ALARM);
 
 	pr_debug("%s(): %4d-%02d-%02d %02d:%02d:%02d\n", __FUNCTION__,
 		at91_alarm_year, tm.tm_mon, tm.tm_mday, tm.tm_hour,
@@ -223,8 +232,6 @@ static int at91_rtc_proc(struct device *dev, struct seq_file *seq)
 {
 	unsigned long imr = at91_sys_read(AT91_RTC_IMR);
 
-	seq_printf(seq, "alarm_IRQ\t: %s\n",
-			(imr & AT91_RTC_ALARM) ? "yes" : "no");
 	seq_printf(seq, "update_IRQ\t: %s\n",
 			(imr & AT91_RTC_ACKUPD) ? "yes" : "no");
 	seq_printf(seq, "periodic_IRQ\t: %s\n",
@@ -238,8 +245,7 @@ static int at91_rtc_proc(struct device *dev, struct seq_file *seq)
 /*
  * IRQ handler for the RTC
  */
-static irqreturn_t at91_rtc_interrupt(int irq, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t at91_rtc_interrupt(int irq, void *dev_id)
 {
 	struct platform_device *pdev = dev_id;
 	struct rtc_device *rtc = platform_get_drvdata(pdev);
@@ -257,7 +263,7 @@ static irqreturn_t at91_rtc_interrupt(int irq, void *dev_id,
 
 		at91_sys_write(AT91_RTC_SCCR, rtsr);	/* clear status reg */
 
-		rtc_update_irq(&rtc->class_dev, 1, events);
+		rtc_update_irq(rtc, 1, events);
 
 		pr_debug("%s(): num=%ld, events=0x%02lx\n", __FUNCTION__,
 			events >> 8, events & 0x000000FF);
@@ -267,7 +273,7 @@ static irqreturn_t at91_rtc_interrupt(int irq, void *dev_id,
 	return IRQ_NONE;		/* not handled */
 }
 
-static struct rtc_class_ops at91_rtc_ops = {
+static const struct rtc_class_ops at91_rtc_ops = {
 	.ioctl		= at91_rtc_ioctl,
 	.read_time	= at91_rtc_readtime,
 	.set_time	= at91_rtc_settime,
@@ -293,12 +299,19 @@ static int __init at91_rtc_probe(struct platform_device *pdev)
 					AT91_RTC_CALEV);
 
 	ret = request_irq(AT91_ID_SYS, at91_rtc_interrupt,
-				IRQF_SHARED, "at91_rtc", pdev);
+				IRQF_DISABLED | IRQF_SHARED,
+				"at91_rtc", pdev);
 	if (ret) {
 		printk(KERN_ERR "at91_rtc: IRQ %d already in use.\n",
 				AT91_ID_SYS);
 		return ret;
 	}
+
+	/* cpu init code should really have flagged this device as
+	 * being wake-capable; if it didn't, do that here.
+	 */
+	if (!device_can_wakeup(&pdev->dev))
+		device_init_wakeup(&pdev->dev, 1);
 
 	rtc = rtc_device_register(pdev->name, &pdev->dev,
 				&at91_rtc_ops, THIS_MODULE);
@@ -315,7 +328,7 @@ static int __init at91_rtc_probe(struct platform_device *pdev)
 /*
  * Disable and remove the RTC driver
  */
-static int __devexit at91_rtc_remove(struct platform_device *pdev)
+static int __exit at91_rtc_remove(struct platform_device *pdev)
 {
 	struct rtc_device *rtc = platform_get_drvdata(pdev);
 
@@ -335,42 +348,32 @@ static int __devexit at91_rtc_remove(struct platform_device *pdev)
 
 /* AT91RM9200 RTC Power management control */
 
-static struct timespec at91_rtc_delta;
+static u32 at91_rtc_imr;
 
 static int at91_rtc_suspend(struct platform_device *pdev, pm_message_t state)
 {
-	struct rtc_time tm;
-	struct timespec time;
-
-	time.tv_nsec = 0;
-
-	/* calculate time delta for suspend */
-	at91_rtc_readtime(&pdev->dev, &tm);
-	rtc_tm_to_time(&tm, &time.tv_sec);
-	save_time_delta(&at91_rtc_delta, &time);
-
-	pr_debug("%s(): %4d-%02d-%02d %02d:%02d:%02d\n", __FUNCTION__,
-		1900 + tm.tm_year, tm.tm_mon, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec);
-
+	/* this IRQ is shared with DBGU and other hardware which isn't
+	 * necessarily doing PM like we are...
+	 */
+	at91_rtc_imr = at91_sys_read(AT91_RTC_IMR)
+			& (AT91_RTC_ALARM|AT91_RTC_SECEV);
+	if (at91_rtc_imr) {
+		if (device_may_wakeup(&pdev->dev))
+			enable_irq_wake(AT91_ID_SYS);
+		else
+			at91_sys_write(AT91_RTC_IDR, at91_rtc_imr);
+	}
 	return 0;
 }
 
 static int at91_rtc_resume(struct platform_device *pdev)
 {
-	struct rtc_time tm;
-	struct timespec time;
-
-	time.tv_nsec = 0;
-
-	at91_rtc_readtime(&pdev->dev, &tm);
-	rtc_tm_to_time(&tm, &time.tv_sec);
-	restore_time_delta(&at91_rtc_delta, &time);
-
-	pr_debug("%s(): %4d-%02d-%02d %02d:%02d:%02d\n", __FUNCTION__,
-		1900 + tm.tm_year, tm.tm_mon, tm.tm_mday,
-		tm.tm_hour, tm.tm_min, tm.tm_sec);
-
+	if (at91_rtc_imr) {
+		if (device_may_wakeup(&pdev->dev))
+			disable_irq_wake(AT91_ID_SYS);
+		else
+			at91_sys_write(AT91_RTC_IER, at91_rtc_imr);
+	}
 	return 0;
 }
 #else
@@ -379,8 +382,7 @@ static int at91_rtc_resume(struct platform_device *pdev)
 #endif
 
 static struct platform_driver at91_rtc_driver = {
-	.probe		= at91_rtc_probe,
-	.remove		= at91_rtc_remove,
+	.remove		= __exit_p(at91_rtc_remove),
 	.suspend	= at91_rtc_suspend,
 	.resume		= at91_rtc_resume,
 	.driver		= {
@@ -391,7 +393,7 @@ static struct platform_driver at91_rtc_driver = {
 
 static int __init at91_rtc_init(void)
 {
-	return platform_driver_register(&at91_rtc_driver);
+	return platform_driver_probe(&at91_rtc_driver, at91_rtc_probe);
 }
 
 static void __exit at91_rtc_exit(void)

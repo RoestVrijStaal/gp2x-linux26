@@ -1,4 +1,4 @@
-/* drivers/char/max6902.c
+/* drivers/rtc/rtc-max6902.c
  *
  * Copyright (C) 2006 8D Technologies inc.
  * Copyright (C) 2004 Compulab Ltd.
@@ -13,13 +13,12 @@
  *
  * 24-May-2006: Raphael Assenat <raph@8d.com>
  *                - Major rework
- *   				Converted to rtc_device and uses the SPI layer.
+ *				Converted to rtc_device and uses the SPI layer.
  *
  * ??-???-2005: Someone at Compulab
  *                - Initial driver creation.
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/version.h>
 
@@ -90,13 +89,9 @@ static int max6902_get_reg(struct device *dev, unsigned char address,
 
 	/* do the i/o */
 	status = spi_sync(spi, &message);
+
 	if (status == 0)
-		status = message.status;
-	else
-		return status;
-
-	*data = chip->rx_buf[1];
-
+		*data = chip->rx_buf[1];
 	return status;
 }
 
@@ -126,9 +121,7 @@ static int max6902_get_datetime(struct device *dev, struct rtc_time *dt)
 
 	/* do the i/o */
 	status = spi_sync(spi, &message);
-	if (status == 0)
-		status = message.status;
-	else
+	if (status)
 		return status;
 
 	/* The chip sends data in this order:
@@ -137,7 +130,7 @@ static int max6902_get_datetime(struct device *dev, struct rtc_time *dt)
 	dt->tm_min	= BCD2BIN(chip->buf[2]);
 	dt->tm_hour	= BCD2BIN(chip->buf[3]);
 	dt->tm_mday	= BCD2BIN(chip->buf[4]);
-	dt->tm_mon	= BCD2BIN(chip->buf[5] - 1);
+	dt->tm_mon	= BCD2BIN(chip->buf[5]) - 1;
 	dt->tm_wday	= BCD2BIN(chip->buf[6]);
 	dt->tm_year = BCD2BIN(chip->buf[7]);
 
@@ -207,7 +200,7 @@ static int max6902_set_time(struct device *dev, struct rtc_time *tm)
 	return max6902_set_datetime(dev, tm);
 }
 
-static struct rtc_class_ops max6902_rtc_ops = {
+static const struct rtc_class_ops max6902_rtc_ops = {
 	.read_time	= max6902_read_time,
 	.set_time	= max6902_set_time,
 };
@@ -260,11 +253,11 @@ static int __devexit max6902_remove(struct spi_device *spi)
 
 static struct spi_driver max6902_driver = {
 	.driver = {
-		.name 	= "max6902",
+		.name	= "rtc-max6902",
 		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
-	.probe 	= max6902_probe,
+	.probe	= max6902_probe,
 	.remove = __devexit_p(max6902_remove),
 };
 
