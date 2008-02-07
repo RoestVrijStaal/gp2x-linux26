@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 #include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include <linux/init.h>
 #include <asm/uaccess.h>
 #include "cpqphp.h"
@@ -519,7 +520,7 @@ int compaq_nvram_load (void __iomem *rom_start, struct controller *ctrl)
 			return 2;
 
 		while (nummem--) {
-			mem_node = (struct pci_resource*) kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
+			mem_node = kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
 
 			if (!mem_node)
 				break;
@@ -547,7 +548,7 @@ int compaq_nvram_load (void __iomem *rom_start, struct controller *ctrl)
 		}
 
 		while (numpmem--) {
-			p_mem_node = (struct pci_resource*) kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
+			p_mem_node = kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
 
 			if (!p_mem_node)
 				break;
@@ -575,7 +576,7 @@ int compaq_nvram_load (void __iomem *rom_start, struct controller *ctrl)
 		}
 
 		while (numio--) {
-			io_node = (struct pci_resource*) kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
+			io_node = kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
 
 			if (!io_node)
 				break;
@@ -603,7 +604,7 @@ int compaq_nvram_load (void __iomem *rom_start, struct controller *ctrl)
 		}
 
 		while (numbus--) {
-			bus_node = (struct pci_resource*) kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
+			bus_node = kmalloc(sizeof(struct pci_resource), GFP_KERNEL);
 
 			if (!bus_node)
 				break;

@@ -33,10 +33,11 @@
 #include <linux/workqueue.h>
 #include <linux/proc_fs.h>
 #include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include "../pci.h"
 #include "cpqphp.h"
 #include "cpqphp_nvram.h"
-#include "../../../arch/i386/pci/pci.h"	/* horrible hack showing how processor dependent we are... */
+#include "../../../arch/x86/pci/pci.h"	/* horrible hack showing how processor dependent we are... */
 
 
 u8 cpqhp_nic_irq;

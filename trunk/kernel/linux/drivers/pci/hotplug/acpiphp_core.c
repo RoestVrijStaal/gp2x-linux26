@@ -37,10 +37,9 @@
 
 #include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include <linux/slab.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
-#include "pci_hotplug.h"
 #include "acpiphp.h"
 
 #define MY_NAME	"acpiphp"
@@ -92,10 +91,10 @@ static struct hotplug_slot_ops acpi_hotplug_slot_ops = {
  * acpiphp_register_attention - set attention LED callback
  * @info: must be completely filled with LED callbacks
  *
- * Description: this is used to register a hardware specific ACPI
+ * Description: This is used to register a hardware specific ACPI
  * driver that manipulates the attention LED.  All the fields in
  * info must be set.
- **/
+ */
 int acpiphp_register_attention(struct acpiphp_attention_info *info)
 {
 	int retval = -EINVAL;
@@ -113,10 +112,10 @@ int acpiphp_register_attention(struct acpiphp_attention_info *info)
  * acpiphp_unregister_attention - unset attention LED callback
  * @info: must match the pointer used to register
  *
- * Description: this is used to un-register a hardware specific acpi
+ * Description: This is used to un-register a hardware specific acpi
  * driver that manipulates the attention LED.  The pointer to the 
  * info struct must be the same as the one used to set it.
- **/
+ */
 int acpiphp_unregister_attention(struct acpiphp_attention_info *info)
 {
 	int retval = -EINVAL;
@@ -134,7 +133,6 @@ int acpiphp_unregister_attention(struct acpiphp_attention_info *info)
  * @hotplug_slot: slot to enable
  *
  * Actual tasks are done in acpiphp_enable_slot()
- *
  */
 static int enable_slot(struct hotplug_slot *hotplug_slot)
 {
@@ -152,28 +150,31 @@ static int enable_slot(struct hotplug_slot *hotplug_slot)
  * @hotplug_slot: slot to disable
  *
  * Actual tasks are done in acpiphp_disable_slot()
- *
  */
 static int disable_slot(struct hotplug_slot *hotplug_slot)
 {
 	struct slot *slot = hotplug_slot->private;
+	int retval;
 
 	dbg("%s - physical_slot = %s\n", __FUNCTION__, hotplug_slot->name);
 
 	/* disable the specified slot */
-	return acpiphp_disable_slot(slot->acpi_slot);
+	retval = acpiphp_disable_slot(slot->acpi_slot);
+	if (!retval)
+		retval = acpiphp_eject_slot(slot->acpi_slot);
+	return retval;
 }
 
 
- /**
-  * set_attention_status - set attention LED
+/**
+ * set_attention_status - set attention LED
  * @hotplug_slot: slot to set attention LED on
  * @status: value to set attention LED to (0 or 1)
  *
  * attention status LED, so we use a callback that
  * was registered with us.  This allows hardware specific
  * ACPI implementations to blink the light for us.
- **/
+ */
  static int set_attention_status(struct hotplug_slot *hotplug_slot, u8 status)
  {
 	int retval = -ENODEV;
@@ -196,7 +197,6 @@ static int disable_slot(struct hotplug_slot *hotplug_slot)
  *
  * Some platforms may not implement _STA method properly.
  * In that case, the value returned may not be reliable.
- *
  */
 static int get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
@@ -210,7 +210,7 @@ static int get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
 }
 
 
- /**
+/**
  * get_attention_status - get attention LED status
  * @hotplug_slot: slot to get status from
  * @value: returns with value of attention LED
@@ -218,8 +218,8 @@ static int get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
  * ACPI doesn't have known method to determine the state
  * of the attention status LED, so we use a callback that
  * was registered with us.  This allows hardware specific
- * ACPI implementations to determine its state
- **/
+ * ACPI implementations to determine its state.
+ */
 static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	int retval = -EINVAL;
@@ -241,8 +241,7 @@ static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
  * @value: pointer to store status
  *
  * ACPI doesn't provide any formal means to access latch status.
- * Instead, we fake latch status from _STA
- *
+ * Instead, we fake latch status from _STA.
  */
 static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
@@ -262,8 +261,7 @@ static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
  * @value: pointer to store status
  *
  * ACPI doesn't provide any formal means to access adapter status.
- * Instead, we fake adapter status from _STA
- *
+ * Instead, we fake adapter status from _STA.
  */
 static int get_adapter_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
@@ -303,23 +301,13 @@ static int __init init_acpi(void)
 	/* read initial number of slots */
 	if (!retval) {
 		num_slots = acpiphp_get_num_slots();
-		if (num_slots == 0)
+		if (num_slots == 0) {
+			acpiphp_glue_exit();
 			retval = -ENODEV;
+		}
 	}
 
 	return retval;
-}
-
-
-/**
- * make_slot_name - make a slot name that appears in pcihpfs
- * @slot: slot to name
- *
- */
-static void make_slot_name(struct slot *slot)
-{
-	snprintf(slot->hotplug_slot->name, SLOT_NAME_SIZE, "%u",
-		 slot->acpi_slot->sun);
 }
 
 /**
@@ -332,8 +320,6 @@ static void release_slot(struct hotplug_slot *hotplug_slot)
 
 	dbg("%s - physical_slot = %s\n", __FUNCTION__, hotplug_slot->name);
 
-	kfree(slot->hotplug_slot->info);
-	kfree(slot->hotplug_slot->name);
 	kfree(slot->hotplug_slot);
 	kfree(slot);
 }
@@ -342,26 +328,19 @@ static void release_slot(struct hotplug_slot *hotplug_slot)
 int acpiphp_register_hotplug_slot(struct acpiphp_slot *acpiphp_slot)
 {
 	struct slot *slot;
-	struct hotplug_slot *hotplug_slot;
-	struct hotplug_slot_info *hotplug_slot_info;
 	int retval = -ENOMEM;
 
 	slot = kzalloc(sizeof(*slot), GFP_KERNEL);
 	if (!slot)
 		goto error;
 
-	slot->hotplug_slot = kzalloc(sizeof(*hotplug_slot), GFP_KERNEL);
+	slot->hotplug_slot = kzalloc(sizeof(*slot->hotplug_slot), GFP_KERNEL);
 	if (!slot->hotplug_slot)
 		goto error_slot;
 
-	slot->hotplug_slot->info = kzalloc(sizeof(*hotplug_slot_info),
-					   GFP_KERNEL);
-	if (!slot->hotplug_slot->info)
-		goto error_hpslot;
+	slot->hotplug_slot->info = &slot->info;
 
-	slot->hotplug_slot->name = kzalloc(SLOT_NAME_SIZE, GFP_KERNEL);
-	if (!slot->hotplug_slot->name)
-		goto error_info;
+	slot->hotplug_slot->name = slot->name;
 
 	slot->hotplug_slot->private = slot;
 	slot->hotplug_slot->release = &release_slot;
@@ -376,21 +355,17 @@ int acpiphp_register_hotplug_slot(struct acpiphp_slot *acpiphp_slot)
 	slot->hotplug_slot->info->cur_bus_speed = PCI_SPEED_UNKNOWN;
 
 	acpiphp_slot->slot = slot;
-	make_slot_name(slot);
+	snprintf(slot->name, sizeof(slot->name), "%u", slot->acpi_slot->sun);
 
 	retval = pci_hp_register(slot->hotplug_slot);
 	if (retval) {
 		err("pci_hp_register failed with error %d\n", retval);
-		goto error_name;
+		goto error_hpslot;
  	}
 
 	info("Slot [%s] registered\n", slot->hotplug_slot->name);
 
 	return 0;
-error_name:
-	kfree(slot->hotplug_slot->name);
-error_info:
-	kfree(slot->hotplug_slot->info);
 error_hpslot:
 	kfree(slot->hotplug_slot);
 error_slot:
