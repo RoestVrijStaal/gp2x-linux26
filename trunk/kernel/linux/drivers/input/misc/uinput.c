@@ -20,6 +20,9 @@
  * Author: Aristeu Sergio Rozanski Filho <aris@cathedrallabs.org>
  *
  * Changes/Revisions:
+ *	0.3	09/04/2006 (Anssi Hannula <anssi.hannula@gmail.com>)
+ *		- updated ff support for the changes in kernel interface
+ *		- added MODULE_VERSION
  *	0.2	16/10/2004 (Micah Dowty <micah@navi.cx>)
  *		- added force feedback support
  *              - added UI_SET_PHYS
@@ -30,7 +33,6 @@
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/init.h>
-#include <linux/input.h>
 #include <linux/smp_lock.h>
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
@@ -38,9 +40,7 @@
 
 static int uinput_dev_event(struct input_dev *dev, unsigned int type, unsigned int code, int value)
 {
-	struct uinput_device	*udev;
-
-	udev = dev->private;
+	struct uinput_device	*udev = input_get_drvdata(dev);
 
 	udev->buff[udev->head].type = type;
 	udev->buff[udev->head].code = code;
@@ -107,20 +107,33 @@ static int uinput_request_submit(struct input_dev *dev, struct uinput_request *r
 	return request->retval;
 }
 
-static int uinput_dev_upload_effect(struct input_dev *dev, struct ff_effect *effect)
+static void uinput_dev_set_gain(struct input_dev *dev, u16 gain)
+{
+	uinput_dev_event(dev, EV_FF, FF_GAIN, gain);
+}
+
+static void uinput_dev_set_autocenter(struct input_dev *dev, u16 magnitude)
+{
+	uinput_dev_event(dev, EV_FF, FF_AUTOCENTER, magnitude);
+}
+
+static int uinput_dev_playback(struct input_dev *dev, int effect_id, int value)
+{
+	return uinput_dev_event(dev, EV_FF, effect_id, value);
+}
+
+static int uinput_dev_upload_effect(struct input_dev *dev, struct ff_effect *effect, struct ff_effect *old)
 {
 	struct uinput_request request;
 	int retval;
 
-	if (!test_bit(EV_FF, dev->evbit))
-		return -ENOSYS;
-
 	request.id = -1;
 	init_completion(&request.done);
 	request.code = UI_FF_UPLOAD;
-	request.u.effect = effect;
+	request.u.upload.effect = effect;
+	request.u.upload.old = old;
 
-	retval = uinput_request_reserve_slot(dev->private, &request);
+	retval = uinput_request_reserve_slot(input_get_drvdata(dev), &request);
 	if (!retval)
 		retval = uinput_request_submit(dev, &request);
 
@@ -140,7 +153,7 @@ static int uinput_dev_erase_effect(struct input_dev *dev, int effect_id)
 	request.code = UI_FF_ERASE;
 	request.u.effect_id = effect_id;
 
-	retval = uinput_request_reserve_slot(dev->private, &request);
+	retval = uinput_request_reserve_slot(input_get_drvdata(dev), &request);
 	if (!retval)
 		retval = uinput_request_submit(dev, &request);
 
@@ -168,6 +181,7 @@ static void uinput_destroy_device(struct uinput_device *udev)
 
 static int uinput_create_device(struct uinput_device *udev)
 {
+	struct input_dev *dev = udev->dev;
 	int error;
 
 	if (udev->state != UIST_SETUP_COMPLETE) {
@@ -175,15 +189,29 @@ static int uinput_create_device(struct uinput_device *udev)
 		return -EINVAL;
 	}
 
-	error = input_register_device(udev->dev);
-	if (error) {
-		uinput_destroy_device(udev);
-		return error;
+	if (udev->ff_effects_max) {
+		error = input_ff_create(dev, udev->ff_effects_max);
+		if (error)
+			goto fail1;
+
+		dev->ff->upload = uinput_dev_upload_effect;
+		dev->ff->erase = uinput_dev_erase_effect;
+		dev->ff->playback = uinput_dev_playback;
+		dev->ff->set_gain = uinput_dev_set_gain;
+		dev->ff->set_autocenter = uinput_dev_set_autocenter;
 	}
+
+	error = input_register_device(udev->dev);
+	if (error)
+		goto fail2;
 
 	udev->state = UIST_CREATED;
 
 	return 0;
+
+ fail2:	input_ff_destroy(dev);
+ fail1: uinput_destroy_device(udev);
+	return error;
 }
 
 static int uinput_open(struct inode *inode, struct file *file)
@@ -243,9 +271,7 @@ static int uinput_allocate_device(struct uinput_device *udev)
 		return -ENOMEM;
 
 	udev->dev->event = uinput_dev_event;
-	udev->dev->upload_effect = uinput_dev_upload_effect;
-	udev->dev->erase_effect = uinput_dev_erase_effect;
-	udev->dev->private = udev;
+	input_set_drvdata(udev->dev, udev);
 
 	return 0;
 }
@@ -278,6 +304,8 @@ static int uinput_setup_device(struct uinput_device *udev, const char __user *bu
 		goto exit;
 	}
 
+	udev->ff_effects_max = user_dev->ff_effects_max;
+
 	size = strnlen(user_dev->name, UINPUT_MAX_NAME_SIZE) + 1;
 	if (!size) {
 		retval = -EINVAL;
@@ -296,7 +324,6 @@ static int uinput_setup_device(struct uinput_device *udev, const char __user *bu
 	dev->id.vendor	= user_dev->id.vendor;
 	dev->id.product	= user_dev->id.product;
 	dev->id.version	= user_dev->id.version;
-	dev->ff_effects_max = user_dev->ff_effects_max;
 
 	size = sizeof(int) * (ABS_MAX + 1);
 	memcpy(dev->absmax, user_dev->absmax, size);
@@ -525,12 +552,17 @@ static long uinput_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				break;
 			}
 			req = uinput_request_find(udev, ff_up.request_id);
-			if (!(req && req->code == UI_FF_UPLOAD && req->u.effect)) {
+			if (!(req && req->code == UI_FF_UPLOAD && req->u.upload.effect)) {
 				retval = -EINVAL;
 				break;
 			}
 			ff_up.retval = 0;
-			memcpy(&ff_up.effect, req->u.effect, sizeof(struct ff_effect));
+			memcpy(&ff_up.effect, req->u.upload.effect, sizeof(struct ff_effect));
+			if (req->u.upload.old)
+				memcpy(&ff_up.old, req->u.upload.old, sizeof(struct ff_effect));
+			else
+				memset(&ff_up.old, 0, sizeof(struct ff_effect));
+
 			if (copy_to_user(p, &ff_up, sizeof(ff_up))) {
 				retval = -EFAULT;
 				break;
@@ -561,12 +593,11 @@ static long uinput_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				break;
 			}
 			req = uinput_request_find(udev, ff_up.request_id);
-			if (!(req && req->code == UI_FF_UPLOAD && req->u.effect)) {
+			if (!(req && req->code == UI_FF_UPLOAD && req->u.upload.effect)) {
 				retval = -EINVAL;
 				break;
 			}
 			req->retval = ff_up.retval;
-			memcpy(req->u.effect, &ff_up.effect, sizeof(struct ff_effect));
 			uinput_request_done(udev, req);
 			break;
 
@@ -593,7 +624,7 @@ static long uinput_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return retval;
 }
 
-static struct file_operations uinput_fops = {
+static const struct file_operations uinput_fops = {
 	.owner		= THIS_MODULE,
 	.open		= uinput_open,
 	.release	= uinput_release,
@@ -622,6 +653,7 @@ static void __exit uinput_exit(void)
 MODULE_AUTHOR("Aristeu Sergio Rozanski Filho");
 MODULE_DESCRIPTION("User level driver support for input subsystem");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.3");
 
 module_init(uinput_init);
 module_exit(uinput_exit);
