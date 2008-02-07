@@ -1,5 +1,5 @@
 /*
- * linux/drivers/leds/locomo.c
+ * linux/drivers/leds/leds-locomo.c
  *
  * Copyright (C) 2005 John Lenz <lenz@cs.wisc.edu>
  *
@@ -19,7 +19,7 @@
 static void locomoled_brightness_set(struct led_classdev *led_cdev,
 				enum led_brightness value, int offset)
 {
-	struct locomo_dev *locomo_dev = LOCOMO_DEV(led_cdev->class_dev->dev);
+	struct locomo_dev *locomo_dev = LOCOMO_DEV(led_cdev->dev->parent);
 	unsigned long flags;
 
 	local_irq_save(flags);
