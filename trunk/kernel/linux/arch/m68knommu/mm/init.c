@@ -98,7 +98,7 @@ extern unsigned long memory_end;
  * The parameters are pointers to where to stick the starting and ending
  * addresses of available kernel virtual memory.
  */
-void paging_init(void)
+void __init paging_init(void)
 {
 	/*
 	 * Make sure start_mem is page aligned, otherwise bootmem and
@@ -136,7 +136,7 @@ void paging_init(void)
 #endif
 
 	{
-		unsigned long zones_size[MAX_NR_ZONES] = {0, 0, 0};
+		unsigned long zones_size[MAX_NR_ZONES] = {0, };
 
 		zones_size[ZONE_DMA] = 0 >> PAGE_SHIFT;
 		zones_size[ZONE_NORMAL] = (end_mem - PAGE_OFFSET) >> PAGE_SHIFT;
@@ -147,7 +147,7 @@ void paging_init(void)
 	}
 }
 
-void mem_init(void)
+void __init mem_init(void)
 {
 	int codek = 0, datak = 0, initk = 0;
 	unsigned long tmp;
