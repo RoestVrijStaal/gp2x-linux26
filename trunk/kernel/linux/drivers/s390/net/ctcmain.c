@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2001 IBM Deutschland Entwicklung GmbH, IBM Corporation
  * Author(s): Fritz Elfert (elfert@de.ibm.com, felfert@millenux.com)
- * Fixes by : Jochen Röhrig (roehrig@de.ibm.com)
+ * Fixes by : Jochen RÃ¶hrig (roehrig@de.ibm.com)
  *            Arnaldo Carvalho de Melo <acme@conectiva.com.br>
 	      Peter Tiedemann (ptiedem@de.ibm.com)
  * Driver Model stuff by : Cornelia Huck <cornelia.huck@de.ibm.com>
@@ -19,7 +19,7 @@
  *  Dieter Wellerdiek (wel@de.ibm.com)
  *  Martin Schwidefsky (schwidefsky@de.ibm.com)
  *  Denis Joseph Barrow (djbarrow@de.ibm.com,barrow_dj@yahoo.com)
- *  Jochen Röhrig (roehrig@de.ibm.com)
+ *  Jochen RÃ¶hrig (roehrig@de.ibm.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +45,6 @@
 #include <linux/types.h>
 #include <linux/interrupt.h>
 #include <linux/timer.h>
-#include <linux/sched.h>
 #include <linux/bitops.h>
 
 #include <linux/signal.h>
@@ -369,7 +368,7 @@ ctc_dump_skb(struct sk_buff *skb, int offset)
  * @param ch The channel where this skb has been received.
  * @param pskb The received skb.
  */
-static __inline__ void
+static void
 ctc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 {
 	struct net_device *dev = ch->netdev;
@@ -456,7 +455,7 @@ ctc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 			return;
 		}
 		skb_put(pskb, header->length);
-		pskb->mac.raw = pskb->data;
+		skb_reset_mac_header(pskb);
 		len -= header->length;
 		skb = dev_alloc_skb(pskb->len);
 		if (!skb) {
@@ -473,19 +472,20 @@ ctc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
 			privptr->stats.rx_dropped++;
 			return;
 		}
-		memcpy(skb_put(skb, pskb->len), pskb->data, pskb->len);
-		skb->mac.raw = skb->data;
+		skb_copy_from_linear_data(pskb, skb_put(skb, pskb->len),
+					  pskb->len);
+		skb_reset_mac_header(skb);
 		skb->dev = pskb->dev;
 		skb->protocol = pskb->protocol;
 		pskb->ip_summed = CHECKSUM_UNNECESSARY;
-		netif_rx_ni(skb);
 		/**
-		 * Successful rx; reset logflags
+		 * reset logflags
 		 */
 		ch->logflags = 0;
-		dev->last_rx = jiffies;
 		privptr->stats.rx_packets++;
 		privptr->stats.rx_bytes += skb->len;
+		netif_rx_ni(skb);
+		dev->last_rx = jiffies;
 		if (len > 0) {
 			skb_pull(pskb, header->length);
 			if (skb_tailroom(pskb) < LL_HEADER_LENGTH) {
@@ -512,7 +512,7 @@ ctc_unpack_skb(struct channel *ch, struct sk_buff *pskb)
  * @param ch          The channel, the error belongs to.
  * @param return_code The error code to inspect.
  */
-static void inline
+static void
 ccw_check_return_code(struct channel *ch, int return_code, char *msg)
 {
 	DBF_TEXT(trace, 5, __FUNCTION__);
@@ -547,7 +547,7 @@ ccw_check_return_code(struct channel *ch, int return_code, char *msg)
  * @param ch    The channel, the sense code belongs to.
  * @param sense The sense code to inspect.
  */
-static void inline
+static void
 ccw_unit_check(struct channel *ch, unsigned char sense)
 {
 	DBF_TEXT(trace, 5, __FUNCTION__);
@@ -603,7 +603,7 @@ ctc_purge_skb_queue(struct sk_buff_head *q)
 	}
 }
 
-static __inline__ int
+static int
 ctc_checkalloc_buffer(struct channel *ch, int warn)
 {
 	DBF_TEXT(trace, 5, __FUNCTION__);
@@ -674,7 +674,7 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 	int first = 1;
 	int i;
 	unsigned long duration;
-	struct timespec done_stamp = xtime;
+	struct timespec done_stamp = current_kernel_time();
 
 	DBF_TEXT(trace, 4, __FUNCTION__);
 
@@ -707,7 +707,8 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 			spin_unlock(&ch->collect_lock);
 			return;
 		}
-		ch->trans_skb->tail = ch->trans_skb->data = ch->trans_skb_data;
+		ch->trans_skb->data = ch->trans_skb_data;
+		skb_reset_tail_pointer(ch->trans_skb);
 		ch->trans_skb->len = 0;
 		if (ch->prof.maxmulti < (ch->collect_len + 2))
 			ch->prof.maxmulti = ch->collect_len + 2;
@@ -716,8 +717,9 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 		*((__u16 *) skb_put(ch->trans_skb, 2)) = ch->collect_len + 2;
 		i = 0;
 		while ((skb = skb_dequeue(&ch->collect_queue))) {
-			memcpy(skb_put(ch->trans_skb, skb->len), skb->data,
-			       skb->len);
+			skb_copy_from_linear_data(skb, skb_put(ch->trans_skb,
+							       skb->len),
+						  skb->len);
 			privptr->stats.tx_packets++;
 			privptr->stats.tx_bytes += skb->len - LL_HEADER_LENGTH;
 			atomic_dec(&skb->users);
@@ -728,7 +730,7 @@ ch_action_txdone(fsm_instance * fi, int event, void *arg)
 		spin_unlock(&ch->collect_lock);
 		ch->ccw[1].count = ch->trans_skb->len;
 		fsm_addtimer(&ch->timer, CTC_TIMEOUT_5SEC, CH_EVENT_TIMER, ch);
-		ch->prof.send_stamp = xtime;
+		ch->prof.send_stamp = current_kernel_time();
 		rc = ccw_device_start(ch->cdev, &ch->ccw[0],
 				      (unsigned long) ch, 0xff, 0);
 		ch->prof.doios_multi++;
@@ -832,7 +834,8 @@ ch_action_rx(fsm_instance * fi, int event, void *arg)
 		ctc_unpack_skb(ch, skb);
 	}
  again:
-	skb->data = skb->tail = ch->trans_skb_data;
+	skb->data = ch->trans_skb_data;
+	skb_reset_tail_pointer(skb);
 	skb->len = 0;
 	if (ctc_checkalloc_buffer(ch, 1))
 		return;
@@ -882,7 +885,7 @@ ch_action_firstio(fsm_instance * fi, int event, void *arg)
 	}
 
 	/**
-	 * Don´t setup a timer for receiving the initial RX frame
+	 * Don't setup a timer for receiving the initial RX frame
 	 * if in compatibility mode, since VM TCP delays the initial
 	 * frame until it has some data to send.
 	 */
@@ -902,10 +905,10 @@ ch_action_firstio(fsm_instance * fi, int event, void *arg)
 		ccw_check_return_code(ch, rc, "init IO");
 	}
 	/**
-	 * If in compatibility mode since we don´t setup a timer, we
+	 * If in compatibility mode since we don't setup a timer, we
 	 * also signal RX channel up immediately. This enables us
 	 * to send packets early which in turn usually triggers some
-	 * reply from VM TCP which brings up the RX channel to it´s
+	 * reply from VM TCP which brings up the RX channel to it's
 	 * final state.
 	 */
 	if ((CHANNEL_DIRECTION(ch->flags) == READ) &&
@@ -1639,21 +1642,19 @@ add_channel(struct ccw_device *cdev, enum channel_types type)
 	struct channel *ch;
 
 	DBF_TEXT(trace, 2, __FUNCTION__);
-	if ((ch =
-	     (struct channel *) kmalloc(sizeof (struct channel),
-					GFP_KERNEL)) == NULL) {
+	ch = kzalloc(sizeof(struct channel), GFP_KERNEL);
+	if (!ch) {
 		ctc_pr_warn("ctc: Out of memory in add_channel\n");
 		return -1;
 	}
-	memset(ch, 0, sizeof (struct channel));
-	if ((ch->ccw = (struct ccw1 *) kmalloc(8*sizeof(struct ccw1),
-					       GFP_KERNEL | GFP_DMA)) == NULL) {
+	/* assure all flags and counters are reset */
+	ch->ccw = kzalloc(8 * sizeof(struct ccw1), GFP_KERNEL | GFP_DMA);
+	if (!ch->ccw) {
 		kfree(ch);
 		ctc_pr_warn("ctc: Out of memory in add_channel\n");
 		return -1;
 	}
 
-	memset(ch->ccw, 0, 8*sizeof(struct ccw1));	// assure all flags and counters are reset
 
 	/**
 	 * "static" ccws are used in the following way:
@@ -1693,15 +1694,14 @@ add_channel(struct ccw_device *cdev, enum channel_types type)
 		return -1;
 	}
 	fsm_newstate(ch->fsm, CH_STATE_IDLE);
-	if ((ch->irb = (struct irb *) kmalloc(sizeof (struct irb),
-					      GFP_KERNEL)) == NULL) {
+	ch->irb = kzalloc(sizeof(struct irb), GFP_KERNEL);
+	if (!ch->irb) {
 		ctc_pr_warn("ctc: Out of memory in add_channel\n");
 		kfree_fsm(ch->fsm);
 		kfree(ch->ccw);
 		kfree(ch);
 		return -1;
 	}
-	memset(ch->irb, 0, sizeof (struct irb));
 	while (*c && less_than((*c)->id, ch->id))
 		c = &(*c)->next;
 	if (*c && (!strncmp((*c)->id, ch->id, CTC_ID_SIZE))) {
@@ -2227,7 +2227,8 @@ transmit_skb(struct channel *ch, struct sk_buff *skb)
 		 * IDAL support in CTC is broken, so we have to
 		 * care about skb's above 2G ourselves.
 		 */
-		hi = ((unsigned long) skb->tail + LL_HEADER_LENGTH) >> 31;
+		hi = ((unsigned long)skb_tail_pointer(skb) +
+		      LL_HEADER_LENGTH) >> 31;
 		if (hi) {
 			nskb = alloc_skb(skb->len, GFP_ATOMIC | GFP_DMA);
 			if (!nskb) {
@@ -2263,11 +2264,12 @@ transmit_skb(struct channel *ch, struct sk_buff *skb)
 				return -EBUSY;
 			}
 
-			ch->trans_skb->tail = ch->trans_skb->data;
+			skb_reset_tail_pointer(ch->trans_skb);
 			ch->trans_skb->len = 0;
 			ch->ccw[1].count = skb->len;
-			memcpy(skb_put(ch->trans_skb, skb->len), skb->data,
-			       skb->len);
+			skb_copy_from_linear_data(skb, skb_put(ch->trans_skb,
+							       skb->len),
+						  skb->len);
 			atomic_dec(&skb->users);
 			dev_kfree_skb_irq(skb);
 			ccw_idx = 0;
@@ -2279,7 +2281,7 @@ transmit_skb(struct channel *ch, struct sk_buff *skb)
 		fsm_newstate(ch->fsm, CH_STATE_TX);
 		fsm_addtimer(&ch->timer, CTC_TIMEOUT_5SEC, CH_EVENT_TIMER, ch);
 		spin_lock_irqsave(get_ccwdev_lock(ch->cdev), saveflags);
-		ch->prof.send_stamp = xtime;
+		ch->prof.send_stamp = current_kernel_time();
 		rc = ccw_device_start(ch->cdev, &ch->ccw[ccw_idx],
 				      (unsigned long) ch, 0xff, 0);
 		spin_unlock_irqrestore(get_ccwdev_lock(ch->cdev), saveflags);
@@ -2535,7 +2537,7 @@ ctc_print_statistics(struct ctc_priv *priv)
 	DBF_TEXT(trace, 4, __FUNCTION__);
 	if (!priv)
 		return;
-	sbuf = (char *)kmalloc(2048, GFP_KERNEL);
+	sbuf = kmalloc(2048, GFP_KERNEL);
 	if (sbuf == NULL)
 		return;
 	p = sbuf;
@@ -2746,14 +2748,13 @@ ctc_probe_device(struct ccwgroup_device *cgdev)
 	if (!get_device(&cgdev->dev))
 		return -ENODEV;
 
-	priv = kmalloc(sizeof (struct ctc_priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(struct ctc_priv), GFP_KERNEL);
 	if (!priv) {
 		ctc_pr_err("%s: Out of memory\n", __func__);
 		put_device(&cgdev->dev);
 		return -ENOMEM;
 	}
 
-	memset(priv, 0, sizeof (struct ctc_priv));
 	rc = ctc_add_files(&cgdev->dev);
 	if (rc) {
 		kfree(priv);
@@ -2781,36 +2782,14 @@ ctc_probe_device(struct ccwgroup_device *cgdev)
 }
 
 /**
- * Initialize everything of the net device except the name and the
- * channel structs.
+ * Device setup function called by alloc_netdev().
+ *
+ * @param dev  Device to be setup.
  */
-static struct net_device *
-ctc_init_netdevice(struct net_device * dev, int alloc_device,
-		   struct ctc_priv *privptr)
+void ctc_init_netdevice(struct net_device * dev)
 {
-	if (!privptr)
-		return NULL;
-
 	DBF_TEXT(setup, 3, __FUNCTION__);
 
-	if (alloc_device) {
-		dev = kmalloc(sizeof (struct net_device), GFP_KERNEL);
-		if (!dev)
-			return NULL;
-		memset(dev, 0, sizeof (struct net_device));
-	}
-
-	dev->priv = privptr;
-	privptr->fsm = init_fsm("ctcdev", dev_state_names,
-				dev_event_names, CTC_NR_DEV_STATES, CTC_NR_DEV_EVENTS,
-				dev_fsm, DEV_FSM_LEN, GFP_KERNEL);
-	if (privptr->fsm == NULL) {
-		if (alloc_device)
-			kfree(dev);
-		return NULL;
-	}
-	fsm_newstate(privptr->fsm, DEV_STATE_STOPPED);
-	fsm_settimer(privptr->fsm, &privptr->restart_timer);
 	if (dev->mtu == 0)
 		dev->mtu = CTC_BUFSIZE_DEFAULT - LL_HEADER_LENGTH - 2;
 	dev->hard_start_xmit = ctc_tx;
@@ -2823,8 +2802,6 @@ ctc_init_netdevice(struct net_device * dev, int alloc_device,
 	dev->type = ARPHRD_SLIP;
 	dev->tx_queue_len = 100;
 	dev->flags = IFF_POINTOPOINT | IFF_NOARP;
-	SET_MODULE_OWNER(dev);
-	return dev;
 }
 
 
@@ -2880,14 +2857,22 @@ ctc_new_device(struct ccwgroup_device *cgdev)
 		 	"ccw_device_set_online (cdev[1]) failed with ret = %d\n", ret);
 	}
 
-	dev = ctc_init_netdevice(NULL, 1, privptr);
-
+	dev = alloc_netdev(0, "ctc%d", ctc_init_netdevice);
 	if (!dev) {
 		ctc_pr_warn("ctc_init_netdevice failed\n");
 		goto out;
 	}
+	dev->priv = privptr;
 
-	strlcpy(dev->name, "ctc%d", IFNAMSIZ);
+	privptr->fsm = init_fsm("ctcdev", dev_state_names,
+			dev_event_names, CTC_NR_DEV_STATES, CTC_NR_DEV_EVENTS,
+			dev_fsm, DEV_FSM_LEN, GFP_KERNEL);
+	if (privptr->fsm == NULL) {
+		free_netdev(dev);
+		goto out;
+	}
+	fsm_newstate(privptr->fsm, DEV_STATE_STOPPED);
+	fsm_settimer(privptr->fsm, &privptr->restart_timer);
 
 	for (direction = READ; direction <= WRITE; direction++) {
 		privptr->channel[direction] =
