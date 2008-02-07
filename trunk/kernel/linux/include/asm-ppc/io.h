@@ -26,17 +26,11 @@
 
 #if defined(CONFIG_4xx)
 #include <asm/ibm4xx.h>
-#elif defined(CONFIG_PPC_MPC52xx)
-#include <asm/mpc52xx.h>
 #elif defined(CONFIG_8xx)
 #include <asm/mpc8xx.h>
 #elif defined(CONFIG_8260)
 #include <asm/mpc8260.h>
-#elif defined(CONFIG_83xx)
-#include <asm/mpc83xx.h>
-#elif defined(CONFIG_85xx)
-#include <asm/mpc85xx.h>
-#elif defined(CONFIG_APUS)
+#elif !defined(CONFIG_PCI)
 #define _IO_BASE	0
 #define _ISA_MEM_BASE	0
 #define PCI_DRAM_OFFSET 0
@@ -151,24 +145,7 @@ static inline void writeb(__u8 b, volatile void __iomem *addr)
 }
 #endif
 
-#if defined(CONFIG_APUS)
-static inline __u16 readw(const volatile void __iomem *addr)
-{
-	return *(__force volatile __u16 *)(addr);
-}
-static inline __u32 readl(const volatile void __iomem *addr)
-{
-	return *(__force volatile __u32 *)(addr);
-}
-static inline void writew(__u16 b, volatile void __iomem *addr)
-{
-	*(__force volatile __u16 *)(addr) = b;
-}
-static inline void writel(__u32 b, volatile void __iomem *addr)
-{
-	*(__force volatile __u32 *)(addr) = b;
-}
-#elif defined (CONFIG_8260_PCI9)
+#if defined (CONFIG_8260_PCI9)
 /* Use macros if PCI9 workaround enabled */
 #define readw(addr) in_le16((volatile u16 *)(addr))
 #define readl(addr) in_le32((volatile u32 *)(addr))
@@ -191,7 +168,7 @@ static inline void writel(__u32 b, volatile void __iomem *addr)
 {
 	out_le32(addr, b);
 }
-#endif /* CONFIG_APUS */
+#endif /* CONFIG_8260_PCI9 */
 
 #define readb_relaxed(addr) readb(addr)
 #define readw_relaxed(addr) readw(addr)
@@ -236,6 +213,14 @@ static inline void __raw_writel(__u32 b, volatile void __iomem *addr)
 #define outsw(port, buf, ns)	_outsw_ns((port)+___IO_BASE, (buf), (ns))
 #define insl(port, buf, nl)	_insl_ns((port)+___IO_BASE, (buf), (nl))
 #define outsl(port, buf, nl)	_outsl_ns((port)+___IO_BASE, (buf), (nl))
+
+#define readsb(a, b, n)		_insb((a), (b), (n))
+#define readsw(a, b, n)		_insw_ns((a), (b), (n))
+#define readsl(a, b, n)		_insl_ns((a), (b), (n))
+#define writesb(a, b, n)	_outsb((a),(b),(n))
+#define writesw(a, b, n)	_outsw_ns((a),(b),(n))
+#define writesl(a, b, n)	_outsl_ns((a),(b),(n))
+
 
 /*
  * On powermacs and 8xx we will get a machine check exception 
@@ -298,13 +283,7 @@ extern __inline__ void name(unsigned int val, unsigned int port) \
 }
 
 __do_out_asm(outb, "stbx")
-#ifdef CONFIG_APUS
-__do_in_asm(inb, "lbzx")
-__do_in_asm(inw, "lhz%U1%X1")
-__do_in_asm(inl, "lwz%U1%X1")
-__do_out_asm(outl,"stw%U0%X0")
-__do_out_asm(outw, "sth%U0%X0")
-#elif defined (CONFIG_8260_PCI9)
+#if defined (CONFIG_8260_PCI9)
 /* in asm cannot be defined if PCI9 workaround is used */
 #define inb(port)		in_8((port)+___IO_BASE)
 #define inw(port)		in_le16((port)+___IO_BASE)
@@ -327,26 +306,12 @@ __do_out_asm(outl, "stwbrx")
 #define inl_p(port)		inl((port))
 #define outl_p(val, port)	outl((val), (port))
 
-extern void _insb(volatile u8 __iomem *port, void *buf, int ns);
-extern void _outsb(volatile u8 __iomem *port, const void *buf, int ns);
-extern void _insw(volatile u16 __iomem *port, void *buf, int ns);
-extern void _outsw(volatile u16 __iomem *port, const void *buf, int ns);
-extern void _insl(volatile u32 __iomem *port, void *buf, int nl);
-extern void _outsl(volatile u32 __iomem *port, const void *buf, int nl);
-extern void _insw_ns(volatile u16 __iomem *port, void *buf, int ns);
-extern void _outsw_ns(volatile u16 __iomem *port, const void *buf, int ns);
-extern void _insl_ns(volatile u32 __iomem *port, void *buf, int nl);
-extern void _outsl_ns(volatile u32 __iomem *port, const void *buf, int nl);
-
-/*
- * The *_ns versions below don't do byte-swapping.
- * Neither do the standard versions now, these are just here
- * for older code.
- */
-#define insw_ns(port, buf, ns)	_insw_ns((port)+___IO_BASE, (buf), (ns))
-#define outsw_ns(port, buf, ns)	_outsw_ns((port)+___IO_BASE, (buf), (ns))
-#define insl_ns(port, buf, nl)	_insl_ns((port)+___IO_BASE, (buf), (nl))
-#define outsl_ns(port, buf, nl)	_outsl_ns((port)+___IO_BASE, (buf), (nl))
+extern void _insb(const volatile u8 __iomem *addr, void *buf, long count);
+extern void _outsb(volatile u8 __iomem *addr,const void *buf,long count);
+extern void _insw_ns(const volatile u16 __iomem *addr, void *buf, long count);
+extern void _outsw_ns(volatile u16 __iomem *addr, const void *buf, long count);
+extern void _insl_ns(const volatile u32 __iomem *addr, void *buf, long count);
+extern void _outsl_ns(volatile u32 __iomem *addr, const void *buf, long count);
 
 
 #define IO_SPACE_LIMIT ~0
@@ -370,8 +335,6 @@ static inline void memcpy_toio(volatile void __iomem *dst, const void *src, int 
 }
 #endif
 
-#define eth_io_copy_and_sum(a,b,c,d)		eth_copy_and_sum((a),(void __force *)(void __iomem *)(b),(c),(d))
-
 /*
  * Map in an area of physical address space, for accessing
  * I/O devices etc.
@@ -385,7 +348,6 @@ extern void __iomem *ioremap64(unsigned long long address, unsigned long size);
 #define ioremap_nocache(addr, size)	ioremap((addr), (size))
 extern void iounmap(volatile void __iomem *addr);
 extern unsigned long iopa(unsigned long addr);
-extern unsigned long mm_ptov(unsigned long addr) __attribute_const__;
 extern void io_block_mapping(unsigned long virt, phys_addr_t phys,
 			     unsigned int size, int flags);
 
@@ -398,24 +360,16 @@ extern void io_block_mapping(unsigned long virt, phys_addr_t phys,
  */
 extern inline unsigned long virt_to_bus(volatile void * address)
 {
-#ifndef CONFIG_APUS
         if (address == (void *)0)
 		return 0;
         return (unsigned long)address - KERNELBASE + PCI_DRAM_OFFSET;
-#else
-	return iopa ((unsigned long) address);
-#endif
 }
 
 extern inline void * bus_to_virt(unsigned long address)
 {
-#ifndef CONFIG_APUS
         if (address == 0)
 		return NULL;
         return (void *)(address - PCI_DRAM_OFFSET + KERNELBASE);
-#else
-	return (void*) mm_ptov (address);
-#endif
 }
 
 /*
@@ -424,20 +378,12 @@ extern inline void * bus_to_virt(unsigned long address)
  */
 extern inline unsigned long virt_to_phys(volatile void * address)
 {
-#ifndef CONFIG_APUS
 	return (unsigned long) address - KERNELBASE;
-#else
-	return iopa ((unsigned long) address);
-#endif
 }
 
 extern inline void * phys_to_virt(unsigned long address)
 {
-#ifndef CONFIG_APUS
 	return (void *) (address + KERNELBASE);
-#else
-	return (void*) mm_ptov (address);
-#endif
 }
 
 /*
@@ -452,22 +398,6 @@ extern inline void * phys_to_virt(unsigned long address)
 #define iobarrier_rw() eieio()
 #define iobarrier_r()  eieio()
 #define iobarrier_w()  eieio()
-
-static inline int check_signature(volatile void __iomem * io_addr,
-	const unsigned char *signature, int length)
-{
-	int retval = 0;
-	do {
-		if (readb(io_addr) != *signature)
-			goto out;
-		io_addr++;
-		signature++;
-		length--;
-	} while (length);
-	retval = 1;
-out:
-	return retval;
-}
 
 /*
  * Here comes the ppc implementation of the IOMAP 
@@ -548,23 +478,6 @@ extern void pci_iounmap(struct pci_dev *dev, void __iomem *);
 #include <asm/mpc8260_pci9.h>
 #endif
 
-#ifdef CONFIG_NOT_COHERENT_CACHE
-
-#define dma_cache_inv(_start,_size) \
-	invalidate_dcache_range(_start, (_start + _size))
-#define dma_cache_wback(_start,_size) \
-	clean_dcache_range(_start, (_start + _size))
-#define dma_cache_wback_inv(_start,_size) \
-	flush_dcache_range(_start, (_start + _size))
-
-#else
-
-#define dma_cache_inv(_start,_size)		do { } while (0)
-#define dma_cache_wback(_start,_size)		do { } while (0)
-#define dma_cache_wback_inv(_start,_size)	do { } while (0)
-
-#endif
-
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem
  * access
@@ -582,5 +495,8 @@ extern void pci_iounmap(struct pci_dev *dev, void __iomem *);
 
 #define setbits16(_addr, _v) out_be16((_addr), in_be16(_addr) |  (_v))
 #define clrbits16(_addr, _v) out_be16((_addr), in_be16(_addr) & ~(_v))
+
+#define setbits8(_addr, _v) out_8((_addr), in_8(_addr) |  (_v))
+#define clrbits8(_addr, _v) out_8((_addr), in_8(_addr) & ~(_v))
 
 #endif /* __KERNEL__ */

@@ -120,14 +120,6 @@ extern spinlock_t mv64x60_lock;
 
 #define	MV64x60_64BIT_WIN_COUNT			24
 
-/* Watchdog Platform Device, Driver Data */
-#define	MV64x60_WDT_NAME			"wdt"
-
-struct mv64x60_wdt_pdata {
-	int	timeout;	/* watchdog expiry in seconds, default 10 */
-	int	bus_clk;	/* bus clock in MHz, default 133 */
-};
-
 /*
  * Define a structure that's used to pass in config information to the
  * core routines.
@@ -336,9 +328,9 @@ int mv64x60_pci_exclude_device(u8 bus, u8 devfn);
 
 
 void gt64260_init_irq(void);
-int gt64260_get_irq(struct pt_regs *regs);
+int gt64260_get_irq(void);
 void mv64360_init_irq(void);
-int mv64360_get_irq(struct pt_regs *regs);
+int mv64360_get_irq(void);
 
 u32 mv64x60_mask(u32 val, u32 num_bits);
 u32 mv64x60_shift_left(u32 val, u32 num_bits);
