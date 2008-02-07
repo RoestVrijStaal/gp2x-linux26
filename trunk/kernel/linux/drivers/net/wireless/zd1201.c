@@ -112,14 +112,14 @@ exit:
 	return err;
 }
 
-static void zd1201_usbfree(struct urb *urb, struct pt_regs *regs)
+static void zd1201_usbfree(struct urb *urb)
 {
 	struct zd1201 *zd = urb->context;
 
 	switch(urb->status) {
 		case -EILSEQ:
 		case -ENODEV:
-		case -ETIMEDOUT:
+		case -ETIME:
 		case -ENOENT:
 		case -EPIPE:
 		case -EOVERFLOW:
@@ -177,7 +177,7 @@ static int zd1201_docmd(struct zd1201 *zd, int cmd, int parm0,
 }
 
 /* Callback after sending out a packet */
-static void zd1201_usbtx(struct urb *urb, struct pt_regs *regs)
+static void zd1201_usbtx(struct urb *urb)
 {
 	struct zd1201 *zd = urb->context;
 	netif_wake_queue(zd->dev);
@@ -185,7 +185,7 @@ static void zd1201_usbtx(struct urb *urb, struct pt_regs *regs)
 }
 
 /* Incoming data */
-static void zd1201_usbrx(struct urb *urb, struct pt_regs *regs)
+static void zd1201_usbrx(struct urb *urb)
 {
 	struct zd1201 *zd = urb->context;
 	int free = 0;
@@ -193,15 +193,13 @@ static void zd1201_usbrx(struct urb *urb, struct pt_regs *regs)
 	struct sk_buff *skb;
 	unsigned char type;
 
-	if (!zd) {
-		free = 1;
-		goto exit;
-	}
+	if (!zd)
+		return;
 
 	switch(urb->status) {
 		case -EILSEQ:
 		case -ENODEV:
-		case -ETIMEDOUT:
+		case -ETIME:
 		case -ENOENT:
 		case -EPIPE:
 		case -EOVERFLOW:
@@ -329,9 +327,8 @@ static void zd1201_usbrx(struct urb *urb, struct pt_regs *regs)
 			memcpy(skb_put(skb, 6), &data[datalen-8], 6);
 			memcpy(skb_put(skb, 2), &data[datalen-24], 2);
 			memcpy(skb_put(skb, len), data, len);
-			skb->dev = zd->dev;
-			skb->dev->last_rx = jiffies;
 			skb->protocol = eth_type_trans(skb, zd->dev);
+			skb->dev->last_rx = jiffies;
 			zd->stats.rx_packets++;
 			zd->stats.rx_bytes += skb->len;
 			netif_rx(skb);
@@ -387,9 +384,8 @@ static void zd1201_usbrx(struct urb *urb, struct pt_regs *regs)
 			memcpy(skb_put(skb, 2), &data[6], 2);
 			memcpy(skb_put(skb, len), data+8, len);
 		}
-		skb->dev = zd->dev;
-		skb->dev->last_rx = jiffies;
 		skb->protocol = eth_type_trans(skb, zd->dev);
+		skb->dev->last_rx = jiffies;
 		zd->stats.rx_packets++;
 		zd->stats.rx_bytes += skb->len;
 		netif_rx(skb);
@@ -811,10 +807,10 @@ static int zd1201_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	txbuf[4] = 0x00;
 	txbuf[5] = 0x00;
 
-	memcpy(txbuf+6, skb->data+12, skb->len-12);
+	skb_copy_from_linear_data_offset(skb, 12, txbuf + 6, skb->len - 12);
 	if (pad)
 		txbuf[skb->len-12+6]=0;
-	memcpy(txbuf+skb->len-12+6+pad, skb->data, 12);
+	skb_copy_from_linear_data(skb, txbuf + skb->len - 12 + 6 + pad, 12);
 	*(__be16*)&txbuf[skb->len+6+pad] = htons(skb->len-12+6);
 	txbuf[txbuflen-1] = 0;
 
@@ -1218,7 +1214,7 @@ static int zd1201_set_essid(struct net_device *dev,
 		return -EINVAL;
 	if (data->length < 1)
 		data->length = 1;
-	zd->essidlen = data->length-1;
+	zd->essidlen = data->length;
 	memset(zd->essid, 0, IW_ESSID_MAX_SIZE+1);
 	memcpy(zd->essid, essid, data->length);
 	return zd1201_join(zd, zd->essid, zd->essidlen);
@@ -1830,10 +1826,8 @@ err_start:
 	/* Leave the device in reset state */
 	zd1201_docmd(zd, ZD1201_CMDCODE_INIT, 0, 0, 0);
 err_zd:
-	if (zd->tx_urb)
-		usb_free_urb(zd->tx_urb);
-	if (zd->rx_urb)
-		usb_free_urb(zd->rx_urb);
+	usb_free_urb(zd->tx_urb);
+	usb_free_urb(zd->rx_urb);
 	kfree(zd);
 	return err;
 }

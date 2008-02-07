@@ -52,8 +52,8 @@
 #include <pcmcia/ds.h>
 #include <pcmcia/mem_op.h>
 
-#include <net/ieee80211.h>
 #include <linux/wireless.h>
+#include <net/iw_handler.h>
 
 #include <asm/io.h>
 #include <asm/system.h>
@@ -99,7 +99,7 @@ static int ray_dev_config(struct net_device *dev, struct ifmap *map);
 static struct net_device_stats *ray_get_stats(struct net_device *dev);
 static int ray_dev_init(struct net_device *dev);
 
-static struct ethtool_ops netdev_ethtool_ops;
+static const struct ethtool_ops netdev_ethtool_ops;
 
 static int ray_open(struct net_device *dev);
 static int ray_dev_start_xmit(struct sk_buff *skb, struct net_device *dev);
@@ -130,7 +130,7 @@ static void ray_update_parm(struct net_device *dev, UCHAR objid, UCHAR *value, i
 static void verify_dl_startup(u_long);
 
 /* Prototypes for interrpt time functions **********************************/
-static irqreturn_t ray_interrupt (int reg, void *dev_id, struct pt_regs *regs);
+static irqreturn_t ray_interrupt (int reg, void *dev_id);
 static void clear_interrupt(ray_dev_t *local);
 static void rx_deauthenticate(ray_dev_t *local, struct rcs __iomem *prcs, 
                        unsigned int pkt_addr, int rx_len);
@@ -314,7 +314,7 @@ static int ray_probe(struct pcmcia_device *p_dev)
     if (!dev)
 	    goto fail_alloc_dev;
 
-    local = dev->priv;
+    local = netdev_priv(dev);
     local->finder = p_dev;
 
     /* The io structure describes IO port mapping. None used here */
@@ -331,7 +331,6 @@ static int ray_probe(struct pcmcia_device *p_dev)
     p_dev->conf.Attributes = CONF_ENABLE_IRQ;
     p_dev->conf.IntType = INT_MEMORY_AND_IO;
     p_dev->conf.ConfigIndex = 1;
-    p_dev->conf.Present = PRESENT_OPTION;
 
     p_dev->priv = dev;
     p_dev->irq.Instance = dev;
@@ -357,7 +356,6 @@ static int ray_probe(struct pcmcia_device *p_dev)
     dev->set_multicast_list = &set_multicast_list;
 
     DEBUG(2,"ray_cs ray_attach calling ether_setup.)\n");
-    SET_MODULE_OWNER(dev);
     dev->init = &ray_dev_init;
     dev->open = &ray_open;
     dev->stop = &ray_dev_close;
@@ -389,7 +387,7 @@ static void ray_detach(struct pcmcia_device *link)
 
     ray_release(link);
 
-    local = (ray_dev_t *)dev->priv;
+    local = netdev_priv(dev);
     del_timer(&local->timer);
 
     if (link->priv) {
@@ -408,41 +406,22 @@ do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
 #define MAX_TUPLE_SIZE 128
 static int ray_config(struct pcmcia_device *link)
 {
-    tuple_t tuple;
-    cisparse_t parse;
     int last_fn = 0, last_ret = 0;
     int i;
-    u_char buf[MAX_TUPLE_SIZE];
     win_req_t req;
     memreq_t mem;
     struct net_device *dev = (struct net_device *)link->priv;
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
+    DECLARE_MAC_BUF(mac);
 
     DEBUG(1, "ray_config(0x%p)\n", link);
 
-    /* This reads the card's CONFIG tuple to find its configuration regs */
-    tuple.DesiredTuple = CISTPL_CONFIG;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    tuple.TupleData = buf;
-    tuple.TupleDataMax = MAX_TUPLE_SIZE;
-    tuple.TupleOffset = 0;
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-    link->conf.ConfigBase = parse.config.base;
-    link->conf.Present = parse.config.rmask[0];
-
     /* Determine card type and firmware version */
-    buf[0] = buf[MAX_TUPLE_SIZE - 1] = 0;
-    tuple.DesiredTuple = CISTPL_VERS_1;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    tuple.TupleData = buf;
-    tuple.TupleDataMax = MAX_TUPLE_SIZE;
-    tuple.TupleOffset = 2;
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-
-    for (i=0; i<tuple.TupleDataLen - 4; i++) 
-        if (buf[i] == 0) buf[i] = ' ';
-    printk(KERN_INFO "ray_cs Detected: %s\n",buf);
+    printk(KERN_INFO "ray_cs Detected: %s%s%s%s\n",
+	   link->prod_id[0] ? link->prod_id[0] : " ",
+	   link->prod_id[1] ? link->prod_id[1] : " ",
+	   link->prod_id[2] ? link->prod_id[2] : " ",
+	   link->prod_id[3] ? link->prod_id[3] : " ");
 
     /* Now allocate an interrupt line.  Note that this does not
        actually assign a handler to the interrupt.
@@ -504,10 +483,8 @@ static int ray_config(struct pcmcia_device *link)
     strcpy(local->node.dev_name, dev->name);
     link->dev_node = &local->node;
 
-    printk(KERN_INFO "%s: RayLink, irq %d, hw_addr ",
-       dev->name, dev->irq);
-    for (i = 0; i < 6; i++)
-    printk("%02X%s", dev->dev_addr[i], ((i<5) ? ":" : "\n"));
+    printk(KERN_INFO "%s: RayLink, irq %d, hw_addr %s\n",
+       dev->name, dev->irq, print_mac(mac, dev->dev_addr));
 
     return 0;
 
@@ -541,7 +518,7 @@ static int ray_init(struct net_device *dev)
     int i;
     UCHAR *p;
     struct ccs __iomem *pccs;
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     DEBUG(1, "ray_init(0x%p)\n", dev);
     if (!(pcmcia_dev_present(link))) {
@@ -602,7 +579,7 @@ static int ray_init(struct net_device *dev)
 static int dl_startup_params(struct net_device *dev)
 {
     int ccsindex;
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct ccs __iomem *pccs;
     struct pcmcia_device *link = local->finder;
 
@@ -807,7 +784,7 @@ static void join_net(u_long data)
 static void ray_release(struct pcmcia_device *link)
 {
     struct net_device *dev = link->priv; 
-    ray_dev_t *local = dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     int i;
     
     DEBUG(1, "ray_release(0x%p)\n", link);
@@ -855,7 +832,7 @@ int ray_dev_init(struct net_device *dev)
 #ifdef RAY_IMMEDIATE_INIT
     int i;
 #endif	/* RAY_IMMEDIATE_INIT */
-    ray_dev_t *local = dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
 
     DEBUG(1,"ray_dev_init(dev=%p)\n",dev);
@@ -889,7 +866,7 @@ int ray_dev_init(struct net_device *dev)
 /*===========================================================================*/
 static int ray_dev_config(struct net_device *dev, struct ifmap *map)
 {
-    ray_dev_t *local = dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     /* Dummy routine to satisfy device structure */
     DEBUG(1,"ray_dev_config(dev=%p,ifmap=%p)\n",dev,map);
@@ -903,7 +880,7 @@ static int ray_dev_config(struct net_device *dev, struct ifmap *map)
 /*===========================================================================*/
 static int ray_dev_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-    ray_dev_t *local = dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     short length = skb->len;
 
@@ -946,7 +923,7 @@ static int ray_dev_start_xmit(struct sk_buff *skb, struct net_device *dev)
 static int ray_hw_xmit(unsigned char* data, int len, struct net_device* dev, 
                 UCHAR msg_type)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct ccs __iomem *pccs;
     int ccsindex;
     int offset;
@@ -1092,7 +1069,7 @@ static void netdev_get_drvinfo(struct net_device *dev,
 	strcpy(info->driver, "ray_cs");
 }
 
-static struct ethtool_ops netdev_ethtool_ops = {
+static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 };
 
@@ -1120,7 +1097,7 @@ static int ray_set_freq(struct net_device *dev,
 			struct iw_freq *fwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 	int err = -EINPROGRESS;		/* Call commit handler */
 
 	/* Reject if card is already initialised */
@@ -1145,7 +1122,7 @@ static int ray_get_freq(struct net_device *dev,
 			struct iw_freq *fwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	fwrq->m = local->sparm.b5.a_hop_pattern;
 	fwrq->e = 0;
@@ -1161,7 +1138,7 @@ static int ray_set_essid(struct net_device *dev,
 			 struct iw_point *dwrq,
 			 char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	/* Reject if card is already initialised */
 	if(local->card_status != CARD_AWAITING_PARAM)
@@ -1173,7 +1150,7 @@ static int ray_set_essid(struct net_device *dev,
 		return -EOPNOTSUPP;
 	} else {
 		/* Check the size of the string */
-		if(dwrq->length > IW_ESSID_MAX_SIZE + 1) {
+		if(dwrq->length > IW_ESSID_MAX_SIZE) {
 			return -E2BIG;
 		}
 
@@ -1194,11 +1171,10 @@ static int ray_get_essid(struct net_device *dev,
 			 struct iw_point *dwrq,
 			 char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	/* Get the essid that was set */
 	memcpy(extra, local->sparm.b5.a_current_ess_id, IW_ESSID_MAX_SIZE);
-	extra[IW_ESSID_MAX_SIZE] = '\0';
 
 	/* Push it out ! */
 	dwrq->length = strlen(extra);
@@ -1216,7 +1192,7 @@ static int ray_get_wap(struct net_device *dev,
 			struct sockaddr *awrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	memcpy(awrq->sa_data, local->bss_id, ETH_ALEN);
 	awrq->sa_family = ARPHRD_ETHER;
@@ -1233,7 +1209,7 @@ static int ray_set_rate(struct net_device *dev,
 			struct iw_param *vwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	/* Reject if card is already initialised */
 	if(local->card_status != CARD_AWAITING_PARAM)
@@ -1262,7 +1238,7 @@ static int ray_get_rate(struct net_device *dev,
 			struct iw_param *vwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	if(local->net_default_tx_rate == 3)
 		vwrq->value = 2000000;		/* Hum... */
@@ -1282,7 +1258,7 @@ static int ray_set_rts(struct net_device *dev,
 		       struct iw_param *vwrq,
 		       char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 	int rthr = vwrq->value;
 
 	/* Reject if card is already initialised */
@@ -1312,7 +1288,7 @@ static int ray_get_rts(struct net_device *dev,
 		       struct iw_param *vwrq,
 		       char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	vwrq->value = (local->sparm.b5.a_rts_threshold[0] << 8)
 		+ local->sparm.b5.a_rts_threshold[1];
@@ -1331,7 +1307,7 @@ static int ray_set_frag(struct net_device *dev,
 			struct iw_param *vwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 	int fthr = vwrq->value;
 
 	/* Reject if card is already initialised */
@@ -1360,7 +1336,7 @@ static int ray_get_frag(struct net_device *dev,
 			struct iw_param *vwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	vwrq->value = (local->sparm.b5.a_frag_threshold[0] << 8)
 		+ local->sparm.b5.a_frag_threshold[1];
@@ -1379,7 +1355,7 @@ static int ray_set_mode(struct net_device *dev,
 			__u32 *uwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 	int err = -EINPROGRESS;		/* Call commit handler */
 	char card_mode = 1;
 
@@ -1411,7 +1387,7 @@ static int ray_get_mode(struct net_device *dev,
 			__u32 *uwrq,
 			char *extra)
 {
-	ray_dev_t *local = (ray_dev_t *)dev->priv;
+	ray_dev_t *local = netdev_priv(dev);
 
 	if(local->sparm.b5.a_network_type)
 		*uwrq = IW_MODE_INFRA;
@@ -1514,7 +1490,7 @@ static int ray_commit(struct net_device *dev,
  */
 static iw_stats * ray_get_wireless_stats(struct net_device *	dev)
 {
-  ray_dev_t *	local = (ray_dev_t *) dev->priv;
+  ray_dev_t *	local = netdev_priv(dev);
   struct pcmcia_device *link = local->finder;
   struct status __iomem *p = local->sram + STATUS_BASE;
 
@@ -1590,9 +1566,9 @@ static const struct iw_priv_args	ray_private_args[] = {
 
 static const struct iw_handler_def	ray_handler_def =
 {
-	.num_standard	= sizeof(ray_handler)/sizeof(iw_handler),
-	.num_private	= sizeof(ray_private_handler)/sizeof(iw_handler),
-	.num_private_args = sizeof(ray_private_args)/sizeof(struct iw_priv_args),
+	.num_standard	= ARRAY_SIZE(ray_handler),
+	.num_private	= ARRAY_SIZE(ray_private_handler),
+	.num_private_args = ARRAY_SIZE(ray_private_args),
 	.standard	= ray_handler,
 	.private	= ray_private_handler,
 	.private_args	= ray_private_args,
@@ -1602,7 +1578,7 @@ static const struct iw_handler_def	ray_handler_def =
 /*===========================================================================*/
 static int ray_open(struct net_device *dev)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link;
     link = local->finder;
     
@@ -1636,7 +1612,7 @@ static int ray_open(struct net_device *dev)
 /*===========================================================================*/
 static int ray_dev_close(struct net_device *dev)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link;
     link = local->finder;
 
@@ -1795,7 +1771,7 @@ static int parse_addr(char *in_str, UCHAR *out)
 /*===========================================================================*/
 static struct net_device_stats *ray_get_stats(struct net_device *dev)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     struct status __iomem *p = local->sram + STATUS_BASE;
     if (!(pcmcia_dev_present(link))) {
@@ -1825,7 +1801,7 @@ static struct net_device_stats *ray_get_stats(struct net_device *dev)
 /*===========================================================================*/
 static void ray_update_parm(struct net_device *dev, UCHAR objid, UCHAR *value, int len)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     int ccsindex;
     int i;
@@ -1862,7 +1838,7 @@ static void ray_update_multi_list(struct net_device *dev, int all)
     int ccsindex;
     struct ccs __iomem *pccs;
     int i = 0;
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     struct pcmcia_device *link = local->finder;
     void __iomem *p = local->sram + HOST_TO_ECF_BASE;
 
@@ -1906,7 +1882,7 @@ static void ray_update_multi_list(struct net_device *dev, int all)
 /*===========================================================================*/
 static void set_multicast_list(struct net_device *dev)
 {
-    ray_dev_t *local = (ray_dev_t *)dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     UCHAR promisc;
 
     DEBUG(2,"ray_cs set_multicast_list(%p)\n",dev);
@@ -1940,7 +1916,7 @@ static void set_multicast_list(struct net_device *dev)
 /*=============================================================================
  * All routines below here are run at interrupt time.
 =============================================================================*/
-static irqreturn_t ray_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t ray_interrupt(int irq, void *dev_id)
 {
     struct net_device *dev = (struct net_device *)dev_id;
     struct pcmcia_device *link;
@@ -1957,7 +1933,7 @@ static irqreturn_t ray_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 
     DEBUG(4,"ray_cs: interrupt for *dev=%p\n",dev);
 
-    local = (ray_dev_t *)dev->priv;
+    local = netdev_priv(dev);
     link = (struct pcmcia_device *)local->finder;
     if (!pcmcia_dev_present(link)) {
         DEBUG(2,"ray_cs interrupt from device not present or suspended.\n");
@@ -2187,7 +2163,7 @@ static void rx_data(struct net_device *dev, struct rcs __iomem *prcs, unsigned i
 {
     struct sk_buff *skb = NULL;
     struct rcs __iomem *prcslink = prcs;
-    ray_dev_t *local = dev->priv;
+    ray_dev_t *local = netdev_priv(dev);
     UCHAR *rx_ptr;
     int total_len;
     int tmp;
@@ -2254,7 +2230,6 @@ static void rx_data(struct net_device *dev, struct rcs __iomem *prcs, unsigned i
         return;
     }
     skb_reserve( skb, 2);   /* Align IP on 16 byte (TBD check this)*/
-    skb->dev = dev;
 
     DEBUG(4,"ray_cs rx_data total_len = %x, rx_len = %x\n",total_len,rx_len);
 
@@ -2265,7 +2240,8 @@ static void rx_data(struct net_device *dev, struct rcs __iomem *prcs, unsigned i
     rx_ptr += copy_from_rx_buff(local, rx_ptr, pkt_addr & RX_BUFF_END, rx_len);
     /* Get source address */
 #ifdef WIRELESS_SPY
-    memcpy(linksrcaddr, ((struct mac_header *)skb->data)->addr_2, ETH_ALEN);
+    skb_copy_from_linear_data_offset(skb, offsetof(struct mac_header, addr_2),
+				     linksrcaddr, ETH_ALEN);
 #endif
     /* Now, deal with encapsulation/translation/sniffer */
     if (!sniffer) {
@@ -2633,6 +2609,7 @@ static int ray_cs_proc_read(char *buf, char **start, off_t offset, int len)
     UCHAR *p;
     struct freq_hop_element *pfh;
     UCHAR c[33];
+    DECLARE_MAC_BUF(mac);
 
     link = this_device;
     if (!link)
@@ -2640,7 +2617,7 @@ static int ray_cs_proc_read(char *buf, char **start, off_t offset, int len)
     dev = (struct net_device *)link->priv;
     if (!dev)
     	return 0;
-    local = (ray_dev_t *)dev->priv;
+    local = netdev_priv(dev);
     if (!local)
     	return 0;
 
@@ -2662,9 +2639,8 @@ static int ray_cs_proc_read(char *buf, char **start, off_t offset, int len)
                    nettype[local->sparm.b5.a_network_type], c);
 
     p = local->bss_id;
-    len += sprintf(buf + len, 
-                   "BSSID                = %02x:%02x:%02x:%02x:%02x:%02x\n",
-                   p[0],p[1],p[2],p[3],p[4],p[5]);
+    len += sprintf(buf + len, "BSSID                = %s\n",
+                   print_mac(mac, p));
 
     len += sprintf(buf + len, "Country code         = %d\n", 
                    local->sparm.b5.a_curr_country_code);

@@ -176,7 +176,7 @@ psa_write(struct net_device *	dev,
   volatile u_char __iomem *verify = lp->mem + PSA_ADDR +
     (psaoff(0, psa_comp_number) << 1);
 
-  /* Authorize writting to PSA */
+  /* Authorize writing to PSA */
   hacr_write(base, HACR_PWR_STAT | HACR_ROM_WEN);
 
   while(n-- > 0)
@@ -603,7 +603,7 @@ static wavepoint_history *wl_new_wavepoint(unsigned short nwid, unsigned char se
   if(lp->wavepoint_table.num_wavepoints==MAX_WAVEPOINTS)
     return NULL;
   
-  new_wavepoint=(wavepoint_history *) kmalloc(sizeof(wavepoint_history),GFP_ATOMIC);
+  new_wavepoint = kmalloc(sizeof(wavepoint_history),GFP_ATOMIC);
   if(new_wavepoint==NULL)
     return NULL;
   
@@ -1042,6 +1042,7 @@ wv_82593_reconfig(struct net_device *	dev)
 static void
 wv_psa_show(psa_t *	p)
 {
+  DECLARE_MAC_BUF(mac);
   printk(KERN_DEBUG "##### wavelan psa contents: #####\n");
   printk(KERN_DEBUG "psa_io_base_addr_1: 0x%02X %02X %02X %02X\n",
 	 p->psa_io_base_addr_1,
@@ -1055,29 +1056,13 @@ wv_psa_show(psa_t *	p)
   printk(KERN_DEBUG "psa_holi_params: 0x%02x, ", p->psa_holi_params);
   printk("psa_int_req_no: %d\n", p->psa_int_req_no);
 #ifdef DEBUG_SHOW_UNUSED
-  printk(KERN_DEBUG "psa_unused0[]: %02X:%02X:%02X:%02X:%02X:%02X:%02X\n",
-	 p->psa_unused0[0],
-	 p->psa_unused0[1],
-	 p->psa_unused0[2],
-	 p->psa_unused0[3],
-	 p->psa_unused0[4],
-	 p->psa_unused0[5],
-	 p->psa_unused0[6]);
+  printk(KERN_DEBUG "psa_unused0[]: %s\n",
+	 print_mac(mac, p->psa_unused0));
 #endif	/* DEBUG_SHOW_UNUSED */
-  printk(KERN_DEBUG "psa_univ_mac_addr[]: %02x:%02x:%02x:%02x:%02x:%02x\n",
-	 p->psa_univ_mac_addr[0],
-	 p->psa_univ_mac_addr[1],
-	 p->psa_univ_mac_addr[2],
-	 p->psa_univ_mac_addr[3],
-	 p->psa_univ_mac_addr[4],
-	 p->psa_univ_mac_addr[5]);
-  printk(KERN_DEBUG "psa_local_mac_addr[]: %02x:%02x:%02x:%02x:%02x:%02x\n",
-	 p->psa_local_mac_addr[0],
-	 p->psa_local_mac_addr[1],
-	 p->psa_local_mac_addr[2],
-	 p->psa_local_mac_addr[3],
-	 p->psa_local_mac_addr[4],
-	 p->psa_local_mac_addr[5]);
+  printk(KERN_DEBUG "psa_univ_mac_addr[]: %s\n",
+	 print_mac(mac, p->psa_univ_mac_addr));
+  printk(KERN_DEBUG "psa_local_mac_addr[]: %s\n",
+	 print_mac(mac, p->psa_local_mac_addr));
   printk(KERN_DEBUG "psa_univ_local_sel: %d, ", p->psa_univ_local_sel);
   printk("psa_comp_number: %d, ", p->psa_comp_number);
   printk("psa_thr_pre_set: 0x%02x\n", p->psa_thr_pre_set);
@@ -1168,7 +1153,7 @@ wv_mmc_show(struct net_device *	dev)
 	 m.mmr_unused0[6],
 	 m.mmr_unused0[7]);
 #endif	/* DEBUG_SHOW_UNUSED */
-  printk(KERN_DEBUG "Encryption algorythm: %02X - Status: %02X\n",
+  printk(KERN_DEBUG "Encryption algorithm: %02X - Status: %02X\n",
 	 m.mmr_des_avail, m.mmr_des_status);
 #ifdef DEBUG_SHOW_UNUSED
   printk(KERN_DEBUG "mmc_unused1[]: %02X:%02X:%02X:%02X:%02X\n",
@@ -1277,11 +1262,12 @@ wv_packet_info(u_char *		p,		/* Packet to dump */
 {
   int		i;
   int		maxi;
+  DECLARE_MAC_BUF(mac);
 
-  printk(KERN_DEBUG "%s: %s(): dest %02X:%02X:%02X:%02X:%02X:%02X, length %d\n",
-	 msg1, msg2, p[0], p[1], p[2], p[3], p[4], p[5], length);
-  printk(KERN_DEBUG "%s: %s(): src %02X:%02X:%02X:%02X:%02X:%02X, type 0x%02X%02X\n",
-	 msg1, msg2, p[6], p[7], p[8], p[9], p[10], p[11], p[12], p[13]);
+  printk(KERN_DEBUG "%s: %s(): dest %s, length %d\n",
+	 msg1, msg2, print_mac(mac, p), length);
+  printk(KERN_DEBUG "%s: %s(): src %s, type 0x%02X%02X\n",
+	 msg1, msg2, print_mac(mac, &p[6]), p[12], p[13]);
 
 #ifdef DEBUG_PACKET_DUMP
 
@@ -1312,7 +1298,7 @@ wv_init_info(struct net_device *	dev)
 {
   kio_addr_t	base = dev->base_addr;
   psa_t		psa;
-  int		i;
+  DECLARE_MAC_BUF(mac);
 
   /* Read the parameter storage area */
   psa_read(dev, 0, (unsigned char *) &psa, sizeof(psa));
@@ -1329,10 +1315,10 @@ wv_init_info(struct net_device *	dev)
 
 #ifdef DEBUG_BASIC_SHOW
   /* Now, let's go for the basic stuff */
-  printk(KERN_NOTICE "%s: WaveLAN: port %#lx, irq %d, hw_addr",
-	 dev->name, base, dev->irq);
-  for(i = 0; i < WAVELAN_ADDR_SIZE; i++)
-    printk("%s%02X", (i == 0) ? " " : ":", dev->dev_addr[i]);
+  printk(KERN_NOTICE "%s: WaveLAN: port %#lx, irq %d, "
+	 "hw_addr %s",
+	 dev->name, base, dev->irq,
+	 print_mac(mac, dev->dev_addr));
 
   /* Print current network id */
   if(psa.psa_nwid_select)
@@ -1676,7 +1662,7 @@ wv_set_frequency(u_long		base,	/* i/o port of the card */
       fee_write(base, 0x60,
 		dac, 2);
 
-      /* We now should verify here that the EEprom writting was ok */
+      /* We now should verify here that the EEprom writing was ok */
 
       /* ReRead the first area */
       fee_read(base, 0x00,
@@ -1837,7 +1823,7 @@ static void wl_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 	strncpy(info->driver, "wavelan_cs", sizeof(info->driver)-1);
 }
 
-static struct ethtool_ops ops = {
+static const struct ethtool_ops ops = {
 	.get_drvinfo = wl_get_drvinfo
 };
 
@@ -2719,9 +2705,9 @@ static const iw_handler		wavelan_private_handler[] =
 
 static const struct iw_handler_def	wavelan_handler_def =
 {
-	.num_standard	= sizeof(wavelan_handler)/sizeof(iw_handler),
-	.num_private	= sizeof(wavelan_private_handler)/sizeof(iw_handler),
-	.num_private_args = sizeof(wavelan_private_args)/sizeof(struct iw_priv_args),
+	.num_standard	= ARRAY_SIZE(wavelan_handler),
+	.num_private	= ARRAY_SIZE(wavelan_private_handler),
+	.num_private_args = ARRAY_SIZE(wavelan_private_args),
 	.standard	= wavelan_handler,
 	.private	= wavelan_private_handler,
 	.private_args	= wavelan_private_args,
@@ -2884,14 +2870,12 @@ wv_packet_read(struct net_device *		dev,
       return;
     }
 
-  skb->dev = dev;
-
   skb_reserve(skb, 2);
   fd_p = read_ringbuf(dev, fd_p, (char *) skb_put(skb, sksize), sksize);
   skb->protocol = eth_type_trans(skb, dev);
 
 #ifdef DEBUG_RX_INFO
-  wv_packet_info(skb->mac.raw, sksize, dev->name, "wv_packet_read");
+  wv_packet_info(skb_mac_header(skb), sksize, dev->name, "wv_packet_read");
 #endif	/* DEBUG_RX_INFO */
      
   /* Statistics gathering & stuff associated.
@@ -2925,7 +2909,7 @@ wv_packet_read(struct net_device *		dev,
 #endif	/* WAVELAN_ROAMING */
 	  
 #ifdef WIRELESS_SPY
-      wl_spy_gather(dev, skb->mac.raw + WAVELAN_ADDR_SIZE, stats);
+      wl_spy_gather(dev, skb_mac_header(skb) + WAVELAN_ADDR_SIZE, stats);
 #endif	/* WIRELESS_SPY */
 #ifdef HISTOGRAM
       wl_his_gather(dev, stats);
@@ -3590,9 +3574,9 @@ wv_82593_config(struct net_device *	dev)
   cfblk.acloc = TRUE;           /* Disable source addr insertion by i82593 */
   cfblk.preamb_len = 0;         /* 2 bytes preamble (SFD) */
   cfblk.loopback = FALSE;
-  cfblk.lin_prio = 0;   	/* conform to 802.3 backoff algoritm */
-  cfblk.exp_prio = 5;	        /* conform to 802.3 backoff algoritm */
-  cfblk.bof_met = 1;	        /* conform to 802.3 backoff algoritm */
+  cfblk.lin_prio = 0;   	/* conform to 802.3 backoff algorithm */
+  cfblk.exp_prio = 5;	        /* conform to 802.3 backoff algorithm */
+  cfblk.bof_met = 1;	        /* conform to 802.3 backoff algorithm */
   cfblk.ifrm_spc = 0x20 >> 4;	/* 32 bit times interframe spacing */
   cfblk.slottim_low = 0x20 >> 5;	/* 32 bit times slot time */
   cfblk.slottim_hi = 0x0;
@@ -3693,12 +3677,12 @@ wv_82593_config(struct net_device *	dev)
       int			addrs_len = WAVELAN_ADDR_SIZE * lp->mc_count;
 
 #ifdef DEBUG_CONFIG_INFO
+      DECLARE_MAC_BUF(mac);
       printk(KERN_DEBUG "%s: wv_hw_config(): set %d multicast addresses:\n",
 	     dev->name, lp->mc_count);
       for(dmi=dev->mc_list; dmi; dmi=dmi->next)
-	printk(KERN_DEBUG " %02x:%02x:%02x:%02x:%02x:%02x\n",
-	       dmi->dmi_addr[0], dmi->dmi_addr[1], dmi->dmi_addr[2],
-	       dmi->dmi_addr[3], dmi->dmi_addr[4], dmi->dmi_addr[5] );
+	printk(KERN_DEBUG " %s\n",
+	       print_mac(mac, dmi->dmi_addr));
 #endif
 
       /* Initialize adapter's ethernet multicast addresses */
@@ -3939,11 +3923,8 @@ wv_hw_reset(struct net_device *	dev)
 static inline int
 wv_pcmcia_config(struct pcmcia_device *	link)
 {
-  tuple_t		tuple;
-  cisparse_t		parse;
   struct net_device *	dev = (struct net_device *) link->priv;
   int			i;
-  u_char		buf[64];
   win_req_t		req;
   memreq_t		mem;
   net_local *		lp = netdev_priv(dev);
@@ -3952,36 +3933,6 @@ wv_pcmcia_config(struct pcmcia_device *	link)
 #ifdef DEBUG_CONFIG_TRACE
   printk(KERN_DEBUG "->wv_pcmcia_config(0x%p)\n", link);
 #endif
-
-  /*
-   * This reads the card's CONFIG tuple to find its configuration
-   * registers.
-   */
-  do
-    {
-      tuple.Attributes = 0;
-      tuple.DesiredTuple = CISTPL_CONFIG;
-      i = pcmcia_get_first_tuple(link, &tuple);
-      if(i != CS_SUCCESS)
-	break;
-      tuple.TupleData = (cisdata_t *)buf;
-      tuple.TupleDataMax = 64;
-      tuple.TupleOffset = 0;
-      i = pcmcia_get_tuple_data(link, &tuple);
-      if(i != CS_SUCCESS)
-	break;
-      i = pcmcia_parse_tuple(link, &tuple, &parse);
-      if(i != CS_SUCCESS)
-	break;
-      link->conf.ConfigBase = parse.config.base;
-      link->conf.Present = parse.config.rmask[0];
-    }
-  while(0);
-  if(i != CS_SUCCESS)
-    {
-      cs_error(link, ParseTuple, i);
-      return FALSE;
-    }
 
   do
     {
@@ -4117,23 +4068,13 @@ wv_pcmcia_release(struct pcmcia_device *link)
  */
 static irqreturn_t
 wavelan_interrupt(int		irq,
-		  void *	dev_id,
-		  struct pt_regs * regs)
+		  void *	dev_id)
 {
-  struct net_device *	dev;
+  struct net_device *	dev = dev_id;
   net_local *	lp;
   kio_addr_t	base;
   int		status0;
   u_int		tx_status;
-
-  if ((dev = dev_id) == NULL)
-    {
-#ifdef DEBUG_INTERRUPT_ERROR
-      printk(KERN_WARNING "wavelan_interrupt(): irq %d for unknown device.\n",
-	     irq);
-#endif
-      return IRQ_NONE;
-    }
 
 #ifdef DEBUG_INTERRUPT_TRACE
   printk(KERN_DEBUG "%s: ->wavelan_interrupt()\n", dev->name);
@@ -4622,7 +4563,6 @@ wavelan_probe(struct pcmcia_device *p_dev)
   lp->dev = dev;
 
   /* wavelan NET3 callbacks */
-  SET_MODULE_OWNER(dev);
   dev->open = &wavelan_open;
   dev->stop = &wavelan_close;
   dev->hard_start_xmit = &wavelan_packet_xmit;
