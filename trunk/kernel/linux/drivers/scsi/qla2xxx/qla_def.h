@@ -23,6 +23,7 @@
 #include <linux/interrupt.h>
 #include <linux/workqueue.h>
 #include <linux/firmware.h>
+#include <linux/aer.h>
 #include <asm/semaphore.h>
 
 #include <scsi/scsi.h>
@@ -184,8 +185,6 @@
  * SCSI Request Block
  */
 typedef struct srb {
-	struct list_head list;
-
 	struct scsi_qla_host *ha;	/* HA the SP is queued on */
 	struct fc_port *fcport;
 
@@ -316,7 +315,9 @@ struct device_reg_2xxx {
 	} u;
 
 	uint16_t fpm_diag_config;
-	uint16_t unused_5[0x6];		/* Gap */
+	uint16_t unused_5[0x4];		/* Gap */
+	uint16_t risc_hw;
+	uint16_t unused_5_1;		/* Gap */
 	uint16_t pcr;			/* Processor Control Register. */
 	uint16_t unused_6[0x5];		/* Gap */
 	uint16_t mctr;			/* Memory Configuration and Timing. */
@@ -608,6 +609,7 @@ typedef struct {
  */
 #define MBC_SERDES_PARAMS		0x10	/* Serdes Tx Parameters. */
 #define MBC_GET_IOCB_STATUS		0x12	/* Get IOCB status command. */
+#define MBC_PORT_PARAMS			0x1A	/* Port iDMA Parameters. */
 #define MBC_GET_TIMEOUT_PARAMS		0x22	/* Get FW timeouts. */
 #define MBC_TRACE_CONTROL		0x27	/* Trace control command. */
 #define MBC_GEN_SYSTEM_ERROR		0x2a	/* Generate System Error. */
@@ -1477,14 +1479,17 @@ typedef union {
 	uint32_t b24 : 24;
 
 	struct {
-		uint8_t d_id[3];
-		uint8_t rsvd_1;
-	} r;
-
-	struct {
+#ifdef __BIG_ENDIAN
+		uint8_t domain;
+		uint8_t area;
+		uint8_t al_pa;
+#elif __LITTLE_ENDIAN
 		uint8_t al_pa;
 		uint8_t area;
 		uint8_t domain;
+#else
+#error "__BIG_ENDIAN or __LITTLE_ENDIAN must be defined!"
+#endif
 		uint8_t rsvd_1;
 	} b;
 } port_id_t;
@@ -1497,6 +1502,8 @@ typedef struct {
 	port_id_t d_id;
 	uint8_t node_name[WWN_SIZE];
 	uint8_t port_name[WWN_SIZE];
+	uint8_t fabric_port_name[WWN_SIZE];
+	uint16_t fp_speed;
 } sw_info_t;
 
 /*
@@ -1524,6 +1531,9 @@ typedef struct fc_port {
 	uint16_t loop_id;
 	uint16_t old_loop_id;
 
+	uint8_t fabric_port_name[WWN_SIZE];
+	uint16_t fp_speed;
+
 	fc_port_type_t port_type;
 
 	atomic_t state;
@@ -1538,6 +1548,12 @@ typedef struct fc_port {
 	spinlock_t rport_lock;
 	struct fc_rport *rport, *drport;
 	u32 supported_classes;
+
+	unsigned long last_queue_full;
+	unsigned long last_ramp_up;
+
+	struct list_head vp_fcport;
+	uint16_t vp_idx;
 } fc_port_t;
 
 /*
@@ -1592,6 +1608,7 @@ typedef struct fc_port {
 
 #define CT_REJECT_RESPONSE	0x8001
 #define CT_ACCEPT_RESPONSE	0x8002
+#define CT_REASON_INVALID_COMMAND_CODE	0x01
 #define CT_REASON_CANNOT_PERFORM	0x09
 #define CT_EXPL_ALREADY_REGISTERED	0x10
 
@@ -1635,6 +1652,15 @@ typedef struct fc_port {
 #define	RSNN_NN_REQ_SIZE (16 + 8 + 1 + 255)
 #define	RSNN_NN_RSP_SIZE 16
 
+#define	GFPN_ID_CMD	0x11C
+#define	GFPN_ID_REQ_SIZE (16 + 4)
+#define	GFPN_ID_RSP_SIZE (16 + 8)
+
+#define	GPSC_CMD	0x127
+#define	GPSC_REQ_SIZE	(16 + 8)
+#define	GPSC_RSP_SIZE	(16 + 2 + 2)
+
+
 /*
  * HBA attribute types.
  */
@@ -1677,13 +1703,21 @@ struct ct_fdmi_hba_attributes {
 /*
  * Port attribute types.
  */
-#define FDMI_PORT_ATTR_COUNT		5
+#define FDMI_PORT_ATTR_COUNT		6
 #define FDMI_PORT_FC4_TYPES		1
 #define FDMI_PORT_SUPPORT_SPEED		2
 #define FDMI_PORT_CURRENT_SPEED		3
 #define FDMI_PORT_MAX_FRAME_SIZE	4
 #define FDMI_PORT_OS_DEVICE_NAME	5
 #define FDMI_PORT_HOST_NAME		6
+
+#define FDMI_PORT_SPEED_1GB		0x1
+#define FDMI_PORT_SPEED_2GB		0x2
+#define FDMI_PORT_SPEED_10GB		0x4
+#define FDMI_PORT_SPEED_4GB		0x8
+#define FDMI_PORT_SPEED_8GB		0x10
+#define FDMI_PORT_SPEED_16GB		0x20
+#define FDMI_PORT_SPEED_UNKNOWN		0x8000
 
 struct ct_fdmi_port_attr {
 	uint16_t type;
@@ -1748,7 +1782,7 @@ struct ct_sns_req {
 	uint8_t reserved[3];
 
 	union {
-		/* GA_NXT, GPN_ID, GNN_ID, GFT_ID */
+		/* GA_NXT, GPN_ID, GNN_ID, GFT_ID, GFPN_ID */
 		struct {
 			uint8_t reserved;
 			uint8_t port_id[3];
@@ -1823,6 +1857,10 @@ struct ct_sns_req {
 		struct {
 			uint8_t port_name[8];
 		} dpa;
+
+		struct {
+			uint8_t port_name[8];
+		} gpsc;
 	} req;
 };
 
@@ -1886,6 +1924,15 @@ struct ct_sns_rsp {
 			uint8_t port_name[8];
 			struct ct_fdmi_hba_attributes attrs;
 		} ghat;
+
+		struct {
+			uint8_t port_name[8];
+		} gfpn_id;
+
+		struct {
+			uint16_t speeds;
+			uint16_t speed;
+		} gpsc;
 	} rsp;
 };
 
@@ -1963,6 +2010,36 @@ struct gid_list_info {
 };
 #define GID_LIST_SIZE (sizeof(struct gid_list_info) * MAX_FIBRE_DEVICES)
 
+/* NPIV */
+typedef struct vport_info {
+	uint8_t		port_name[WWN_SIZE];
+	uint8_t		node_name[WWN_SIZE];
+	int		vp_id;
+	uint16_t	loop_id;
+	unsigned long	host_no;
+	uint8_t		port_id[3];
+	int		loop_state;
+} vport_info_t;
+
+typedef struct vport_params {
+	uint8_t 	port_name[WWN_SIZE];
+	uint8_t 	node_name[WWN_SIZE];
+	uint32_t 	options;
+#define	VP_OPTS_RETRY_ENABLE	BIT_0
+#define	VP_OPTS_VP_DISABLE	BIT_1
+} vport_params_t;
+
+/* NPIV - return codes of VP create and modify */
+#define VP_RET_CODE_OK			0
+#define VP_RET_CODE_FATAL		1
+#define VP_RET_CODE_WRONG_ID		2
+#define VP_RET_CODE_WWPN		3
+#define VP_RET_CODE_RESOURCES		4
+#define VP_RET_CODE_NO_MEM		5
+#define VP_RET_CODE_NOT_FOUND		6
+
+#define to_qla_parent(x) (((x)->parent) ? (x)->parent : (x))
+
 /*
  * ISP operations
  */
@@ -1980,7 +2057,7 @@ struct isp_operations {
 	char * (*pci_info_str) (struct scsi_qla_host *, char *);
 	char * (*fw_version_str) (struct scsi_qla_host *, char *);
 
-	irqreturn_t (*intr_handler) (int, void *, struct pt_regs *);
+	irq_handler_t intr_handler;
 	void (*enable_intrs) (struct scsi_qla_host *);
 	void (*disable_intrs) (struct scsi_qla_host *);
 
@@ -2012,7 +2089,40 @@ struct isp_operations {
 		uint32_t, uint32_t);
 	int (*write_optrom) (struct scsi_qla_host *, uint8_t *, uint32_t,
 		uint32_t);
+
+	int (*get_flash_version) (struct scsi_qla_host *, void *);
 };
+
+/* MSI-X Support *************************************************************/
+
+#define QLA_MSIX_CHIP_REV_24XX	3
+#define QLA_MSIX_FW_MODE(m)	(((m) & (BIT_7|BIT_8|BIT_9)) >> 7)
+#define QLA_MSIX_FW_MODE_1(m)	(QLA_MSIX_FW_MODE(m) == 1)
+
+#define QLA_MSIX_DEFAULT	0x00
+#define QLA_MSIX_RSP_Q		0x01
+
+#define QLA_MSIX_ENTRIES	2
+#define QLA_MIDX_DEFAULT	0
+#define QLA_MIDX_RSP_Q		1
+
+struct scsi_qla_host;
+
+struct qla_msix_entry {
+	int have_irq;
+	uint16_t msix_vector;
+	uint16_t msix_entry;
+};
+
+#define	WATCH_INTERVAL		1       /* number of seconds */
+
+/* NPIV */
+#define MAX_MULTI_ID_LOOP                     126
+#define MAX_MULTI_ID_FABRIC                    64
+#define MAX_NUM_VPORT_LOOP                      (MAX_MULTI_ID_LOOP - 1)
+#define MAX_NUM_VPORT_FABRIC                    (MAX_MULTI_ID_FABRIC - 1)
+#define MAX_NUM_VHBA_LOOP                       (MAX_MULTI_ID_LOOP - 1)
+#define MAX_NUM_VHBA_FABRIC                     (MAX_MULTI_ID_FABRIC - 1)
 
 /*
  * Linux Host Adapter structure
@@ -2044,9 +2154,13 @@ typedef struct scsi_qla_host {
 		uint32_t	enable_lip_full_login	:1;
 		uint32_t	enable_target_reset	:1;
 		uint32_t	enable_led_scheme	:1;
+		uint32_t	inta_enabled		:1;
 		uint32_t	msi_enabled		:1;
 		uint32_t	msix_enabled		:1;
 		uint32_t	disable_serdes		:1;
+		uint32_t	gpsc_supported		:1;
+		uint32_t        vsan_enabled            :1;
+		uint32_t	npiv_supported		:1;
 	} flags;
 
 	atomic_t	loop_state;
@@ -2086,6 +2200,7 @@ typedef struct scsi_qla_host {
 #define BEACON_BLINK_NEEDED	25
 #define REGISTER_FDMI_NEEDED	26
 #define FCPORT_UPDATE_NEEDED	27
+#define VP_DPC_NEEDED		28	/* wake up for VP dpc handling */
 
 	uint32_t	device_flags;
 #define DFLG_LOCAL_DEVICES		BIT_0
@@ -2094,6 +2209,7 @@ typedef struct scsi_qla_host {
 #define	SWITCH_FOUND			BIT_3
 #define	DFLG_NO_CABLE			BIT_4
 
+#define PCI_DEVICE_ID_QLOGIC_ISP2532	0x2532
 	uint32_t	device_type;
 #define DT_ISP2100			BIT_0
 #define DT_ISP2200			BIT_1
@@ -2106,8 +2222,11 @@ typedef struct scsi_qla_host {
 #define DT_ISP2432			BIT_8
 #define DT_ISP5422			BIT_9
 #define DT_ISP5432			BIT_10
-#define DT_ISP_LAST			(DT_ISP5432 << 1)
+#define DT_ISP2532			BIT_11
+#define DT_ISP_LAST			(DT_ISP2532 << 1)
 
+#define DT_IIDMA			BIT_26
+#define DT_FWI2				BIT_27
 #define DT_ZIO_SUPPORTED		BIT_28
 #define DT_OEM_001			BIT_29
 #define DT_ISP2200A			BIT_30
@@ -2125,12 +2244,16 @@ typedef struct scsi_qla_host {
 #define IS_QLA2432(ha)	(DT_MASK(ha) & DT_ISP2432)
 #define IS_QLA5422(ha)	(DT_MASK(ha) & DT_ISP5422)
 #define IS_QLA5432(ha)	(DT_MASK(ha) & DT_ISP5432)
+#define IS_QLA2532(ha)	(DT_MASK(ha) & DT_ISP2532)
 
 #define IS_QLA23XX(ha)	(IS_QLA2300(ha) || IS_QLA2312(ha) || IS_QLA2322(ha) || \
     			 IS_QLA6312(ha) || IS_QLA6322(ha))
 #define IS_QLA24XX(ha)	(IS_QLA2422(ha) || IS_QLA2432(ha))
 #define IS_QLA54XX(ha)	(IS_QLA5422(ha) || IS_QLA5432(ha))
+#define IS_QLA25XX(ha)	(IS_QLA2532(ha))
 
+#define IS_IIDMA_CAPABLE(ha)	((ha)->device_type & DT_IIDMA)
+#define IS_FWI2_CAPABLE(ha)	((ha)->device_type & DT_FWI2)
 #define IS_ZIO_SUPPORTED(ha)	((ha)->device_type & DT_ZIO_SUPPORTED)
 #define IS_OEM_001(ha)		((ha)->device_type & DT_OEM_001)
 #define HAS_EXTENDED_IDS(ha)	((ha)->device_type & DT_EXTENDED_IDS)
@@ -2148,6 +2271,7 @@ typedef struct scsi_qla_host {
 
 	spinlock_t		hardware_lock ____cacheline_aligned;
 
+	int		bars;
 	device_reg_t __iomem *iobase;		/* Base I/O address */
 	unsigned long	pio_address;
 	unsigned long	pio_length;
@@ -2167,7 +2291,7 @@ typedef struct scsi_qla_host {
 	uint16_t        rsp_ring_index;     /* Current index. */
 	uint16_t	response_q_length;
 
-	struct isp_operations isp_ops;
+	struct isp_operations *isp_ops;
 
 	/* Outstandings ISP commands. */
 	srb_t		*outstanding_cmds[MAX_OUTSTANDING_COMMANDS];
@@ -2176,17 +2300,23 @@ typedef struct scsi_qla_host {
 
 	/* ISP configuration data. */
 	uint16_t	loop_id;		/* Host adapter loop id */
+	uint16_t	switch_cap;
+#define FLOGI_SEQ_DEL		BIT_8
+#define FLOGI_MID_SUPPORT	BIT_10
+#define FLOGI_VSAN_SUPPORT	BIT_12
+#define FLOGI_SP_SUPPORT	BIT_13
 	uint16_t	fb_rev;
 
 	port_id_t	d_id;			/* Host adapter port id */
 	uint16_t	max_public_loop_ids;
 	uint16_t	min_external_loopid;	/* First external loop Id */
 
+#define PORT_SPEED_UNKNOWN 0xFFFF
+#define PORT_SPEED_1GB	0x00
+#define PORT_SPEED_2GB	0x01
+#define PORT_SPEED_4GB	0x03
+#define PORT_SPEED_8GB	0x04
 	uint16_t	link_data_rate;		/* F/W operating speed */
-#define LDR_1GB		0
-#define LDR_2GB		1
-#define LDR_4GB		3
-#define LDR_UNKNOWN	0xFFFF
 
 	uint8_t		current_topology;
 	uint8_t		prev_topology;
@@ -2211,10 +2341,14 @@ typedef struct scsi_qla_host {
 	uint8_t		serial2;
 
 	/* NVRAM configuration data */
+#define MAX_NVRAM_SIZE	4096
+#define VPD_OFFSET	MAX_NVRAM_SIZE / 2
 	uint16_t	nvram_size;
 	uint16_t	nvram_base;
+	void		*nvram;
 	uint16_t	vpd_size;
 	uint16_t	vpd_base;
+	void		*vpd;
 
 	uint16_t	loop_reset_delay;
 	uint8_t		retry_count;
@@ -2226,6 +2360,7 @@ typedef struct scsi_qla_host {
 	uint16_t	mgmt_svr_loop_id;
 
         uint32_t	login_retry_count;
+	int		max_q_depth;
 
 	/* Fibre Channel Device List. */
 	struct list_head	fcports;
@@ -2281,9 +2416,8 @@ typedef struct scsi_qla_host {
 #define MBX_INTR_WAIT	2
 #define MBX_UPDATE_FLASH_ACTIVE	3
 
-	spinlock_t	mbx_reg_lock;   /* Mbx Cmd Register Lock */
-
 	struct semaphore mbx_cmd_sem;	/* Serialialize mbx access */
+	struct semaphore vport_sem;	/* Virtual port synchronization */
 	struct semaphore mbx_intr_sem;  /* Used for completion notification */
 
 	uint32_t	mbx_flags;
@@ -2323,6 +2457,7 @@ typedef struct scsi_qla_host {
 
 	uint8_t		host_str[16];
 	uint32_t	pci_attr;
+	uint16_t	chip_revision;
 
 	uint16_t	product_id[4];
 
@@ -2333,6 +2468,7 @@ typedef struct scsi_qla_host {
 
 	uint8_t		*node_name;
 	uint8_t		*port_name;
+	uint8_t		fabric_node_name[WWN_SIZE];
 	uint32_t    isp_abort_cnt;
 
 	/* Option ROM information. */
@@ -2342,6 +2478,17 @@ typedef struct scsi_qla_host {
 #define QLA_SWAITING	0
 #define QLA_SREADING	1
 #define QLA_SWRITING	2
+	uint32_t	optrom_region_start;
+	uint32_t	optrom_region_size;
+
+        /* PCI expansion ROM image information. */
+#define ROM_CODE_TYPE_BIOS	0
+#define ROM_CODE_TYPE_FCODE	1
+#define ROM_CODE_TYPE_EFI	3
+	uint8_t		bios_revision[2];
+	uint8_t		efi_revision[2];
+	uint8_t		fcode_revision[16];
+	uint32_t	fw_revision[4];
 
 	/* Needed for BEACON */
 	uint16_t	beacon_blink_led;
@@ -2355,6 +2502,39 @@ typedef struct scsi_qla_host {
 	uint16_t	zio_mode;
 	uint16_t	zio_timer;
 	struct fc_host_statistics fc_host_stat;
+
+	struct qla_msix_entry msix_entries[QLA_MSIX_ENTRIES];
+
+	struct list_head	vp_list;	/* list of VP */
+	struct fc_vport	*fc_vport;	/* holds fc_vport * for each vport */
+	uint8_t		vp_idx_map[16];
+	uint16_t        num_vhosts;	/* number of vports created */
+	uint16_t        num_vsans;	/* number of vsan created */
+	uint16_t        vp_idx;		/* vport ID */
+
+	struct scsi_qla_host	*parent;	/* holds pport */
+	unsigned long		vp_flags;
+	struct list_head	vp_fcports;	/* list of fcports */
+#define VP_IDX_ACQUIRED		0	/* bit no 0 */
+#define VP_CREATE_NEEDED	1
+#define VP_BIND_NEEDED		2
+#define VP_DELETE_NEEDED	3
+#define VP_SCR_NEEDED		4	/* State Change Request registration */
+	atomic_t 		vp_state;
+#define VP_OFFLINE		0
+#define VP_ACTIVE		1
+#define VP_FAILED		2
+// #define VP_DISABLE		3
+	uint16_t 	vp_err_state;
+	uint16_t	vp_prev_err_state;
+#define VP_ERR_UNKWN		0
+#define VP_ERR_PORTDWN		1
+#define VP_ERR_FAB_UNSUPPORTED	2
+#define VP_ERR_FAB_NORESOURCES	3
+#define VP_ERR_FAB_LOGOUT	4
+#define VP_ERR_ADAP_NORESOURCES	5
+	uint16_t	max_npiv_vports;	/* 63 or 125 per topoloty */
+	int		cur_vport_count;
 } scsi_qla_host_t;
 
 
@@ -2365,8 +2545,6 @@ typedef struct scsi_qla_host {
 	(test_bit(ISP_ABORT_NEEDED, &ha->dpc_flags) || \
 	 test_bit(LOOP_RESYNC_NEEDED, &ha->dpc_flags) || \
 	 atomic_read(&ha->loop_state) == LOOP_DOWN)
-
-#define to_qla_host(x)		((scsi_qla_host_t *) (x)->hostdata)
 
 #define qla_printk(level, ha, format, arg...) \
 	dev_printk(level , &((ha)->pdev->dev) , format , ## arg)
@@ -2408,6 +2586,7 @@ typedef struct scsi_qla_host {
 #define OPTROM_SIZE_2300	0x20000
 #define OPTROM_SIZE_2322	0x100000
 #define OPTROM_SIZE_24XX	0x100000
+#define OPTROM_SIZE_25XX	0x200000
 
 #include "qla_gbl.h"
 #include "qla_dbg.h"
