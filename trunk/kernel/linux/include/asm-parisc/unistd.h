@@ -772,7 +772,7 @@
 #define __NR_mknodat		(__NR_Linux + 277)
 #define __NR_fchownat		(__NR_Linux + 278)
 #define __NR_futimesat		(__NR_Linux + 279)
-#define __NR_newfstatat		(__NR_Linux + 280)
+#define __NR_fstatat64		(__NR_Linux + 280)
 #define __NR_unlinkat		(__NR_Linux + 281)
 #define __NR_renameat		(__NR_Linux + 282)
 #define __NR_linkat		(__NR_Linux + 283)
@@ -786,8 +786,26 @@
 #define __NR_splice		(__NR_Linux + 291)
 #define __NR_sync_file_range	(__NR_Linux + 292)
 #define __NR_tee		(__NR_Linux + 293)
+#define __NR_vmsplice		(__NR_Linux + 294)
+#define __NR_move_pages		(__NR_Linux + 295)
+#define __NR_getcpu		(__NR_Linux + 296)
+#define __NR_epoll_pwait	(__NR_Linux + 297)
+#define __NR_statfs64		(__NR_Linux + 298)
+#define __NR_fstatfs64		(__NR_Linux + 299)
+#define __NR_kexec_load		(__NR_Linux + 300)
+#define __NR_utimensat		(__NR_Linux + 301)
+#define __NR_signalfd		(__NR_Linux + 302)
+#define __NR_timerfd		(__NR_Linux + 303)
+#define __NR_eventfd		(__NR_Linux + 304)
+#define __NR_fallocate		(__NR_Linux + 305)
 
-#define __NR_Linux_syscalls     294
+#define __NR_Linux_syscalls	(__NR_fallocate + 1)
+
+
+#define __IGNORE_select		/* newselect */
+#define __IGNORE_fadvise64	/* fadvise64_64 */
+#define __IGNORE_utimes		/* utime */
+
 
 #define HPUX_GATEWAY_ADDR       0xC0000004
 #define LINUX_GATEWAY_ADDR      0x100
@@ -951,92 +969,8 @@ type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5)	\
 #define __ARCH_WANT_SYS_SIGPENDING
 #define __ARCH_WANT_SYS_SIGPROCMASK
 #define __ARCH_WANT_SYS_RT_SIGACTION
-
-/* mmap & mmap2 take 6 arguments */
-#define _syscall6(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4,type5,arg5,type6,arg6) \
-type name(type1 arg1, type2 arg2, type3 arg3, type4 arg4, type5 arg5, type6 arg6) \
-{									        \
-    return K_INLINE_SYSCALL(name, 6, arg1, arg2, arg3, arg4, arg5, arg6);	\
-}
-
-#ifdef __KERNEL_SYSCALLS__
-
-#include <asm/current.h>
-#include <linux/compiler.h>
-#include <linux/types.h>
-#include <linux/syscalls.h>
-
-static inline pid_t setsid(void)
-{
-	return sys_setsid();
-}
-
-static inline int write(int fd, const char *buf, off_t count)
-{
-	return sys_write(fd, buf, count);
-}
-
-static inline int read(int fd, char *buf, off_t count)
-{
-	return sys_read(fd, buf, count);
-}
-
-static inline off_t lseek(int fd, off_t offset, int count)
-{
-	return sys_lseek(fd, offset, count);
-}
-
-static inline int dup(int fd)
-{
-	return sys_dup(fd);
-}
-
-static inline int execve(char *filename, char * argv [],
-	char * envp[])
-{
-	extern int __execve(char *, char **, char **, struct task_struct *);
-	return __execve(filename, argv, envp, current);
-}
-
-static inline int open(const char *file, int flag, int mode)
-{
-	return sys_open(file, flag, mode);
-}
-
-static inline int close(int fd)
-{
-	return sys_close(fd);
-}
-
-static inline void _exit(int exitcode)
-{
-	sys_exit(exitcode);
-}
-
-static inline pid_t waitpid(pid_t pid, int *wait_stat, int options)
-{
-	return sys_wait4(pid, wait_stat, options, NULL);
-}
-
-asmlinkage unsigned long sys_mmap(unsigned long addr, unsigned long len,
-				unsigned long prot, unsigned long flags,
-				unsigned long fd, unsigned long offset);
-asmlinkage unsigned long sys_mmap2(unsigned long addr, unsigned long len,
-				unsigned long prot, unsigned long flags,
-				unsigned long fd, unsigned long pgoff);
-struct pt_regs;
-asmlinkage int sys_execve(struct pt_regs *regs);
-int sys_clone(unsigned long clone_flags, unsigned long usp,
-		struct pt_regs *regs);
-int sys_vfork(struct pt_regs *regs);
-int sys_pipe(int *fildes);
-struct sigaction;
-asmlinkage long sys_rt_sigaction(int sig,
-				const struct sigaction __user *act,
-				struct sigaction __user *oact,
-				size_t sigsetsize);
-
-#endif	/* __KERNEL_SYSCALLS__ */
+#define __ARCH_WANT_SYS_RT_SIGSUSPEND
+#define __ARCH_WANT_COMPAT_SYS_RT_SIGSUSPEND
 
 #endif /* __ASSEMBLY__ */
 

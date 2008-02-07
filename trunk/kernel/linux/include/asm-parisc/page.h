@@ -3,6 +3,8 @@
 
 #ifdef __KERNEL__
 
+#include <linux/const.h>
+
 #if defined(CONFIG_PARISC_PAGE_SIZE_4KB)
 # define PAGE_SHIFT	12
 #elif defined(CONFIG_PARISC_PAGE_SIZE_16KB)
@@ -12,7 +14,7 @@
 #else
 # error "unknown default kernel page size"
 #endif
-#define PAGE_SIZE	(1UL << PAGE_SHIFT)
+#define PAGE_SIZE	(_AC(1,UL) << PAGE_SHIFT)
 #define PAGE_MASK	(~(PAGE_SIZE-1))
 
 
@@ -26,24 +28,10 @@
 
 struct page;
 
-extern void purge_kernel_dcache_page(unsigned long);
-extern void copy_user_page_asm(void *to, void *from);
-extern void clear_user_page_asm(void *page, unsigned long vaddr);
-
-static inline void
-copy_user_page(void *vto, void *vfrom, unsigned long vaddr, struct page *pg)
-{
-	copy_user_page_asm(vto, vfrom);
-	flush_kernel_dcache_page_asm(vto);
-	/* XXX: ppc flushes icache too, should we? */
-}
-
-static inline void
-clear_user_page(void *page, unsigned long vaddr, struct page *pg)
-{
-	purge_kernel_dcache_page((unsigned long)page);
-	clear_user_page_asm(page, vaddr);
-}
+void copy_user_page_asm(void *to, void *from);
+void copy_user_page(void *vto, void *vfrom, unsigned long vaddr,
+			   struct page *pg);
+void clear_user_page(void *page, unsigned long vaddr, struct page *pg);
 
 /*
  * These are used to make use of C type-checking..
@@ -119,7 +107,7 @@ extern int npmem_ranges;
 /* WARNING: The definitions below must match exactly to sizeof(pte_t)
  * etc
  */
-#ifdef __LP64__
+#ifdef CONFIG_64BIT
 #define BITS_PER_PTE_ENTRY	3
 #define BITS_PER_PMD_ENTRY	2
 #define BITS_PER_PGD_ENTRY	2
@@ -141,7 +129,11 @@ extern int npmem_ranges;
 /* This governs the relationship between virtual and physical addresses.
  * If you alter it, make sure to take care of our various fixed mapping
  * segments in fixmap.h */
-#define __PAGE_OFFSET           (0x10000000)
+#ifdef CONFIG_64BIT
+#define __PAGE_OFFSET	(0x40000000)	/* 1GB */
+#else
+#define __PAGE_OFFSET	(0x10000000)	/* 256MB */
+#endif
 
 #define PAGE_OFFSET		((unsigned long)__PAGE_OFFSET)
 
