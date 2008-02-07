@@ -17,7 +17,6 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/init.h>
 
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
@@ -70,6 +69,7 @@
 
 /* Fujitsu */
 #define MBM29F040C	0x00A4
+#define MBM29F800BA	0x2258
 #define MBM29LV650UE	0x22D7
 #define MBM29LV320TE	0x22F6
 #define MBM29LV320BE	0x22F9
@@ -129,6 +129,7 @@
 #define LH28F640BF	0x00b0
 
 /* ST - www.st.com */
+#define M29F800AB	0x0058
 #define M29W800DT	0x00D7
 #define M29W800DB	0x005B
 #define M29W160DT	0x22C4
@@ -154,6 +155,7 @@
 #define SST39SF010A	0x00B5
 #define SST39SF020A	0x00B6
 #define SST49LF004B	0x0060
+#define SST49LF040B	0x0050
 #define SST49LF008A	0x005a
 #define SST49LF030A	0x001C
 #define SST49LF040A	0x0051
@@ -642,6 +644,23 @@ static const struct amd_flash_info jedec_table[] = {
 		.NumEraseRegions= 1,
 		.regions	= {
 			ERASEINFO(0x10000,8)
+		}
+	}, {
+		.mfr_id		= MANUFACTURER_FUJITSU,
+		.dev_id		= MBM29F800BA,
+		.name		= "Fujitsu MBM29F800BA",
+		.uaddr		= {
+			[0] = MTD_UADDR_0x0AAA_0x0555,  /* x8 */
+			[1] = MTD_UADDR_0x0555_0x02AA,  /* x16 */
+		},
+		.DevSize	= SIZE_1MiB,
+		.CmdSet		= P_ID_AMD_STD,
+		.NumEraseRegions= 4,
+		.regions	= {
+			ERASEINFO(0x04000,1),
+			ERASEINFO(0x02000,2),
+			ERASEINFO(0x08000,1),
+			ERASEINFO(0x10000,15),
 		}
 	}, {
 		.mfr_id		= MANUFACTURER_FUJITSU,
@@ -1401,6 +1420,20 @@ static const struct amd_flash_info jedec_table[] = {
 		}
 	}, {
 		.mfr_id		= MANUFACTURER_SST,
+		.dev_id         = SST49LF040B,
+		.name           = "SST 49LF040B",
+		.uaddr          = {
+			[0] = MTD_UADDR_0x5555_0x2AAA /* x8 */
+		},
+		.DevSize        = SIZE_512KiB,
+		.CmdSet         = P_ID_AMD_STD,
+		.NumEraseRegions= 1,
+		.regions        = {
+			ERASEINFO(0x01000,128),
+		}
+	}, {
+
+		.mfr_id		= MANUFACTURER_SST,
 		.dev_id		= SST49LF004B,
 		.name		= "SST 49LF004B",
  		.uaddr		= {
@@ -1495,6 +1528,23 @@ static const struct amd_flash_info jedec_table[] = {
                        ERASEINFO(0x1000,256)
                }
 
+	}, {
+		.mfr_id		= MANUFACTURER_ST,
+		.dev_id		= M29F800AB,
+		.name		= "ST M29F800AB",
+		.uaddr		= {
+			[0] = MTD_UADDR_0x0AAA_0x0555,  /* x8 */
+			[1] = MTD_UADDR_0x0555_0x02AA,  /* x16 */
+		},
+		.DevSize	= SIZE_1MiB,
+		.CmdSet		= P_ID_AMD_STD,
+		.NumEraseRegions= 4,
+		.regions	= {
+			ERASEINFO(0x04000,1),
+			ERASEINFO(0x02000,2),
+			ERASEINFO(0x08000,1),
+			ERASEINFO(0x10000,15),
+		}
        }, {
 		.mfr_id		= MANUFACTURER_ST,	/* FIXME - CFI device? */
 		.dev_id		= M29W800DT,
@@ -1874,7 +1924,7 @@ static int cfi_jedec_setup(struct cfi_private *p_cfi, int index)
 
 
 /*
- * There is a BIG problem properly ID'ing the JEDEC devic and guaranteeing
+ * There is a BIG problem properly ID'ing the JEDEC device and guaranteeing
  * the mapped address, unlock addresses, and proper chip ID.  This function
  * attempts to minimize errors.  It is doubtfull that this probe will ever
  * be perfect - consequently there should be some module parameters that
