@@ -7,11 +7,10 @@
 #include <linux/fs.h>
 #include <linux/reiserfs_fs.h>
 #include <linux/stat.h>
-#include <linux/smp_lock.h>
 #include <linux/buffer_head.h>
 #include <asm/uaccess.h>
 
-extern struct reiserfs_key MIN_KEY;
+extern const struct reiserfs_key MIN_KEY;
 
 static int reiserfs_readdir(struct file *, void *, filldir_t);
 static int reiserfs_dir_fsync(struct file *filp, struct dentry *dentry,
@@ -22,6 +21,9 @@ const struct file_operations reiserfs_dir_operations = {
 	.readdir = reiserfs_readdir,
 	.fsync = reiserfs_dir_fsync,
 	.ioctl = reiserfs_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = reiserfs_compat_ioctl,
+#endif
 };
 
 static int reiserfs_dir_fsync(struct file *filp, struct dentry *dentry,
@@ -42,7 +44,7 @@ static int reiserfs_dir_fsync(struct file *filp, struct dentry *dentry,
 //
 static int reiserfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct cpu_key pos_key;	/* key of current position in the directory (key of directory entry) */
 	INITIALIZE_PATH(path_to_entry);
 	struct buffer_head *bh;
@@ -119,6 +121,16 @@ static int reiserfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 					continue;
 				d_reclen = entry_length(bh, ih, entry_num);
 				d_name = B_I_DEH_ENTRY_FILE_NAME(bh, ih, deh);
+
+				if (d_reclen <= 0 ||
+				    d_name + d_reclen > bh->b_data + bh->b_size) {
+					/* There is corrupted data in entry,
+					 * We'd better stop here */
+					pathrelse(&path_to_entry);
+					ret = -EIO;
+					goto out;
+				}
+
 				if (!d_name[d_reclen - 1])
 					d_reclen = strlen(d_name);
 
@@ -132,7 +144,7 @@ static int reiserfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 				/* Ignore the .reiserfs_priv entry */
 				if (reiserfs_xattrs(inode->i_sb) &&
 				    !old_format_only(inode->i_sb) &&
-				    filp->f_dentry == inode->i_sb->s_root &&
+				    filp->f_path.dentry == inode->i_sb->s_root &&
 				    REISERFS_SB(inode->i_sb)->priv_root &&
 				    REISERFS_SB(inode->i_sb)->priv_root->d_inode
 				    && deh_objectid(deh) ==

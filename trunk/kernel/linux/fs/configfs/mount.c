@@ -38,10 +38,10 @@
 
 struct vfsmount * configfs_mount = NULL;
 struct super_block * configfs_sb = NULL;
-kmem_cache_t *configfs_dir_cachep;
+struct kmem_cache *configfs_dir_cachep;
 static int configfs_mnt_count = 0;
 
-static struct super_operations configfs_ops = {
+static const struct super_operations configfs_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= generic_delete_inode,
 };
@@ -84,7 +84,7 @@ static int configfs_fill_super(struct super_block *sb, void *data, int silent)
 		inode->i_op = &configfs_dir_inode_operations;
 		inode->i_fop = &configfs_dir_operations;
 		/* directory inodes start off with i_nlink == 2 (for "." entry) */
-		inode->i_nlink++;
+		inc_nlink(inode);
 	} else {
 		pr_debug("configfs: could not get root inode\n");
 		return -ENOMEM;
@@ -136,11 +136,11 @@ static int __init configfs_init(void)
 
 	configfs_dir_cachep = kmem_cache_create("configfs_dir_cache",
 						sizeof(struct configfs_dirent),
-						0, 0, NULL, NULL);
+						0, 0, NULL);
 	if (!configfs_dir_cachep)
 		goto out;
 
-	kset_set_kset_s(&config_subsys, kernel_subsys);
+	kobj_set_kset_s(&config_subsys, kernel_subsys);
 	err = subsystem_register(&config_subsys);
 	if (err) {
 		kmem_cache_destroy(configfs_dir_cachep);
@@ -154,8 +154,16 @@ static int __init configfs_init(void)
 		subsystem_unregister(&config_subsys);
 		kmem_cache_destroy(configfs_dir_cachep);
 		configfs_dir_cachep = NULL;
+		goto out;
 	}
 
+	err = configfs_inode_init();
+	if (err) {
+		unregister_filesystem(&configfs_fs_type);
+		subsystem_unregister(&config_subsys);
+		kmem_cache_destroy(configfs_dir_cachep);
+		configfs_dir_cachep = NULL;
+	}
 out:
 	return err;
 }
@@ -166,6 +174,7 @@ static void __exit configfs_exit(void)
 	subsystem_unregister(&config_subsys);
 	kmem_cache_destroy(configfs_dir_cachep);
 	configfs_dir_cachep = NULL;
+	configfs_inode_exit();
 }
 
 MODULE_AUTHOR("Oracle");

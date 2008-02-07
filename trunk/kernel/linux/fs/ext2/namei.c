@@ -326,7 +326,7 @@ static int ext2_rename (struct inode * old_dir, struct dentry * old_dentry,
 		ext2_set_link(new_dir, new_de, new_page, old_inode);
 		new_inode->i_ctime = CURRENT_TIME_SEC;
 		if (dir_de)
-			new_inode->i_nlink--;
+			drop_nlink(new_inode);
 		inode_dec_link_count(new_inode);
 	} else {
 		if (dir_de) {
@@ -373,7 +373,7 @@ out:
 	return err;
 }
 
-struct inode_operations ext2_dir_inode_operations = {
+const struct inode_operations ext2_dir_inode_operations = {
 	.create		= ext2_create,
 	.lookup		= ext2_lookup,
 	.link		= ext2_link,
@@ -393,7 +393,7 @@ struct inode_operations ext2_dir_inode_operations = {
 	.permission	= ext2_permission,
 };
 
-struct inode_operations ext2_special_inode_operations = {
+const struct inode_operations ext2_special_inode_operations = {
 #ifdef CONFIG_EXT2_FS_XATTR
 	.setxattr	= generic_setxattr,
 	.getxattr	= generic_getxattr,

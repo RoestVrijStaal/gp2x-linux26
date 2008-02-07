@@ -13,7 +13,6 @@
  */
 
 #include <linux/pagemap.h>
-#include <linux/smp_lock.h>
 #include "sysv.h"
 
 static int add_nondir(struct dentry *dentry, struct inode *inode)
@@ -250,7 +249,7 @@ static int sysv_rename(struct inode * old_dir, struct dentry * old_dentry,
 		sysv_set_link(new_de, new_page, old_inode);
 		new_inode->i_ctime = CURRENT_TIME_SEC;
 		if (dir_de)
-			new_inode->i_nlink--;
+			drop_nlink(new_inode);
 		inode_dec_link_count(new_inode);
 	} else {
 		if (dir_de) {
@@ -292,7 +291,7 @@ out:
 /*
  * directories can handle most operations...
  */
-struct inode_operations sysv_dir_inode_operations = {
+const struct inode_operations sysv_dir_inode_operations = {
 	.create		= sysv_create,
 	.lookup		= sysv_lookup,
 	.link		= sysv_link,

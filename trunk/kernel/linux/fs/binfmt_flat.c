@@ -75,7 +75,7 @@ static int load_flat_shared_library(int id, struct lib_info *p);
 #endif
 
 static int load_flat_binary(struct linux_binprm *, struct pt_regs * regs);
-static int flat_core_dump(long signr, struct pt_regs * regs, struct file *file);
+static int flat_core_dump(long signr, struct pt_regs *regs, struct file *file, unsigned long limit);
 
 static struct linux_binfmt flat_format = {
 	.module		= THIS_MODULE,
@@ -90,7 +90,7 @@ static struct linux_binfmt flat_format = {
  * Currently only a stub-function.
  */
 
-static int flat_core_dump(long signr, struct pt_regs * regs, struct file *file)
+static int flat_core_dump(long signr, struct pt_regs *regs, struct file *file, unsigned long limit)
 {
 	printk("Process %s:%d received signr %d and should have core dumped\n",
 			current->comm, current->pid, (int) signr);
@@ -113,7 +113,7 @@ static unsigned long create_flat_tables(
 	char * p = (char*)pp;
 	int argc = bprm->argc;
 	int envc = bprm->envc;
-	char dummy;
+	char uninitialized_var(dummy);
 
 	sp = (unsigned long *) ((-(unsigned long)sizeof(char *))&(unsigned long) p);
 
@@ -290,7 +290,6 @@ out_free_buf:
 	kfree(buf);
 out_free:
 	kfree(strm.workspace);
-out:
 	return retval;
 }
 
@@ -419,7 +418,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 	unsigned long textpos = 0, datapos = 0, result;
 	unsigned long realdatastart = 0;
 	unsigned long text_len, data_len, bss_len, stack_len, flags;
-	unsigned long memp = 0; /* for finding the brk area */
+	unsigned long len, reallen, memp = 0;
 	unsigned long extra, rlim;
 	unsigned long *reloc = 0, *rp;
 	struct inode *inode;
@@ -429,7 +428,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 	int ret;
 
 	hdr = ((struct flat_hdr *) bprm->buf);		/* exec-header */
-	inode = bprm->file->f_dentry->d_inode;
+	inode = bprm->file->f_path.dentry->d_inode;
 
 	text_len  = ntohl(hdr->data_start);
 	data_len  = ntohl(hdr->data_end) - ntohl(hdr->data_start);
@@ -459,7 +458,9 @@ static int load_flat_file(struct linux_binprm * bprm,
 		printk("BINFMT_FLAT: Loading file: %s\n", bprm->filename);
 
 	if (rev != FLAT_VERSION && rev != OLD_FLAT_VERSION) {
-		printk("BINFMT_FLAT: bad flat file version 0x%x (supported 0x%x and 0x%x)\n", rev, FLAT_VERSION, OLD_FLAT_VERSION);
+		printk("BINFMT_FLAT: bad flat file version 0x%x (supported "
+			"0x%lx and 0x%lx)\n",
+			rev, FLAT_VERSION, OLD_FLAT_VERSION);
 		ret = -ENOEXEC;
 		goto err;
 	}
@@ -515,7 +516,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 	/*
 	 * calculate the extra space we need to map in
 	 */
-	extra = max(bss_len + stack_len, relocs * sizeof(unsigned long));
+	extra = max_t(unsigned long, bss_len + stack_len,
+			relocs * sizeof(unsigned long));
 
 	/*
 	 * there are a couple of cases here,  the separate code/data
@@ -540,17 +542,25 @@ static int load_flat_file(struct linux_binprm * bprm,
 			goto err;
 		}
 
+		len = data_len + extra + MAX_SHARED_LIBS * sizeof(unsigned long);
 		down_write(&current->mm->mmap_sem);
-		realdatastart = do_mmap(0, 0, data_len + extra +
-				MAX_SHARED_LIBS * sizeof(unsigned long),
-				PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, 0);
+		realdatastart = do_mmap(0, 0, len,
+			PROT_READ|PROT_WRITE|PROT_EXEC, MAP_PRIVATE, 0);
+		/* Remap to use all availabe slack region space */
+		if (realdatastart && (realdatastart < (unsigned long)-4096)) {
+			reallen = ksize((void *)realdatastart);
+			if (reallen > len) {
+				realdatastart = do_mremap(realdatastart, len,
+					reallen, MREMAP_FIXED, realdatastart);
+			}
+		}
 		up_write(&current->mm->mmap_sem);
 
 		if (realdatastart == 0 || realdatastart >= (unsigned long)-4096) {
 			if (!realdatastart)
 				realdatastart = (unsigned long) -ENOMEM;
 			printk("Unable to allocate RAM for process data, errno %d\n",
-					(int)-datapos);
+					(int)-realdatastart);
 			do_munmap(current->mm, textpos, text_len);
 			ret = realdatastart;
 			goto err;
@@ -584,11 +594,20 @@ static int load_flat_file(struct linux_binprm * bprm,
 
 	} else {
 
+		len = text_len + data_len + extra + MAX_SHARED_LIBS * sizeof(unsigned long);
 		down_write(&current->mm->mmap_sem);
-		textpos = do_mmap(0, 0, text_len + data_len + extra +
-					MAX_SHARED_LIBS * sizeof(unsigned long),
-				PROT_READ | PROT_EXEC | PROT_WRITE, MAP_PRIVATE, 0);
+		textpos = do_mmap(0, 0, len,
+			PROT_READ | PROT_EXEC | PROT_WRITE, MAP_PRIVATE, 0);
+		/* Remap to use all availabe slack region space */
+		if (textpos && (textpos < (unsigned long) -4096)) {
+			reallen = ksize((void *)textpos);
+			if (reallen > len) {
+				textpos = do_mremap(textpos, len, reallen,
+					MREMAP_FIXED, textpos);
+			}
+		}
 		up_write(&current->mm->mmap_sem);
+
 		if (!textpos  || textpos >= (unsigned long) -4096) {
 			if (!textpos)
 				textpos = (unsigned long) -ENOMEM;
@@ -725,6 +744,7 @@ static int load_flat_file(struct linux_binprm * bprm,
 	 * __start to address 4 so that is okay).
 	 */
 	if (rev > OLD_FLAT_VERSION) {
+		unsigned long persistent = 0;
 		for (i=0; i < relocs; i++) {
 			unsigned long addr, relval;
 
@@ -732,6 +752,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 			   relocated (of course, the address has to be
 			   relocated first).  */
 			relval = ntohl(reloc[i]);
+			if (flat_set_persistent (relval, &persistent))
+				continue;
 			addr = flat_get_relocate_addr(relval);
 			rp = (unsigned long *) calc_reloc(addr, libinfo, id, 1);
 			if (rp == (unsigned long *)RELOC_FAILED) {
@@ -740,7 +762,8 @@ static int load_flat_file(struct linux_binprm * bprm,
 			}
 
 			/* Get the pointer's value.  */
-			addr = flat_get_addr_from_rp(rp, relval, flags);
+			addr = flat_get_addr_from_rp(rp, relval, flags,
+							&persistent);
 			if (addr != 0) {
 				/*
 				 * Do the relocation.  PIC relocs in the data section are

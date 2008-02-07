@@ -43,7 +43,6 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
 #include <linux/lockd/bind.h>
-#include <linux/smp_lock.h>
 #include "internal.h"
 
 #define NFSDBG_FACILITY		NFSDBG_PROC
@@ -66,14 +65,14 @@ nfs_proc_get_root(struct nfs_server *server, struct nfs_fh *fhandle,
 
 	dprintk("%s: call getattr\n", __FUNCTION__);
 	nfs_fattr_init(fattr);
-	status = rpc_call_sync(server->client_sys, &msg, 0);
+	status = rpc_call_sync(server->nfs_client->cl_rpcclient, &msg, 0);
 	dprintk("%s: reply getattr: %d\n", __FUNCTION__, status);
 	if (status)
 		return status;
 	dprintk("%s: call statfs\n", __FUNCTION__);
 	msg.rpc_proc = &nfs_procedures[NFSPROC_STATFS];
 	msg.rpc_resp = &fsinfo;
-	status = rpc_call_sync(server->client_sys, &msg, 0);
+	status = rpc_call_sync(server->nfs_client->cl_rpcclient, &msg, 0);
 	dprintk("%s: reply statfs: %d\n", __FUNCTION__, status);
 	if (status)
 		return status;
@@ -186,61 +185,6 @@ static int nfs_proc_readlink(struct inode *inode, struct page *page,
 	return status;
 }
 
-static int nfs_proc_read(struct nfs_read_data *rdata)
-{
-	int			flags = rdata->flags;
-	struct inode *		inode = rdata->inode;
-	struct nfs_fattr *	fattr = rdata->res.fattr;
-	struct rpc_message	msg = {
-		.rpc_proc	= &nfs_procedures[NFSPROC_READ],
-		.rpc_argp	= &rdata->args,
-		.rpc_resp	= &rdata->res,
-		.rpc_cred	= rdata->cred,
-	};
-	int			status;
-
-	dprintk("NFS call  read %d @ %Ld\n", rdata->args.count,
-			(long long) rdata->args.offset);
-	nfs_fattr_init(fattr);
-	status = rpc_call_sync(NFS_CLIENT(inode), &msg, flags);
-	if (status >= 0) {
-		nfs_refresh_inode(inode, fattr);
-		/* Emulate the eof flag, which isn't normally needed in NFSv2
-		 * as it is guaranteed to always return the file attributes
-		 */
-		if (rdata->args.offset + rdata->args.count >= fattr->size)
-			rdata->res.eof = 1;
-	}
-	dprintk("NFS reply read: %d\n", status);
-	return status;
-}
-
-static int nfs_proc_write(struct nfs_write_data *wdata)
-{
-	int			flags = wdata->flags;
-	struct inode *		inode = wdata->inode;
-	struct nfs_fattr *	fattr = wdata->res.fattr;
-	struct rpc_message	msg = {
-		.rpc_proc	= &nfs_procedures[NFSPROC_WRITE],
-		.rpc_argp	= &wdata->args,
-		.rpc_resp	= &wdata->res,
-		.rpc_cred	= wdata->cred,
-	};
-	int			status;
-
-	dprintk("NFS call  write %d @ %Ld\n", wdata->args.count,
-			(long long) wdata->args.offset);
-	nfs_fattr_init(fattr);
-	status = rpc_call_sync(NFS_CLIENT(inode), &msg, flags);
-	if (status >= 0) {
-		nfs_post_op_update_inode(inode, fattr);
-		wdata->res.count = wdata->args.count;
-		wdata->verf.committed = NFS_FILE_SYNC;
-	}
-	dprintk("NFS reply write: %d\n", status);
-	return status < 0? status : wdata->res.count;
-}
-
 static int
 nfs_proc_create(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
 		int flags, struct nameidata *nd)
@@ -267,6 +211,7 @@ nfs_proc_create(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
 	nfs_fattr_init(&fattr);
 	dprintk("NFS call  create %s\n", dentry->d_name.name);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
+	nfs_mark_for_revalidate(dir);
 	if (status == 0)
 		status = nfs_instantiate(dentry, &fhandle, &fattr);
 	dprintk("NFS reply create: %d\n", status);
@@ -328,14 +273,14 @@ nfs_proc_mknod(struct inode *dir, struct dentry *dentry, struct iattr *sattr,
 static int
 nfs_proc_remove(struct inode *dir, struct qstr *name)
 {
-	struct nfs_diropargs	arg = {
-		.fh		= NFS_FH(dir),
-		.name		= name->name,
-		.len		= name->len
+	struct nfs_removeargs arg = {
+		.fh = NFS_FH(dir),
+		.name.len = name->len,
+		.name.name = name->name,
 	};
-	struct rpc_message	msg = { 
-		.rpc_proc	= &nfs_procedures[NFSPROC_REMOVE],
-		.rpc_argp	= &arg,
+	struct rpc_message msg = { 
+		.rpc_proc = &nfs_procedures[NFSPROC_REMOVE],
+		.rpc_argp = &arg,
 	};
 	int			status;
 
@@ -347,32 +292,16 @@ nfs_proc_remove(struct inode *dir, struct qstr *name)
 	return status;
 }
 
-static int
-nfs_proc_unlink_setup(struct rpc_message *msg, struct dentry *dir, struct qstr *name)
+static void
+nfs_proc_unlink_setup(struct rpc_message *msg, struct inode *dir)
 {
-	struct nfs_diropargs	*arg;
-
-	arg = (struct nfs_diropargs *)kmalloc(sizeof(*arg), GFP_KERNEL);
-	if (!arg)
-		return -ENOMEM;
-	arg->fh = NFS_FH(dir->d_inode);
-	arg->name = name->name;
-	arg->len = name->len;
 	msg->rpc_proc = &nfs_procedures[NFSPROC_REMOVE];
-	msg->rpc_argp = arg;
-	return 0;
 }
 
-static int
-nfs_proc_unlink_done(struct dentry *dir, struct rpc_task *task)
+static int nfs_proc_unlink_done(struct rpc_task *task, struct inode *dir)
 {
-	struct rpc_message *msg = &task->tk_msg;
-	
-	if (msg->rpc_argp) {
-		nfs_mark_for_revalidate(dir->d_inode);
-		kfree(msg->rpc_argp);
-	}
-	return 0;
+	nfs_mark_for_revalidate(dir);
+	return 1;
 }
 
 static int
@@ -425,16 +354,17 @@ nfs_proc_link(struct inode *inode, struct inode *dir, struct qstr *name)
 }
 
 static int
-nfs_proc_symlink(struct inode *dir, struct qstr *name, struct qstr *path,
-		 struct iattr *sattr, struct nfs_fh *fhandle,
-		 struct nfs_fattr *fattr)
+nfs_proc_symlink(struct inode *dir, struct dentry *dentry, struct page *page,
+		 unsigned int len, struct iattr *sattr)
 {
+	struct nfs_fh fhandle;
+	struct nfs_fattr fattr;
 	struct nfs_symlinkargs	arg = {
 		.fromfh		= NFS_FH(dir),
-		.fromname	= name->name,
-		.fromlen	= name->len,
-		.topath		= path->name,
-		.tolen		= path->len,
+		.fromname	= dentry->d_name.name,
+		.fromlen	= dentry->d_name.len,
+		.pages		= &page,
+		.pathlen	= len,
 		.sattr		= sattr
 	};
 	struct rpc_message msg = {
@@ -443,13 +373,25 @@ nfs_proc_symlink(struct inode *dir, struct qstr *name, struct qstr *path,
 	};
 	int			status;
 
-	if (path->len > NFS2_MAXPATHLEN)
+	if (len > NFS2_MAXPATHLEN)
 		return -ENAMETOOLONG;
-	dprintk("NFS call  symlink %s -> %s\n", name->name, path->name);
-	nfs_fattr_init(fattr);
-	fhandle->size = 0;
+
+	dprintk("NFS call  symlink %s\n", dentry->d_name.name);
+
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
 	nfs_mark_for_revalidate(dir);
+
+	/*
+	 * V2 SYMLINK requests don't return any attributes.  Setting the
+	 * filehandle size to zero indicates to nfs_instantiate that it
+	 * should fill in the data with a LOOKUP call on the wire.
+	 */
+	if (status == 0) {
+		nfs_fattr_init(&fattr);
+		fhandle.size = 0;
+		status = nfs_instantiate(dentry, &fhandle, &fattr);
+	}
+
 	dprintk("NFS reply symlink: %d\n", status);
 	return status;
 }
@@ -532,13 +474,12 @@ nfs_proc_readdir(struct dentry *dentry, struct rpc_cred *cred,
 	};
 	int			status;
 
-	lock_kernel();
-
 	dprintk("NFS call  readdir %d\n", (unsigned int)cookie);
 	status = rpc_call_sync(NFS_CLIENT(dir), &msg, 0);
 
+	nfs_invalidate_atime(dir);
+
 	dprintk("NFS reply readdir: %d\n", status);
-	unlock_kernel();
 	return status;
 }
 
@@ -612,6 +553,7 @@ nfs_proc_pathconf(struct nfs_server *server, struct nfs_fh *fhandle,
 
 static int nfs_read_done(struct rpc_task *task, struct nfs_read_data *data)
 {
+	nfs_invalidate_atime(data->inode);
 	if (task->tk_status >= 0) {
 		nfs_refresh_inode(data->inode, data->res.fattr);
 		/* Emulate the eof flag, which isn't normally needed in NFSv2
@@ -638,7 +580,7 @@ static void nfs_proc_read_setup(struct nfs_read_data *data)
 static int nfs_write_done(struct rpc_task *task, struct nfs_write_data *data)
 {
 	if (task->tk_status >= 0)
-		nfs_post_op_update_inode(data->inode, data->res.fattr);
+		nfs_post_op_update_inode_force_wcc(data->inode, data->res.fattr);
 	return 0;
 }
 
@@ -667,11 +609,11 @@ nfs_proc_commit_setup(struct nfs_write_data *data, int how)
 static int
 nfs_proc_lock(struct file *filp, int cmd, struct file_lock *fl)
 {
-	return nlmclnt_proc(filp->f_dentry->d_inode, cmd, fl);
+	return nlmclnt_proc(filp->f_path.dentry->d_inode, cmd, fl);
 }
 
 
-struct nfs_rpc_ops	nfs_v2_clientops = {
+const struct nfs_rpc_ops nfs_v2_clientops = {
 	.version	= 2,		       /* protocol version */
 	.dentry_ops	= &nfs_dentry_operations,
 	.dir_inode_ops	= &nfs_dir_inode_operations,
@@ -682,9 +624,6 @@ struct nfs_rpc_ops	nfs_v2_clientops = {
 	.lookup		= nfs_proc_lookup,
 	.access		= NULL,		       /* access */
 	.readlink	= nfs_proc_readlink,
-	.read		= nfs_proc_read,
-	.write		= nfs_proc_write,
-	.commit		= NULL,		       /* commit */
 	.create		= nfs_proc_create,
 	.remove		= nfs_proc_remove,
 	.unlink_setup	= nfs_proc_unlink_setup,

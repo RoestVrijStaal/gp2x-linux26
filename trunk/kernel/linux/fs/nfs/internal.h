@@ -4,6 +4,16 @@
 
 #include <linux/mount.h>
 
+struct nfs_string;
+
+/* Maximum number of readahead requests
+ * FIXME: this should really be a sysctl so that users may tune it to suit
+ *        their needs. People that do NFS over a slow network, might for
+ *        instance want to reduce it to something closer to 1 for improved
+ *        interactive response.
+ */
+#define NFS_MAX_READAHEAD	(RPC_DEF_SLOT_TABLE - 1)
+
 struct nfs_clone_mount {
 	const struct super_block *sb;
 	const struct dentry *dentry;
@@ -15,7 +25,70 @@ struct nfs_clone_mount {
 	rpc_authflavor_t authflavor;
 };
 
-/* namespace-nfs4.c */
+/*
+ * In-kernel mount arguments
+ */
+struct nfs_parsed_mount_data {
+	int			flags;
+	int			rsize, wsize;
+	int			timeo, retrans;
+	int			acregmin, acregmax,
+				acdirmin, acdirmax;
+	int			namlen;
+	unsigned int		bsize;
+	unsigned int		auth_flavor_len;
+	rpc_authflavor_t	auth_flavors[1];
+	char			*client_address;
+
+	struct {
+		struct sockaddr_in	address;
+		char			*hostname;
+		unsigned int		program;
+		unsigned int		version;
+		unsigned short		port;
+		int			protocol;
+	} mount_server;
+
+	struct {
+		struct sockaddr_in	address;
+		char			*hostname;
+		char			*export_path;
+		unsigned int		program;
+		int			protocol;
+	} nfs_server;
+};
+
+/* client.c */
+extern struct rpc_program nfs_program;
+
+extern void nfs_put_client(struct nfs_client *);
+extern struct nfs_client *nfs_find_client(const struct sockaddr_in *, int);
+extern struct nfs_server *nfs_create_server(
+					const struct nfs_parsed_mount_data *,
+					struct nfs_fh *);
+extern struct nfs_server *nfs4_create_server(
+					const struct nfs_parsed_mount_data *,
+					struct nfs_fh *);
+extern struct nfs_server *nfs4_create_referral_server(struct nfs_clone_mount *,
+						      struct nfs_fh *);
+extern void nfs_free_server(struct nfs_server *server);
+extern struct nfs_server *nfs_clone_server(struct nfs_server *,
+					   struct nfs_fh *,
+					   struct nfs_fattr *);
+#ifdef CONFIG_PROC_FS
+extern int __init nfs_fs_proc_init(void);
+extern void nfs_fs_proc_exit(void);
+#else
+static inline int nfs_fs_proc_init(void)
+{
+	return 0;
+}
+static inline void nfs_fs_proc_exit(void)
+{
+}
+#endif
+
+/* nfs4namespace.c */
 #ifdef CONFIG_NFS_V4
 extern struct vfsmount *nfs_do_refmount(const struct vfsmount *mnt_parent, struct dentry *dentry);
 #else
@@ -46,25 +119,26 @@ extern void nfs_destroy_directcache(void);
 #endif
 
 /* nfs2xdr.c */
+extern int nfs_stat_to_errno(int);
 extern struct rpc_procinfo nfs_procedures[];
-extern u32 * nfs_decode_dirent(u32 *, struct nfs_entry *, int);
+extern __be32 * nfs_decode_dirent(__be32 *, struct nfs_entry *, int);
 
 /* nfs3xdr.c */
 extern struct rpc_procinfo nfs3_procedures[];
-extern u32 *nfs3_decode_dirent(u32 *, struct nfs_entry *, int);
+extern __be32 *nfs3_decode_dirent(__be32 *, struct nfs_entry *, int);
 
 /* nfs4xdr.c */
-extern int nfs_stat_to_errno(int);
-extern u32 *nfs4_decode_dirent(u32 *p, struct nfs_entry *entry, int plus);
+#ifdef CONFIG_NFS_V4
+extern __be32 *nfs4_decode_dirent(__be32 *p, struct nfs_entry *entry, int plus);
+#endif
 
 /* nfs4proc.c */
 #ifdef CONFIG_NFS_V4
 extern struct rpc_procinfo nfs4_procedures[];
-
-extern int nfs4_proc_fs_locations(struct inode *dir, struct dentry *dentry,
-				  struct nfs4_fs_locations *fs_locations,
-				  struct page *page);
 #endif
+
+/* dir.c */
+extern int nfs_access_cache_shrinker(int nr_to_scan, gfp_t gfp_mask);
 
 /* inode.c */
 extern struct inode *nfs_alloc_inode(struct super_block *sb);
@@ -76,10 +150,10 @@ extern void nfs4_clear_inode(struct inode *);
 #endif
 
 /* super.c */
-extern struct file_system_type nfs_referral_nfs4_fs_type;
-extern struct file_system_type clone_nfs_fs_type;
+extern struct file_system_type nfs_xdev_fs_type;
 #ifdef CONFIG_NFS_V4
-extern struct file_system_type clone_nfs4_fs_type;
+extern struct file_system_type nfs4_xdev_fs_type;
+extern struct file_system_type nfs4_referral_fs_type;
 #endif
 
 extern struct rpc_stat nfs_rpcstat;
@@ -88,30 +162,30 @@ extern int __init register_nfs_fs(void);
 extern void __exit unregister_nfs_fs(void);
 
 /* namespace.c */
-extern char *nfs_path(const char *base, const struct dentry *dentry,
+extern char *nfs_path(const char *base,
+		      const struct dentry *droot,
+		      const struct dentry *dentry,
 		      char *buffer, ssize_t buflen);
 
-/*
- * Determine the mount path as a string
- */
-static inline char *
-nfs4_path(const struct dentry *dentry, char *buffer, ssize_t buflen)
-{
+/* getroot.c */
+extern struct dentry *nfs_get_root(struct super_block *, struct nfs_fh *);
 #ifdef CONFIG_NFS_V4
-	return nfs_path(NFS_SB(dentry->d_sb)->mnt_path, dentry, buffer, buflen);
-#else
-	return NULL;
+extern struct dentry *nfs4_get_root(struct super_block *, struct nfs_fh *);
+
+extern int nfs4_path_walk(struct nfs_server *server,
+			  struct nfs_fh *mntfh,
+			  const char *path);
 #endif
-}
 
 /*
  * Determine the device name as a string
  */
 static inline char *nfs_devname(const struct vfsmount *mnt_parent,
-			 const struct dentry *dentry,
-			 char *buffer, ssize_t buflen)
+				const struct dentry *dentry,
+				char *buffer, ssize_t buflen)
 {
-	return nfs_path(mnt_parent->mnt_devname, dentry, buffer, buflen);
+	return nfs_path(mnt_parent->mnt_devname, mnt_parent->mnt_root,
+			dentry, buffer, buflen);
 }
 
 /*
@@ -137,9 +211,9 @@ unsigned long nfs_block_bits(unsigned long bsize, unsigned char *nrbitsp)
 /*
  * Calculate the number of 512byte blocks used.
  */
-static inline unsigned long nfs_calc_block_size(u64 tsize)
+static inline blkcnt_t nfs_calc_block_size(u64 tsize)
 {
-	loff_t used = (tsize + 511) >> 9;
+	blkcnt_t used = (tsize + 511) >> 9;
 	return (used > ULONG_MAX) ? ULONG_MAX : used;
 }
 
@@ -169,18 +243,31 @@ void nfs_super_set_maxbytes(struct super_block *sb, __u64 maxfilesize)
 }
 
 /*
- * Check if the string represents a "valid" IPv4 address
+ * Determine the number of bytes of data the page contains
  */
-static inline int valid_ipaddr4(const char *buf)
+static inline
+unsigned int nfs_page_length(struct page *page)
 {
-	int rc, count, in[4];
+	loff_t i_size = i_size_read(page->mapping->host);
 
-	rc = sscanf(buf, "%d.%d.%d.%d", &in[0], &in[1], &in[2], &in[3]);
-	if (rc != 4)
-		return -EINVAL;
-	for (count = 0; count < 4; count++) {
-		if (in[count] > 255)
-			return -EINVAL;
+	if (i_size > 0) {
+		pgoff_t end_index = (i_size - 1) >> PAGE_CACHE_SHIFT;
+		if (page->index < end_index)
+			return PAGE_CACHE_SIZE;
+		if (page->index == end_index)
+			return ((i_size - 1) & ~PAGE_CACHE_MASK) + 1;
 	}
 	return 0;
 }
+
+/*
+ * Determine the number of pages in an array of length 'len' and
+ * with a base offset of 'base'
+ */
+static inline
+unsigned int nfs_page_array_len(unsigned int base, size_t len)
+{
+	return ((unsigned long)len + (unsigned long)base +
+		PAGE_SIZE - 1) >> PAGE_SHIFT;
+}
+

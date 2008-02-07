@@ -4,16 +4,16 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
@@ -56,7 +56,7 @@ static inline void __lock_metapage(struct metapage *mp)
 		set_current_state(TASK_UNINTERRUPTIBLE);
 		if (metapage_locked(mp)) {
 			unlock_page(mp->page);
-			schedule();
+			io_schedule();
 			lock_page(mp->page);
 		}
 	} while (trylock_metapage(mp));
@@ -74,7 +74,7 @@ static inline void lock_metapage(struct metapage *mp)
 }
 
 #define METAPOOL_MIN_PAGES 32
-static kmem_cache_t *metapage_cache;
+static struct kmem_cache *metapage_cache;
 static mempool_t *metapage_mempool;
 
 #define MPS_PER_PAGE (PAGE_CACHE_SIZE >> L2PSIZE)
@@ -180,21 +180,18 @@ static inline void remove_metapage(struct page *page, struct metapage *mp)
 
 #endif
 
-static void init_once(void *foo, kmem_cache_t *cachep, unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct metapage *mp = (struct metapage *)foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR) {
-		mp->lid = 0;
-		mp->lsn = 0;
-		mp->flag = 0;
-		mp->data = NULL;
-		mp->clsn = 0;
-		mp->log = NULL;
-		set_bit(META_free, &mp->flag);
-		init_waitqueue_head(&mp->wait);
-	}
+	mp->lid = 0;
+	mp->lsn = 0;
+	mp->flag = 0;
+	mp->data = NULL;
+	mp->clsn = 0;
+	mp->log = NULL;
+	set_bit(META_free, &mp->flag);
+	init_waitqueue_head(&mp->wait);
 }
 
 static inline struct metapage *alloc_metapage(gfp_t gfp_mask)
@@ -216,7 +213,7 @@ int __init metapage_init(void)
 	 * Allocate the metapage structures
 	 */
 	metapage_cache = kmem_cache_create("jfs_mp", sizeof(struct metapage),
-					   0, 0, init_once, NULL);
+					   0, 0, init_once);
 	if (metapage_cache == NULL)
 		return -ENOMEM;
 
@@ -257,7 +254,7 @@ static sector_t metapage_get_blocks(struct inode *inode, sector_t lblock,
 	int rc = 0;
 	int xflag;
 	s64 xaddr;
-	sector_t file_blocks = (inode->i_size + inode->i_blksize - 1) >>
+	sector_t file_blocks = (inode->i_size + inode->i_sb->s_blocksize - 1) >>
 			       inode->i_blkbits;
 
 	if (lblock >= file_blocks)
@@ -283,13 +280,9 @@ static void last_read_complete(struct page *page)
 	unlock_page(page);
 }
 
-static int metapage_read_end_io(struct bio *bio, unsigned int bytes_done,
-				int err)
+static void metapage_read_end_io(struct bio *bio, int err)
 {
 	struct page *page = bio->bi_private;
-
-	if (bio->bi_size)
-		return 1;
 
 	if (!test_bit(BIO_UPTODATE, &bio->bi_flags)) {
 		printk(KERN_ERR "metapage_read_end_io: I/O error\n");
@@ -298,8 +291,6 @@ static int metapage_read_end_io(struct bio *bio, unsigned int bytes_done,
 
 	dec_io(page, last_read_complete);
 	bio_put(bio);
-
-	return 0;
 }
 
 static void remove_from_logsync(struct metapage *mp)
@@ -344,15 +335,11 @@ static void last_write_complete(struct page *page)
 	end_page_writeback(page);
 }
 
-static int metapage_write_end_io(struct bio *bio, unsigned int bytes_done,
-				 int err)
+static void metapage_write_end_io(struct bio *bio, int err)
 {
 	struct page *page = bio->bi_private;
 
 	BUG_ON(!PagePrivate(page));
-
-	if (bio->bi_size)
-		return 1;
 
 	if (! test_bit(BIO_UPTODATE, &bio->bi_flags)) {
 		printk(KERN_ERR "metapage_write_end_io: I/O error\n");
@@ -360,7 +347,6 @@ static int metapage_write_end_io(struct bio *bio, unsigned int bytes_done,
 	}
 	dec_io(page, last_write_complete);
 	bio_put(bio);
-	return 0;
 }
 
 static int metapage_writepage(struct page *page, struct writeback_control *wbc)
@@ -461,7 +447,7 @@ static int metapage_writepage(struct page *page, struct writeback_control *wbc)
 				goto add_failed;
 		if (!bio->bi_size)
 			goto dump_bio;
-		
+
 		submit_bio(WRITE, bio);
 	}
 	if (redirty)
@@ -475,7 +461,8 @@ add_failed:
 	printk(KERN_ERR "JFS: bio_add_page failed unexpectedly\n");
 	goto skip;
 dump_bio:
-	dump_mem("bio", bio, sizeof(*bio));
+	print_hex_dump(KERN_ERR, "JFS: dump of bio: ", DUMP_PREFIX_ADDRESS, 16,
+		       4, bio, sizeof(*bio), 0);
 skip:
 	bio_put(bio);
 	unlock_page(page);
@@ -648,7 +635,7 @@ struct metapage *__get_metapage(struct inode *inode, unsigned long lblock,
 			jfs_err("logical_size = %d, size = %d",
 				mp->logical_size, size);
 			dump_stack();
-			goto unlock; 
+			goto unlock;
 		}
 		mp->count++;
 		lock_metapage(mp);
@@ -658,7 +645,7 @@ struct metapage *__get_metapage(struct inode *inode, unsigned long lblock,
 					  "__get_metapage: using a "
 					  "discarded metapage");
 				discard_metapage(mp);
-				goto unlock; 
+				goto unlock;
 			}
 			clear_bit(META_discard, &mp->flag);
 		}
@@ -764,22 +751,9 @@ void release_metapage(struct metapage * mp)
 	} else if (mp->lsn)	/* discard_metapage doesn't remove it */
 		remove_from_logsync(mp);
 
-#if MPS_PER_PAGE == 1
-	/*
-	 * If we know this is the only thing in the page, we can throw
-	 * the page out of the page cache.  If pages are larger, we
-	 * don't want to do this.
-	 */
-
-	/* Retest mp->count since we may have released page lock */
-	if (test_bit(META_discard, &mp->flag) && !mp->count) {
-		clear_page_dirty(page);
-		ClearPageUptodate(page);
-	}
-#else
 	/* Try to keep metapages from using up too much memory */
 	drop_metapage(page, mp);
-#endif
+
 	unlock_page(page);
 	page_cache_release(page);
 }

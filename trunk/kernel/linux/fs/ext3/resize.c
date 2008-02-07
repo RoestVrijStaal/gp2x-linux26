@@ -11,8 +11,6 @@
 
 #define EXT3FS_DEBUG
 
-#include <linux/sched.h>
-#include <linux/smp_lock.h>
 #include <linux/ext3_jbd.h>
 
 #include <linux/errno.h>
@@ -156,6 +154,34 @@ static void mark_bitmap_end(int start_bit, int end_bit, char *bitmap)
 }
 
 /*
+ * If we have fewer than thresh credits, extend by EXT3_MAX_TRANS_DATA.
+ * If that fails, restart the transaction & regain write access for the
+ * buffer head which is used for block_bitmap modifications.
+ */
+static int extend_or_restart_transaction(handle_t *handle, int thresh,
+					 struct buffer_head *bh)
+{
+	int err;
+
+	if (handle->h_buffer_credits >= thresh)
+		return 0;
+
+	err = ext3_journal_extend(handle, EXT3_MAX_TRANS_DATA);
+	if (err < 0)
+		return err;
+	if (err) {
+		err = ext3_journal_restart(handle, EXT3_MAX_TRANS_DATA);
+		if (err)
+			return err;
+		err = ext3_journal_get_write_access(handle, bh);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
+/*
  * Set up the block and inode bitmaps, and the inode table for the new group.
  * This doesn't need to be part of the main transaction, since we are only
  * changing blocks outside the actual filesystem.  We still do journaling to
@@ -177,8 +203,9 @@ static int setup_new_group_blocks(struct super_block *sb,
 	int i;
 	int err = 0, err2;
 
-	handle = ext3_journal_start_sb(sb, reserved_gdb + gdblocks +
-				       2 + sbi->s_itb_per_group);
+	/* This transaction may be extended/restarted along the way */
+	handle = ext3_journal_start_sb(sb, EXT3_MAX_TRANS_DATA);
+
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
 
@@ -205,6 +232,10 @@ static int setup_new_group_blocks(struct super_block *sb,
 
 		ext3_debug("update backup group %#04lx (+%d)\n", block, bit);
 
+		err = extend_or_restart_transaction(handle, 1, bh);
+		if (err)
+			goto exit_bh;
+
 		gdb = sb_getblk(sb, block);
 		if (!gdb) {
 			err = -EIO;
@@ -214,10 +245,10 @@ static int setup_new_group_blocks(struct super_block *sb,
 			brelse(gdb);
 			goto exit_bh;
 		}
-		lock_buffer(bh);
-		memcpy(gdb->b_data, sbi->s_group_desc[i]->b_data, bh->b_size);
+		lock_buffer(gdb);
+		memcpy(gdb->b_data, sbi->s_group_desc[i]->b_data, gdb->b_size);
 		set_buffer_uptodate(gdb);
-		unlock_buffer(bh);
+		unlock_buffer(gdb);
 		ext3_journal_dirty_metadata(handle, gdb);
 		ext3_set_bit(bit, bh->b_data);
 		brelse(gdb);
@@ -229,6 +260,10 @@ static int setup_new_group_blocks(struct super_block *sb,
 		struct buffer_head *gdb;
 
 		ext3_debug("clear reserved block %#04lx (+%d)\n", block, bit);
+
+		err = extend_or_restart_transaction(handle, 1, bh);
+		if (err)
+			goto exit_bh;
 
 		if (IS_ERR(gdb = bclean(handle, sb, block))) {
 			err = PTR_ERR(bh);
@@ -251,6 +286,11 @@ static int setup_new_group_blocks(struct super_block *sb,
 		struct buffer_head *it;
 
 		ext3_debug("clear inode block %#04lx (+%d)\n", block, bit);
+
+		err = extend_or_restart_transaction(handle, 1, bh);
+		if (err)
+			goto exit_bh;
+
 		if (IS_ERR(it = bclean(handle, sb, block))) {
 			err = PTR_ERR(it);
 			goto exit_bh;
@@ -259,6 +299,11 @@ static int setup_new_group_blocks(struct super_block *sb,
 		brelse(it);
 		ext3_set_bit(bit, bh->b_data);
 	}
+
+	err = extend_or_restart_transaction(handle, 2, bh);
+	if (err)
+		goto exit_bh;
+
 	mark_bitmap_end(input->blocks_count, EXT3_BLOCKS_PER_GROUP(sb),
 			bh->b_data);
 	ext3_journal_dirty_metadata(handle, bh);
@@ -336,7 +381,7 @@ static int verify_reserved_gdb(struct super_block *sb,
 	unsigned five = 5;
 	unsigned seven = 7;
 	unsigned grp;
-	__u32 *p = (__u32 *)primary->b_data;
+	__le32 *p = (__le32 *)primary->b_data;
 	int gdbackups = 0;
 
 	while ((grp = ext3_list_backups(sb, &three, &five, &seven)) < end) {
@@ -380,7 +425,7 @@ static int add_new_gdb(handle_t *handle, struct inode *inode,
 	struct buffer_head *dind;
 	int gdbackups;
 	struct ext3_iloc iloc;
-	__u32 *data;
+	__le32 *data;
 	int err;
 
 	if (test_opt(sb, DEBUG))
@@ -417,7 +462,7 @@ static int add_new_gdb(handle_t *handle, struct inode *inode,
 		goto exit_bh;
 	}
 
-	data = (__u32 *)dind->b_data;
+	data = (__le32 *)dind->b_data;
 	if (le32_to_cpu(data[gdb_num % EXT3_ADDR_PER_BLOCK(sb)]) != gdblock) {
 		ext3_warning(sb, __FUNCTION__,
 			     "new group %u GDT block "E3FSBLK" not reserved",
@@ -439,8 +484,8 @@ static int add_new_gdb(handle_t *handle, struct inode *inode,
 	if ((err = ext3_reserve_inode_write(handle, inode, &iloc)))
 		goto exit_dindj;
 
-	n_group_desc = (struct buffer_head **)kmalloc((gdb_num + 1) *
-				sizeof(struct buffer_head *), GFP_KERNEL);
+	n_group_desc = kmalloc((gdb_num + 1) * sizeof(struct buffer_head *),
+			GFP_KERNEL);
 	if (!n_group_desc) {
 		err = -ENOMEM;
 		ext3_warning (sb, __FUNCTION__,
@@ -519,7 +564,7 @@ static int reserve_backup_gdb(handle_t *handle, struct inode *inode,
 	struct buffer_head *dind;
 	struct ext3_iloc iloc;
 	ext3_fsblk_t blk;
-	__u32 *data, *end;
+	__le32 *data, *end;
 	int gdbackups = 0;
 	int res, i;
 	int err;
@@ -536,8 +581,8 @@ static int reserve_backup_gdb(handle_t *handle, struct inode *inode,
 	}
 
 	blk = EXT3_SB(sb)->s_sbh->b_blocknr + 1 + EXT3_SB(sb)->s_gdb_count;
-	data = (__u32 *)dind->b_data + EXT3_SB(sb)->s_gdb_count;
-	end = (__u32 *)dind->b_data + EXT3_ADDR_PER_BLOCK(sb);
+	data = (__le32 *)dind->b_data + EXT3_SB(sb)->s_gdb_count;
+	end = (__le32 *)dind->b_data + EXT3_ADDR_PER_BLOCK(sb);
 
 	/* Get each reserved primary GDT block and verify it holds backups */
 	for (res = 0; res < reserved_gdb; res++, blk++) {
@@ -545,7 +590,8 @@ static int reserve_backup_gdb(handle_t *handle, struct inode *inode,
 			ext3_warning(sb, __FUNCTION__,
 				     "reserved block "E3FSBLK
 				     " not at offset %ld",
-				     blk, (long)(data - (__u32 *)dind->b_data));
+				     blk,
+				     (long)(data - (__le32 *)dind->b_data));
 			err = -EINVAL;
 			goto exit_bh;
 		}
@@ -560,7 +606,7 @@ static int reserve_backup_gdb(handle_t *handle, struct inode *inode,
 			goto exit_bh;
 		}
 		if (++data >= end)
-			data = (__u32 *)dind->b_data;
+			data = (__le32 *)dind->b_data;
 	}
 
 	for (i = 0; i < reserved_gdb; i++) {
@@ -584,7 +630,7 @@ static int reserve_backup_gdb(handle_t *handle, struct inode *inode,
 	blk = input->group * EXT3_BLOCKS_PER_GROUP(sb);
 	for (i = 0; i < reserved_gdb; i++) {
 		int err2;
-		data = (__u32 *)primary[i]->b_data;
+		data = (__le32 *)primary[i]->b_data;
 		/* printk("reserving backup %lu[%u] = %lu\n",
 		       primary[i]->b_blocknr, gdbackups,
 		       blk + primary[i]->b_blocknr); */
@@ -689,7 +735,7 @@ exit_err:
 			     "can't update backup for group %d (err %d), "
 			     "forcing fsck on next reboot", group, err);
 		sbi->s_mount_state &= ~EXT3_VALID_FS;
-		sbi->s_es->s_state &= ~cpu_to_le16(EXT3_VALID_FS);
+		sbi->s_es->s_state &= cpu_to_le16(~EXT3_VALID_FS);
 		mark_buffer_dirty(sbi->s_sbh);
 	}
 }
@@ -728,6 +774,18 @@ int ext3_group_add(struct super_block *sb, struct ext3_new_group_data *input)
 		ext3_warning(sb, __FUNCTION__,
 			     "Can't resize non-sparse filesystem further");
 		return -EPERM;
+	}
+
+	if (le32_to_cpu(es->s_blocks_count) + input->blocks_count <
+	    le32_to_cpu(es->s_blocks_count)) {
+		ext3_warning(sb, __FUNCTION__, "blocks_count overflow\n");
+		return -EINVAL;
+	}
+
+	if (le32_to_cpu(es->s_inodes_count) + EXT3_INODES_PER_GROUP(sb) <
+	    le32_to_cpu(es->s_inodes_count)) {
+		ext3_warning(sb, __FUNCTION__, "inodes_count overflow\n");
+		return -EINVAL;
 	}
 
 	if (reserved_gdb || gdb_off == 0) {
@@ -873,9 +931,9 @@ int ext3_group_add(struct super_block *sb, struct ext3_new_group_data *input)
 		input->reserved_blocks);
 
 	/* Update the free space counts */
-	percpu_counter_mod(&sbi->s_freeblocks_counter,
+	percpu_counter_add(&sbi->s_freeblocks_counter,
 			   input->free_blocks_count);
-	percpu_counter_mod(&sbi->s_freeinodes_counter,
+	percpu_counter_add(&sbi->s_freeinodes_counter,
 			   EXT3_INODES_PER_GROUP(sb));
 
 	ext3_journal_dirty_metadata(handle, sbi->s_sbh);
@@ -957,6 +1015,11 @@ int ext3_group_extend(struct super_block *sb, struct ext3_super_block *es,
 	}
 
 	add = EXT3_BLOCKS_PER_GROUP(sb) - last;
+
+	if (o_blocks_count + add < o_blocks_count) {
+		ext3_warning(sb, __FUNCTION__, "blocks_count overflow");
+		return -EINVAL;
+	}
 
 	if (o_blocks_count + add > n_blocks_count)
 		add = n_blocks_count - o_blocks_count;
