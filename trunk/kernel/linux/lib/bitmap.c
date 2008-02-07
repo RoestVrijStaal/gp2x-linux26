@@ -95,12 +95,12 @@ void __bitmap_complement(unsigned long *dst, const unsigned long *src, int bits)
 }
 EXPORT_SYMBOL(__bitmap_complement);
 
-/*
+/**
  * __bitmap_shift_right - logical right shift of the bits in a bitmap
- *   @dst - destination bitmap
- *   @src - source bitmap
- *   @nbits - shift by this many bits
- *   @bits - bitmap size, in bits
+ *   @dst : destination bitmap
+ *   @src : source bitmap
+ *   @shift : shift by this many bits
+ *   @bits : bitmap size, in bits
  *
  * Shifting right (dividing) means moving bits in the MS -> LS bit
  * direction.  Zeros are fed into the vacated MS positions and the
@@ -139,12 +139,12 @@ void __bitmap_shift_right(unsigned long *dst,
 EXPORT_SYMBOL(__bitmap_shift_right);
 
 
-/*
+/**
  * __bitmap_shift_left - logical left shift of the bits in a bitmap
- *   @dst - destination bitmap
- *   @src - source bitmap
- *   @nbits - shift by this many bits
- *   @bits - bitmap size, in bits
+ *   @dst : destination bitmap
+ *   @src : source bitmap
+ *   @shift : shift by this many bits
+ *   @bits : bitmap size, in bits
  *
  * Shifting left (multiplying) means moving bits in the LS -> MS
  * direction.  Zeros are fed into the vacated LS bit positions
@@ -316,10 +316,11 @@ int bitmap_scnprintf(char *buf, unsigned int buflen,
 EXPORT_SYMBOL(bitmap_scnprintf);
 
 /**
- * bitmap_parse - convert an ASCII hex string into a bitmap.
- * @ubuf: pointer to buffer in user space containing string.
- * @ubuflen: buffer size in bytes.  If string is smaller than this
+ * __bitmap_parse - convert an ASCII hex string into a bitmap.
+ * @buf: pointer to buffer containing string.
+ * @buflen: buffer size in bytes.  If string is smaller than this
  *    then it must be terminated with a \0.
+ * @is_user: location of buffer, 0 indicates kernel space
  * @maskp: pointer to bitmap array that will contain result.
  * @nmaskbits: size of bitmap, in bits.
  *
@@ -330,11 +331,13 @@ EXPORT_SYMBOL(bitmap_scnprintf);
  * characters and for grouping errors such as "1,,5", ",44", "," and "".
  * Leading and trailing whitespace accepted, but not embedded whitespace.
  */
-int bitmap_parse(const char __user *ubuf, unsigned int ubuflen,
-        unsigned long *maskp, int nmaskbits)
+int __bitmap_parse(const char *buf, unsigned int buflen,
+		int is_user, unsigned long *maskp,
+		int nmaskbits)
 {
 	int c, old_c, totaldigits, ndigits, nchunks, nbits;
 	u32 chunk;
+	const char __user *ubuf = buf;
 
 	bitmap_zero(maskp, nmaskbits);
 
@@ -343,11 +346,15 @@ int bitmap_parse(const char __user *ubuf, unsigned int ubuflen,
 		chunk = ndigits = 0;
 
 		/* Get the next chunk of the bitmap */
-		while (ubuflen) {
+		while (buflen) {
 			old_c = c;
-			if (get_user(c, ubuf++))
-				return -EFAULT;
-			ubuflen--;
+			if (is_user) {
+				if (__get_user(c, ubuf++))
+					return -EFAULT;
+			}
+			else
+				c = *buf++;
+			buflen--;
 			if (isspace(c))
 				continue;
 
@@ -388,11 +395,36 @@ int bitmap_parse(const char __user *ubuf, unsigned int ubuflen,
 		nbits += (nchunks == 1) ? nbits_to_hold_value(chunk) : CHUNKSZ;
 		if (nbits > nmaskbits)
 			return -EOVERFLOW;
-	} while (ubuflen && c == ',');
+	} while (buflen && c == ',');
 
 	return 0;
 }
-EXPORT_SYMBOL(bitmap_parse);
+EXPORT_SYMBOL(__bitmap_parse);
+
+/**
+ * bitmap_parse_user()
+ *
+ * @ubuf: pointer to user buffer containing string.
+ * @ulen: buffer size in bytes.  If string is smaller than this
+ *    then it must be terminated with a \0.
+ * @maskp: pointer to bitmap array that will contain result.
+ * @nmaskbits: size of bitmap, in bits.
+ *
+ * Wrapper for __bitmap_parse(), providing it with user buffer.
+ *
+ * We cannot have this as an inline function in bitmap.h because it needs
+ * linux/uaccess.h to get the access_ok() declaration and this causes
+ * cyclic dependencies.
+ */
+int bitmap_parse_user(const char __user *ubuf,
+			unsigned int ulen, unsigned long *maskp,
+			int nmaskbits)
+{
+	if (!access_ok(VERIFY_READ, ubuf, ulen))
+		return -EFAULT;
+	return __bitmap_parse((const char *)ubuf, ulen, 1, maskp, nmaskbits);
+}
+EXPORT_SYMBOL(bitmap_parse_user);
 
 /*
  * bscnl_emit(buf, buflen, rbot, rtop, bp)
@@ -436,6 +468,10 @@ int bitmap_scnlistprintf(char *buf, unsigned int buflen,
 	int len = 0;
 	/* current bit is 'cur', most recently seen range is [rbot, rtop] */
 	int cur, rbot, rtop;
+
+	if (buflen == 0)
+		return 0;
+	buf[0] = 0;
 
 	rbot = cur = find_first_bit(maskp, nmaskbits);
 	while (cur < nmaskbits) {
@@ -497,7 +533,7 @@ int bitmap_parselist(const char *bp, unsigned long *maskp, int nmaskbits)
 }
 EXPORT_SYMBOL(bitmap_parselist);
 
-/*
+/**
  * bitmap_pos_to_ord(buf, pos, bits)
  *	@buf: pointer to a bitmap
  *	@pos: a bit position in @buf (0 <= @pos < @bits)
@@ -772,7 +808,7 @@ EXPORT_SYMBOL(bitmap_find_free_region);
  *	@pos: beginning of bit region to release
  *	@order: region size (log base 2 of number of bits) to release
  *
- * This is the complement to __bitmap_find_free_region and releases
+ * This is the complement to __bitmap_find_free_region() and releases
  * the found region (by clearing it in the bitmap).
  *
  * No return value.

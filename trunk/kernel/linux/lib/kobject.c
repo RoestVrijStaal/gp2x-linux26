@@ -2,6 +2,8 @@
  * kobject.c - library routines for handling generic kernel objects
  *
  * Copyright (c) 2002-2003 Patrick Mochel <mochel@osdl.org>
+ * Copyright (c) 2006-2007 Greg Kroah-Hartman <greg@kroah.com>
+ * Copyright (c) 2006-2007 Novell Inc.
  *
  * This file is released under the GPLv2.
  *
@@ -97,11 +99,12 @@ static void fill_kobj_path(struct kobject *kobj, char *path, int length)
 }
 
 /**
- * kobject_get_path - generate and return the path associated with a given kobj
- * and kset pair.  The result must be freed by the caller with kfree().
+ * kobject_get_path - generate and return the path associated with a given kobj and kset pair.
  *
  * @kobj:	kobject in question, with which to build the path
  * @gfp_mask:	the allocation type used to allocate the path
+ *
+ * The result must be freed by the caller with kfree().
  */
 char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 {
@@ -111,14 +114,14 @@ char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
 	len = get_kobj_path_length(kobj);
 	if (len == 0)
 		return NULL;
-	path = kmalloc(len, gfp_mask);
+	path = kzalloc(len, gfp_mask);
 	if (!path)
 		return NULL;
-	memset(path, 0x00, len);
 	fill_kobj_path(kobj, path, len);
 
 	return path;
 }
+EXPORT_SYMBOL_GPL(kobject_get_path);
 
 /**
  *	kobject_init - initialize object.
@@ -126,9 +129,10 @@ char *kobject_get_path(struct kobject *kobj, gfp_t gfp_mask)
  */
 void kobject_init(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	kref_init(&kobj->kref);
 	INIT_LIST_HEAD(&kobj->entry);
-	init_waitqueue_head(&kobj->poll);
 	kobj->kset = kset_get(kobj->kset);
 }
 
@@ -166,17 +170,18 @@ int kobject_add(struct kobject * kobj)
 	if (!(kobj = kobject_get(kobj)))
 		return -ENOENT;
 	if (!kobj->k_name)
-		kobj->k_name = kobj->name;
-	if (!kobj->k_name) {
+		kobject_set_name(kobj, "NO_NAME");
+	if (!*kobj->k_name) {
 		pr_debug("kobject attempted to be registered with no name!\n");
 		WARN_ON(1);
+		kobject_put(kobj);
 		return -EINVAL;
 	}
 	parent = kobject_get(kobj->parent);
 
 	pr_debug("kobject %s: registering. parent: %s, set: %s\n",
 		 kobject_name(kobj), parent ? kobject_name(parent) : "<NULL>", 
-		 kobj->kset ? kobj->kset->kobj.name : "<NULL>" );
+		 kobj->kset ? kobject_name(&kobj->kset->kobj) : "<NULL>" );
 
 	if (kobj->kset) {
 		spin_lock(&kobj->kset->list_lock);
@@ -186,31 +191,29 @@ int kobject_add(struct kobject * kobj)
 
 		list_add_tail(&kobj->entry,&kobj->kset->list);
 		spin_unlock(&kobj->kset->list_lock);
+		kobj->parent = parent;
 	}
-	kobj->parent = parent;
 
 	error = create_dir(kobj);
 	if (error) {
 		/* unlink does the kobject_put() for us */
 		unlink(kobj);
-		if (parent)
-			kobject_put(parent);
+		kobject_put(parent);
 
 		/* be noisy on error issues */
 		if (error == -EEXIST)
-			printk("kobject_add failed for %s with -EEXIST, "
-			       "don't try to register things with the "
-			       "same name in the same directory.\n",
+			printk(KERN_ERR "kobject_add failed for %s with "
+			       "-EEXIST, don't try to register things with "
+			       "the same name in the same directory.\n",
 			       kobject_name(kobj));
 		else
-			printk("kobject_add failed for %s (%d)\n",
+			printk(KERN_ERR "kobject_add failed for %s (%d)\n",
 			       kobject_name(kobj), error);
-		 dump_stack();
+		dump_stack();
 	}
 
 	return error;
 }
-
 
 /**
  *	kobject_register - initialize and add an object.
@@ -231,64 +234,60 @@ int kobject_register(struct kobject * kobj)
 
 
 /**
- *	kobject_set_name - Set the name of an object
- *	@kobj:	object.
- *	@fmt:	format string used to build the name
+ * kobject_set_name - Set the name of a kobject
+ * @kobj: kobject to name
+ * @fmt: format string used to build the name
  *
- *	If strlen(name) >= KOBJ_NAME_LEN, then use a dynamically allocated
- *	string that @kobj->k_name points to. Otherwise, use the static 
- *	@kobj->name array.
+ * This sets the name of the kobject.  If you have already added the
+ * kobject to the system, you must call kobject_rename() in order to
+ * change the name of the kobject.
  */
 int kobject_set_name(struct kobject * kobj, const char * fmt, ...)
 {
 	int error = 0;
-	int limit = KOBJ_NAME_LEN;
+	int limit;
 	int need;
 	va_list args;
-	char * name;
+	char *name;
 
-	/* 
-	 * First, try the static array 
-	 */
-	va_start(args,fmt);
-	need = vsnprintf(kobj->name,limit,fmt,args);
+	/* find out how big a buffer we need */
+	name = kmalloc(1024, GFP_KERNEL);
+	if (!name) {
+		error = -ENOMEM;
+		goto done;
+	}
+	va_start(args, fmt);
+	need = vsnprintf(name, 1024, fmt, args);
 	va_end(args);
-	if (need < limit) 
-		name = kobj->name;
-	else {
-		/* 
-		 * Need more space? Allocate it and try again 
-		 */
-		limit = need + 1;
-		name = kmalloc(limit,GFP_KERNEL);
-		if (!name) {
-			error = -ENOMEM;
-			goto Done;
-		}
-		va_start(args,fmt);
-		need = vsnprintf(name,limit,fmt,args);
-		va_end(args);
+	kfree(name);
 
-		/* Still? Give up. */
-		if (need >= limit) {
-			kfree(name);
-			error = -EFAULT;
-			goto Done;
-		}
+	/* Allocate the new space and copy the string in */
+	limit = need + 1;
+	name = kmalloc(limit, GFP_KERNEL);
+	if (!name) {
+		error = -ENOMEM;
+		goto done;
+	}
+	va_start(args, fmt);
+	need = vsnprintf(name, limit, fmt, args);
+	va_end(args);
+
+	/* something wrong with the string we copied? */
+	if (need >= limit) {
+		kfree(name);
+		error = -EFAULT;
+		goto done;
 	}
 
 	/* Free the old name, if necessary. */
-	if (kobj->k_name && kobj->k_name != kobj->name)
-		kfree(kobj->k_name);
+	kfree(kobj->k_name);
 
 	/* Now, set the new name */
 	kobj->k_name = name;
- Done:
+done:
 	return error;
 }
-
 EXPORT_SYMBOL(kobject_set_name);
-
 
 /**
  *	kobject_rename - change the name of an object
@@ -299,13 +298,110 @@ EXPORT_SYMBOL(kobject_set_name);
 int kobject_rename(struct kobject * kobj, const char *new_name)
 {
 	int error = 0;
+	const char *devpath = NULL;
+	char *devpath_string = NULL;
+	char *envp[2];
 
 	kobj = kobject_get(kobj);
 	if (!kobj)
 		return -EINVAL;
+	if (!kobj->parent)
+		return -EINVAL;
+
+	/* see if this name is already in use */
+	if (kobj->kset) {
+		struct kobject *temp_kobj;
+		temp_kobj = kset_find_obj(kobj->kset, new_name);
+		if (temp_kobj) {
+			printk(KERN_WARNING "kobject '%s' cannot be renamed "
+			       "to '%s' as '%s' is already in existence.\n",
+			       kobject_name(kobj), new_name, new_name);
+			kobject_put(temp_kobj);
+			return -EINVAL;
+		}
+	}
+
+	devpath = kobject_get_path(kobj, GFP_KERNEL);
+	if (!devpath) {
+		error = -ENOMEM;
+		goto out;
+	}
+	devpath_string = kmalloc(strlen(devpath) + 15, GFP_KERNEL);
+	if (!devpath_string) {
+		error = -ENOMEM;
+		goto out;
+	}
+	sprintf(devpath_string, "DEVPATH_OLD=%s", devpath);
+	envp[0] = devpath_string;
+	envp[1] = NULL;
+	/* Note : if we want to send the new name alone, not the full path,
+	 * we could probably use kobject_name(kobj); */
+
 	error = sysfs_rename_dir(kobj, new_name);
+
+	/* This function is mostly/only used for network interface.
+	 * Some hotplug package track interfaces by their name and
+	 * therefore want to know when the name is changed by the user. */
+	if (!error)
+		kobject_uevent_env(kobj, KOBJ_MOVE, envp);
+
+out:
+	kfree(devpath_string);
+	kfree(devpath);
 	kobject_put(kobj);
 
+	return error;
+}
+
+/**
+ *	kobject_move - move object to another parent
+ *	@kobj:	object in question.
+ *	@new_parent: object's new parent (can be NULL)
+ */
+
+int kobject_move(struct kobject *kobj, struct kobject *new_parent)
+{
+	int error;
+	struct kobject *old_parent;
+	const char *devpath = NULL;
+	char *devpath_string = NULL;
+	char *envp[2];
+
+	kobj = kobject_get(kobj);
+	if (!kobj)
+		return -EINVAL;
+	new_parent = kobject_get(new_parent);
+	if (!new_parent) {
+		if (kobj->kset)
+			new_parent = kobject_get(&kobj->kset->kobj);
+	}
+	/* old object path */
+	devpath = kobject_get_path(kobj, GFP_KERNEL);
+	if (!devpath) {
+		error = -ENOMEM;
+		goto out;
+	}
+	devpath_string = kmalloc(strlen(devpath) + 15, GFP_KERNEL);
+	if (!devpath_string) {
+		error = -ENOMEM;
+		goto out;
+	}
+	sprintf(devpath_string, "DEVPATH_OLD=%s", devpath);
+	envp[0] = devpath_string;
+	envp[1] = NULL;
+	error = sysfs_move_dir(kobj, new_parent);
+	if (error)
+		goto out;
+	old_parent = kobj->parent;
+	kobj->parent = new_parent;
+	new_parent = NULL;
+	kobject_put(old_parent);
+	kobject_uevent_env(kobj, KOBJ_MOVE, envp);
+out:
+	kobject_put(new_parent);
+	kobject_put(kobj);
+	kfree(devpath_string);
+	kfree(devpath);
 	return error;
 }
 
@@ -316,6 +412,8 @@ int kobject_rename(struct kobject * kobj, const char *new_name)
 
 void kobject_del(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	sysfs_remove_dir(kobj);
 	unlink(kobj);
 }
@@ -327,6 +425,8 @@ void kobject_del(struct kobject * kobj)
 
 void kobject_unregister(struct kobject * kobj)
 {
+	if (!kobj)
+		return;
 	pr_debug("kobject %s: unregistering\n",kobject_name(kobj));
 	kobject_uevent(kobj, KOBJ_REMOVE);
 	kobject_del(kobj);
@@ -355,17 +455,19 @@ void kobject_cleanup(struct kobject * kobj)
 	struct kobj_type * t = get_ktype(kobj);
 	struct kset * s = kobj->kset;
 	struct kobject * parent = kobj->parent;
+	const char *name = kobj->k_name;
 
 	pr_debug("kobject %s: cleaning up\n",kobject_name(kobj));
-	if (kobj->k_name != kobj->name)
-		kfree(kobj->k_name);
-	kobj->k_name = NULL;
-	if (t && t->release)
+	if (t && t->release) {
 		t->release(kobj);
+		/* If we have a release function, we can guess that this was
+		 * not a statically allocated kobject, so we should be safe to
+		 * free the name */
+		kfree(name);
+	}
 	if (s)
 		kset_put(s);
-	if (parent) 
-		kobject_put(parent);
+	kobject_put(parent);
 }
 
 static void kobject_release(struct kref *kref)
@@ -398,15 +500,18 @@ static struct kobj_type dir_ktype = {
 };
 
 /**
- *	kobject_add_dir - add sub directory of object.
+ *	kobject_kset_add_dir - add sub directory of object.
+ *	@kset:		kset the directory is belongs to.
  *	@parent:	object in which a directory is created.
  *	@name:	directory name.
  *
  *	Add a plain directory object as child of given object.
  */
-struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
+struct kobject *kobject_kset_add_dir(struct kset *kset,
+				     struct kobject *parent, const char *name)
 {
 	struct kobject *k;
+	int ret;
 
 	if (!parent)
 		return NULL;
@@ -415,12 +520,31 @@ struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
 	if (!k)
 		return NULL;
 
+	k->kset = kset;
 	k->parent = parent;
 	k->ktype = &dir_ktype;
 	kobject_set_name(k, name);
-	kobject_register(k);
+	ret = kobject_register(k);
+	if (ret < 0) {
+		printk(KERN_WARNING "%s: kobject_register error: %d\n",
+			__func__, ret);
+		kobject_del(k);
+		return NULL;
+	}
 
 	return k;
+}
+
+/**
+ *	kobject_add_dir - add sub directory of object.
+ *	@parent:	object in which a directory is created.
+ *	@name:	directory name.
+ *
+ *	Add a plain directory object as child of given object.
+ */
+struct kobject *kobject_add_dir(struct kobject *parent, const char *name)
+{
+	return kobject_kset_add_dir(NULL, parent, name);
 }
 
 /**
@@ -439,22 +563,10 @@ void kset_init(struct kset * k)
 /**
  *	kset_add - add a kset object to the hierarchy.
  *	@k:	kset.
- *
- *	Simply, this adds the kset's embedded kobject to the 
- *	hierarchy. 
- *	We also try to make sure that the kset's embedded kobject
- *	has a parent before it is added. We only care if the embedded
- *	kobject is not part of a kset itself, since kobject_add()
- *	assigns a parent in that case. 
- *	If that is the case, and the kset has a controlling subsystem,
- *	then we set the kset's parent to be said subsystem. 
  */
 
 int kset_add(struct kset * k)
 {
-	if (!k->kobj.parent && !k->kobj.kset && k->subsys)
-		k->kobj.parent = &k->subsys->kset.kobj;
-
 	return kobject_add(&k->kobj);
 }
 
@@ -466,8 +578,17 @@ int kset_add(struct kset * k)
 
 int kset_register(struct kset * k)
 {
+	int err;
+
+	if (!k)
+		return -EINVAL;
+
 	kset_init(k);
-	return kset_add(k);
+	err = kset_add(k);
+	if (err)
+		return err;
+	kobject_uevent(&k->kobj, KOBJ_ADD);
+	return 0;
 }
 
 
@@ -478,6 +599,8 @@ int kset_register(struct kset * k)
 
 void kset_unregister(struct kset * k)
 {
+	if (!k)
+		return;
 	kobject_unregister(&k->kobj);
 }
 
@@ -509,42 +632,15 @@ struct kobject * kset_find_obj(struct kset * kset, const char * name)
 	return ret;
 }
 
-
-void subsystem_init(struct subsystem * s)
+int subsystem_register(struct kset *s)
 {
-	init_rwsem(&s->rwsem);
-	kset_init(&s->kset);
+	return kset_register(s);
 }
 
-/**
- *	subsystem_register - register a subsystem.
- *	@s:	the subsystem we're registering.
- *
- *	Once we register the subsystem, we want to make sure that 
- *	the kset points back to this subsystem for correct usage of 
- *	the rwsem. 
- */
-
-int subsystem_register(struct subsystem * s)
+void subsystem_unregister(struct kset *s)
 {
-	int error;
-
-	subsystem_init(s);
-	pr_debug("subsystem %s: registering\n",s->kset.kobj.name);
-
-	if (!(error = kset_add(&s->kset))) {
-		if (!s->kset.subsys)
-			s->kset.subsys = s;
-	}
-	return error;
+	kset_unregister(s);
 }
-
-void subsystem_unregister(struct subsystem * s)
-{
-	pr_debug("subsystem %s: unregistering\n",s->kset.kobj.name);
-	kset_unregister(&s->kset);
-}
-
 
 /**
  *	subsystem_create_file - export sysfs attribute file.
@@ -552,31 +648,19 @@ void subsystem_unregister(struct subsystem * s)
  *	@a:	subsystem attribute descriptor.
  */
 
-int subsys_create_file(struct subsystem * s, struct subsys_attribute * a)
+int subsys_create_file(struct kset *s, struct subsys_attribute *a)
 {
 	int error = 0;
-	if (subsys_get(s)) {
-		error = sysfs_create_file(&s->kset.kobj,&a->attr);
-		subsys_put(s);
+
+	if (!s || !a)
+		return -EINVAL;
+
+	if (kset_get(s)) {
+		error = sysfs_create_file(&s->kobj, &a->attr);
+		kset_put(s);
 	}
 	return error;
 }
-
-
-/**
- *	subsystem_remove_file - remove sysfs attribute file.
- *	@s:	subsystem.
- *	@a:	attribute desciptor.
- */
-#if 0
-void subsys_remove_file(struct subsystem * s, struct subsys_attribute * a)
-{
-	if (subsys_get(s)) {
-		sysfs_remove_file(&s->kset.kobj,&a->attr);
-		subsys_put(s);
-	}
-}
-#endif  /*  0  */
 
 EXPORT_SYMBOL(kobject_init);
 EXPORT_SYMBOL(kobject_register);
