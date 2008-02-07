@@ -85,6 +85,8 @@ isdn_tty_try_read(modem_info * info, struct sk_buff *skb)
 								tty_insert_flip_char(tty, DLE, 0);
 							tty_insert_flip_char(tty, *dp++, 0);
 						}
+						if (*dp == DLE)
+							tty_insert_flip_char(tty, DLE, 0);
 						last = *dp;
 					} else {
 #endif
@@ -1261,7 +1263,6 @@ isdn_tty_flush_buffer(struct tty_struct *tty)
 	}
 	isdn_tty_cleanup_xmit(info);
 	info->xmit_count = 0;
-	wake_up_interruptible(&tty->write_wait);
 	tty_wakeup(tty);
 }
 
@@ -1464,7 +1465,7 @@ isdn_tty_ioctl(struct tty_struct *tty, struct file *file,
 }
 
 static void
-isdn_tty_set_termios(struct tty_struct *tty, struct termios *old_termios)
+isdn_tty_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	modem_info *info = (modem_info *) tty->driver_data;
 
@@ -1860,7 +1861,7 @@ modem_write_profile(atemu * m)
 		send_sig(SIGIO, dev->profd, 1);
 }
 
-static struct tty_operations modem_ops = {
+static const struct tty_operations modem_ops = {
         .open = isdn_tty_open,
 	.close = isdn_tty_close,
 	.write = isdn_tty_write,
@@ -2646,7 +2647,12 @@ isdn_tty_modem_result(int code, modem_info * info)
 		if ((info->flags & ISDN_ASYNC_CLOSING) || (!info->tty)) {
 			return;
 		}
+#ifdef CONFIG_ISDN_AUDIO
+		if ( !info->vonline )
+			tty_ldisc_flush(info->tty);
+#else
 		tty_ldisc_flush(info->tty);
+#endif
 		if ((info->flags & ISDN_ASYNC_CHECK_CD) &&
 		    (!((info->flags & ISDN_ASYNC_CALLOUT_ACTIVE) &&
 		       (info->flags & ISDN_ASYNC_CALLOUT_NOHUP)))) {
@@ -2694,8 +2700,9 @@ isdn_tty_getdial(char *p, char *q,int cnt)
 	int limit = ISDN_MSNLEN - 1;	/* MUST match the size of interface var to avoid
 					buffer overflow */
 
-	while (strchr(" 0123456789,#.*WPTS-", *p) && *p && --cnt>0) {
+	while (strchr(" 0123456789,#.*WPTSR-", *p) && *p && --cnt>0) {
 		if ((*p >= '0' && *p <= '9') || ((*p == 'S') && first) ||
+		    ((*p == 'R') && first) ||
 		    (*p == '*') || (*p == '#')) {
 			*q++ = *p;
 			limit--;
