@@ -15,18 +15,20 @@
  */
 #if defined(__s390x__) && defined(MODULE)
 
-#define __reloc_hide(var,offset) \
-  (*({ unsigned long *__ptr; \
-       asm ( "larl %0,per_cpu__"#var"@GOTENT" \
-             : "=a" (__ptr) : "X" (per_cpu__##var) ); \
-       (typeof(&per_cpu__##var))((*__ptr) + (offset)); }))
+#define __reloc_hide(var,offset) (*({			\
+	extern int simple_identifier_##var(void);	\
+	unsigned long *__ptr;				\
+	asm ( "larl %0,per_cpu__"#var"@GOTENT"		\
+	    : "=a" (__ptr) : "X" (per_cpu__##var) );	\
+	(typeof(&per_cpu__##var))((*__ptr) + (offset));	}))
 
 #else
 
-#define __reloc_hide(var, offset) \
-  (*({ unsigned long __ptr; \
-       asm ( "" : "=a" (__ptr) : "0" (&per_cpu__##var) ); \
-       (typeof(&per_cpu__##var)) (__ptr + (offset)); }))
+#define __reloc_hide(var, offset) (*({				\
+	extern int simple_identifier_##var(void);		\
+	unsigned long __ptr;					\
+	asm ( "" : "=a" (__ptr) : "0" (&per_cpu__##var) );	\
+	(typeof(&per_cpu__##var)) (__ptr + (offset)); }))
 
 #endif
 
@@ -38,6 +40,11 @@ extern unsigned long __per_cpu_offset[NR_CPUS];
 #define DEFINE_PER_CPU(type, name) \
     __attribute__((__section__(".data.percpu"))) \
     __typeof__(type) per_cpu__##name
+
+#define DEFINE_PER_CPU_SHARED_ALIGNED(type, name)		\
+    __attribute__((__section__(".data.percpu.shared_aligned"))) \
+    __typeof__(type) per_cpu__##name				\
+    ____cacheline_aligned_in_smp
 
 #define __get_cpu_var(var) __reloc_hide(var,S390_lowcore.percpu_offset)
 #define __raw_get_cpu_var(var) __reloc_hide(var,S390_lowcore.percpu_offset)
@@ -57,6 +64,8 @@ do {								\
 
 #define DEFINE_PER_CPU(type, name) \
     __typeof__(type) per_cpu__##name
+#define DEFINE_PER_CPU_SHARED_ALIGNED(type, name)	\
+    DEFINE_PER_CPU(type, name)
 
 #define __get_cpu_var(var) __reloc_hide(var,0)
 #define __raw_get_cpu_var(var) __reloc_hide(var,0)
