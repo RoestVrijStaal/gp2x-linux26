@@ -91,8 +91,8 @@ static void axnet_release(struct pcmcia_device *link);
 static int axnet_open(struct net_device *dev);
 static int axnet_close(struct net_device *dev);
 static int axnet_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
-static struct ethtool_ops netdev_ethtool_ops;
-static irqreturn_t ei_irq_wrapper(int irq, void *dev_id, struct pt_regs *regs);
+static const struct ethtool_ops netdev_ethtool_ops;
+static irqreturn_t ei_irq_wrapper(int irq, void *dev_id);
 static void ei_watchdog(u_long arg);
 static void axnet_reset_8390(struct net_device *dev);
 
@@ -112,7 +112,7 @@ static void axdev_setup(struct net_device *dev);
 static void AX88190_init(struct net_device *dev, int startp);
 static int ax_open(struct net_device *dev);
 static int ax_close(struct net_device *dev);
-static irqreturn_t ax_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t ax_interrupt(int irq, void *dev_id);
 
 /*====================================================================*/
 
@@ -158,7 +158,7 @@ static int axnet_probe(struct pcmcia_device *link)
     info = PRIV(dev);
     info->p_dev = link;
     link->priv = dev;
-    link->irq.Attributes = IRQ_TYPE_EXCLUSIVE;
+    link->irq.Attributes = IRQ_TYPE_DYNAMIC_SHARING;
     link->irq.IRQInfo1 = IRQ_LEVEL_ID;
     link->conf.Attributes = CONF_ENABLE_IRQ;
     link->conf.IntType = INT_MEMORY_AND_IO;
@@ -232,7 +232,7 @@ static int get_prom(struct pcmcia_device *link)
     axnet_reset_8390(dev);
     mdelay(10);
 
-    for (i = 0; i < sizeof(program_seq)/sizeof(program_seq[0]); i++)
+    for (i = 0; i < ARRAY_SIZE(program_seq); i++)
 	outb_p(program_seq[i].value, ioaddr + program_seq[i].offset);
 
     for (i = 0; i < 6; i += 2) {
@@ -292,6 +292,7 @@ static int axnet_config(struct pcmcia_device *link)
     cisparse_t parse;
     int i, j, last_ret, last_fn;
     u_short buf[64];
+    DECLARE_MAC_BUF(mac);
 
     DEBUG(0, "axnet_config(0x%p)\n", link);
 
@@ -299,11 +300,7 @@ static int axnet_config(struct pcmcia_device *link)
     tuple.TupleData = (cisdata_t *)buf;
     tuple.TupleDataMax = sizeof(buf);
     tuple.TupleOffset = 0;
-    tuple.DesiredTuple = CISTPL_CONFIG;
-    CS_CHECK(GetFirstTuple, pcmcia_get_first_tuple(link, &tuple));
-    CS_CHECK(GetTupleData, pcmcia_get_tuple_data(link, &tuple));
-    CS_CHECK(ParseTuple, pcmcia_parse_tuple(link, &tuple, &parse));
-    link->conf.ConfigBase = parse.config.base;
+
     /* don't trust the CIS on this; Linksys got it wrong */
     link->conf.Present = 0x63;
 
@@ -407,11 +404,11 @@ static int axnet_config(struct pcmcia_device *link)
 
     strcpy(info->node.dev_name, dev->name);
 
-    printk(KERN_INFO "%s: Asix AX88%d90: io %#3lx, irq %d, hw_addr ",
+    printk(KERN_INFO "%s: Asix AX88%d90: io %#3lx, irq %d, "
+	   "hw_addr %s\n",
 	   dev->name, ((info->flags & IS_AX88790) ? 7 : 1),
-	   dev->base_addr, dev->irq);
-    for (i = 0; i < 6; i++)
-	printk("%02X%s", dev->dev_addr[i], ((i<5) ? ":" : "\n"));
+	   dev->base_addr, dev->irq,
+	   print_mac(mac, dev->dev_addr));
     if (info->phy_id != -1) {
 	DEBUG(0, "  MII transceiver at index %d, status %x.\n", info->phy_id, j);
     } else {
@@ -525,6 +522,7 @@ static void mdio_write(kio_addr_t addr, int phy_id, int loc, int value)
 
 static int axnet_open(struct net_device *dev)
 {
+    int ret;
     axnet_dev_t *info = PRIV(dev);
     struct pcmcia_device *link = info->p_dev;
     
@@ -533,9 +531,11 @@ static int axnet_open(struct net_device *dev)
     if (!pcmcia_dev_present(link))
 	return -ENODEV;
 
-    link->open++;
+    ret = request_irq(dev->irq, ei_irq_wrapper, IRQF_SHARED, "axnet_cs", dev);
+    if (ret)
+	    return ret;
 
-    request_irq(dev->irq, ei_irq_wrapper, IRQF_SHARED, "axnet_cs", dev);
+    link->open++;
 
     info->link_status = 0x00;
     init_timer(&info->watchdog);
@@ -599,11 +599,11 @@ static void axnet_reset_8390(struct net_device *dev)
 
 /*====================================================================*/
 
-static irqreturn_t ei_irq_wrapper(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ei_irq_wrapper(int irq, void *dev_id)
 {
     struct net_device *dev = dev_id;
     PRIV(dev)->stale = 0;
-    return ax_interrupt(irq, dev_id, regs);
+    return ax_interrupt(irq, dev_id);
 }
 
 static void ei_watchdog(u_long arg)
@@ -621,7 +621,7 @@ static void ei_watchdog(u_long arg)
     if (info->stale++ && (inb_p(nic_base + EN0_ISR) & ENISR_ALL)) {
 	if (!info->fast_poll)
 	    printk(KERN_INFO "%s: interrupt(s) dropped!\n", dev->name);
-	ei_irq_wrapper(dev->irq, dev, NULL);
+	ei_irq_wrapper(dev->irq, dev);
 	info->fast_poll = HZ;
     }
     if (info->fast_poll) {
@@ -671,7 +671,7 @@ static void netdev_get_drvinfo(struct net_device *dev,
 	strcpy(info->driver, "axnet_cs");
 }
 
-static struct ethtool_ops netdev_ethtool_ops = {
+static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 };
 
@@ -771,6 +771,8 @@ static struct pcmcia_device_id axnet_ids[] = {
 	PCMCIA_DEVICE_MANF_CARD(0x026f, 0x0309),
 	PCMCIA_DEVICE_MANF_CARD(0x0274, 0x1106),
 	PCMCIA_DEVICE_MANF_CARD(0x8a01, 0xc1ab),
+	PCMCIA_DEVICE_MANF_CARD(0x021b, 0x0202), 
+	PCMCIA_DEVICE_MANF_CARD(0xffff, 0x1090),
 	PCMCIA_DEVICE_PROD_ID12("AmbiCom,Inc.", "Fast Ethernet PC Card(AMB8110)", 0x49b020a7, 0x119cc9fc),
 	PCMCIA_DEVICE_PROD_ID124("Fast Ethernet", "16-bit PC Card", "AX88190", 0xb4be14e3, 0x9a12eb6a, 0xab9be5ef),
 	PCMCIA_DEVICE_PROD_ID12("ASIX", "AX88190", 0x0959823b, 0xab9be5ef),
@@ -786,8 +788,6 @@ static struct pcmcia_device_id axnet_ids[] = {
 	PCMCIA_DEVICE_PROD_ID12("PCMCIA", "FastEtherCard", 0x281f1c5d, 0x7ef26116),
 	PCMCIA_DEVICE_PROD_ID12("PCMCIA", "FEP501", 0x281f1c5d, 0x2e272058),
 	PCMCIA_DEVICE_PROD_ID14("Network Everywhere", "AX88190", 0x820a67b6,  0xab9be5ef),
-	/* this is not specific enough */
-	/* PCMCIA_DEVICE_MANF_CARD(0x021b, 0x0202), */
 	PCMCIA_DEVICE_NULL,
 };
 MODULE_DEVICE_TABLE(pcmcia, axnet_ids);
@@ -1141,7 +1141,7 @@ static int ei_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		ei_block_output(dev, length, skb->data, output_page);
 	else {
 		memset(packet, 0, ETH_ZLEN);
-		memcpy(packet, skb->data, skb->len);
+		skb_copy_from_linear_data(skb, packet, skb->len);
 		ei_block_output(dev, length, packet, output_page);
 	}
 	
@@ -1194,7 +1194,7 @@ static int ei_start_xmit(struct sk_buff *skb, struct net_device *dev)
  * needed.
  */
 
-static irqreturn_t ax_interrupt(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t ax_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	long e8390_base;
@@ -1202,14 +1202,8 @@ static irqreturn_t ax_interrupt(int irq, void *dev_id, struct pt_regs * regs)
 	struct ei_device *ei_local;
     	int handled = 0;
 
-	if (dev == NULL) 
-	{
-		printk ("net_interrupt(): irq %d for unknown device.\n", irq);
-		return IRQ_NONE;
-	}
-    
 	e8390_base = dev->base_addr;
-	ei_local = (struct ei_device *) netdev_priv(dev);
+	ei_local = netdev_priv(dev);
 
 	/*
 	 *	Protect the irq test too.
@@ -1507,7 +1501,6 @@ static void ei_receive(struct net_device *dev)
 			else
 			{
 				skb_reserve(skb,2);	/* IP headers on 16 byte boundaries */
-				skb->dev = dev;
 				skb_put(skb, pkt_len);	/* Make room */
 				ei_block_input(dev, pkt_len, skb, current_offset + sizeof(rx_frame));
 				skb->protocol=eth_type_trans(skb,dev);
@@ -1737,9 +1730,6 @@ static void axdev_setup(struct net_device *dev)
 	if (ei_debug > 1)
 		printk(version_8390);
     
-	SET_MODULE_OWNER(dev);
-
-		
 	ei_local = (struct ei_device *)netdev_priv(dev);
 	spin_lock_init(&ei_local->page_lock);
     
