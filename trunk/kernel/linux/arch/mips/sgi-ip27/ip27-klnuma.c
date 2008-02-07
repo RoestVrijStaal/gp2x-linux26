@@ -26,10 +26,8 @@ static cpumask_t ktext_repmask;
  * kernel.  For example, we should never put a copy on a headless node,
  * and we should respect the topology of the machine.
  */
-void __init setup_replication_mask()
+void __init setup_replication_mask(void)
 {
-	cnodeid_t	cnode;
-
 	/* Set only the master cnode's bit.  The master cnode is always 0. */
 	cpus_clear(ktext_repmask);
 	cpu_set(0, ktext_repmask);
@@ -38,11 +36,15 @@ void __init setup_replication_mask()
 #ifndef CONFIG_MAPPED_KERNEL
 #error Kernel replication works with mapped kernel support. No calias support.
 #endif
-	for_each_online_node(cnode) {
-		if (cnode == 0)
-			continue;
-		/* Advertise that we have a copy of the kernel */
-		cpu_set(cnode, ktext_repmask);
+	{
+		cnodeid_t	cnode;
+
+		for_each_online_node(cnode) {
+			if (cnode == 0)
+				continue;
+			/* Advertise that we have a copy of the kernel */
+			cpu_set(cnode, ktext_repmask);
+		}
 	}
 #endif
 	/* Set up a GDA pointer to the replication mask. */

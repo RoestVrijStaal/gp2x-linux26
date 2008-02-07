@@ -66,8 +66,6 @@ void __init prom_init(void)
 
 	prom_init_cmdline();
 
-	mips_machgroup = MACH_GROUP_TOSHIBA;
-
 	if ((read_c0_prid() & 0xff) == PRID_REV_TX4927) {
 		mips_machtype = MACH_TOSHIBA_RBTX4927;
 		toshiba_name  = "TX4927";
@@ -80,9 +78,8 @@ void __init prom_init(void)
 	add_memory_region(0, msize << 20, BOOT_MEM_RAM);
 }
 
-unsigned long __init prom_free_prom_memory(void)
+void __init prom_free_prom_memory(void)
 {
-	return 0;
 }
 
 const char *get_system_type(void)

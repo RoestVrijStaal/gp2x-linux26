@@ -264,10 +264,7 @@
 		 srlv	t3,t1,t2
 
 handle_it:
-		jal	do_IRQ
-		 move	a1,sp
-
-		j	ret_from_irq
+		j	dec_irq_dispatch
 		 nop
 
 #ifdef CONFIG_32BIT
@@ -277,9 +274,7 @@ fpu:
 #endif
 
 spurious:
-		jal	spurious_interrupt
-		 nop
-		j	ret_from_irq
+		j	spurious_interrupt
 		 nop
 		END(plat_irq_dispatch)
 

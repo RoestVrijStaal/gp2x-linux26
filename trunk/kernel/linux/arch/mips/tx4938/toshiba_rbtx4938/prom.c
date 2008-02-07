@@ -47,7 +47,6 @@ void __init prom_init(void)
 #ifndef CONFIG_TX4938_NAND_BOOT
 	prom_init_cmdline();
 #endif
-	mips_machgroup = MACH_GROUP_TOSHIBA;
 	mips_machtype = MACH_TOSHIBA_RBTX4938;
 
 	msize = tx4938_get_mem_size();
@@ -56,9 +55,8 @@ void __init prom_init(void)
 	return;
 }
 
-unsigned long  __init prom_free_prom_memory(void)
+void __init prom_free_prom_memory(void)
 {
-	return 0;
 }
 
 void __init prom_fixup_mem_map(unsigned long start, unsigned long end)

@@ -30,7 +30,9 @@
 #include <linux/net.h>
 #include <linux/inet.h>
 #include <linux/mutex.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
+
+#include <asm/time.h>
 
 #include "sysctl.h"
 #include "ds1603.h"
@@ -40,20 +42,21 @@ static DEFINE_MUTEX(lasat_info_mutex);
 /* Strategy function to write EEPROM after changing string entry */
 int sysctl_lasatstring(ctl_table *table, int *name, int nlen,
 		void *oldval, size_t *oldlenp,
-		void *newval, size_t newlen, void **context)
+		void *newval, size_t newlen)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
 	r = sysctl_string(table, name,
-			  nlen, oldval, oldlenp, newval, newlen, context);
+			  nlen, oldval, oldlenp, newval, newlen);
 	if (r < 0) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
-	if (newval && newlen) {
+	if (newval && newlen)
 		lasat_write_eeprom_info();
-	}
 	mutex_unlock(&lasat_info_mutex);
+
 	return 1;
 }
 
@@ -63,14 +66,16 @@ int proc_dolasatstring(ctl_table *table, int write, struct file *filp,
 		       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
 	r = proc_dostring(table, write, filp, buffer, lenp, ppos);
-	if ( (!write) || r) {
+	if ((!write) || r) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
 	lasat_write_eeprom_info();
 	mutex_unlock(&lasat_info_mutex);
+
 	return 0;
 }
 
@@ -79,14 +84,16 @@ int proc_dolasatint(ctl_table *table, int write, struct file *filp,
 		       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
 	r = proc_dointvec(table, write, filp, buffer, lenp, ppos);
-	if ( (!write) || r) {
+	if ((!write) || r) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
 	lasat_write_eeprom_info();
 	mutex_unlock(&lasat_info_mutex);
+
 	return 0;
 }
 
@@ -98,20 +105,22 @@ int proc_dolasatrtc(ctl_table *table, int write, struct file *filp,
 		       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
 	if (!write) {
-		rtctmp = ds1603_read();
+		rtctmp = read_persistent_clock();
 		/* check for time < 0 and set to 0 */
 		if (rtctmp < 0)
 			rtctmp = 0;
 	}
 	r = proc_dointvec(table, write, filp, buffer, lenp, ppos);
-	if ( (!write) || r) {
+	if ((!write) || r) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
-	ds1603_set(rtctmp);
+	rtc_mips_set_mmss(rtctmp);
 	mutex_unlock(&lasat_info_mutex);
+
 	return 0;
 }
 #endif
@@ -119,19 +128,20 @@ int proc_dolasatrtc(ctl_table *table, int write, struct file *filp,
 /* Sysctl for setting the IP addresses */
 int sysctl_lasat_intvec(ctl_table *table, int *name, int nlen,
 		    void *oldval, size_t *oldlenp,
-		    void *newval, size_t newlen, void **context)
+		    void *newval, size_t newlen)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
-	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen, context);
+	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen);
 	if (r < 0) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
-	if (newval && newlen) {
+	if (newval && newlen)
 		lasat_write_eeprom_info();
-	}
 	mutex_unlock(&lasat_info_mutex);
+
 	return 1;
 }
 
@@ -139,22 +149,23 @@ int sysctl_lasat_intvec(ctl_table *table, int *name, int nlen,
 /* Same for RTC */
 int sysctl_lasat_rtc(ctl_table *table, int *name, int nlen,
 		    void *oldval, size_t *oldlenp,
-		    void *newval, size_t newlen, void **context)
+		    void *newval, size_t newlen)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
-	rtctmp = ds1603_read();
+	rtctmp = read_persistent_clock();
 	if (rtctmp < 0)
 		rtctmp = 0;
-	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen, context);
+	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen);
 	if (r < 0) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
-	if (newval && newlen) {
-		ds1603_set(rtctmp);
-	}
+	if (newval && newlen)
+		rtc_mips_set_mmss(rtctmp);
 	mutex_unlock(&lasat_info_mutex);
+
 	return 1;
 }
 #endif
@@ -171,20 +182,21 @@ void update_bcastaddr(void)
 		~lasat_board_info.li_eeprom_info.netmask;
 
 	sprintf(lasat_bcastaddr, "%d.%d.%d.%d",
-			(ip      ) & 0xff,
+			(ip)       & 0xff,
 			(ip >>  8) & 0xff,
 			(ip >> 16) & 0xff,
 			(ip >> 24) & 0xff);
 }
 
 static char proc_lasat_ipbuf[32];
+
 /* Parsing of IP address */
 int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 		       void *buffer, size_t *lenp, loff_t *ppos)
 {
-	int len;
-        unsigned int ip;
+	unsigned int ip;
 	char *p, c;
+	int len;
 
 	if (!table->data || !table->maxlen || !*lenp ||
 	    (*ppos && !write)) {
@@ -197,7 +209,7 @@ int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 		len = 0;
 		p = buffer;
 		while (len < *lenp) {
-			if(get_user(c, p++)) {
+			if (get_user(c, p++)) {
 				mutex_unlock(&lasat_info_mutex);
 				return -EFAULT;
 			}
@@ -207,8 +219,7 @@ int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 		}
 		if (len >= sizeof(proc_lasat_ipbuf)-1)
 			len = sizeof(proc_lasat_ipbuf) - 1;
-		if (copy_from_user(proc_lasat_ipbuf, buffer, len))
-		{
+		if (copy_from_user(proc_lasat_ipbuf, buffer, len)) {
 			mutex_unlock(&lasat_info_mutex);
 			return -EFAULT;
 		}
@@ -221,7 +232,7 @@ int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 	} else {
 		ip = *(unsigned int *)(table->data);
 		sprintf(proc_lasat_ipbuf, "%d.%d.%d.%d",
-			(ip      ) & 0xff,
+			(ip)       & 0xff,
 			(ip >>  8) & 0xff,
 			(ip >> 16) & 0xff,
 			(ip >> 24) & 0xff);
@@ -229,12 +240,12 @@ int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 		if (len > *lenp)
 			len = *lenp;
 		if (len)
-			if(copy_to_user(buffer, proc_lasat_ipbuf, len)) {
+			if (copy_to_user(buffer, proc_lasat_ipbuf, len)) {
 				mutex_unlock(&lasat_info_mutex);
 				return -EFAULT;
 			}
 		if (len < *lenp) {
-			if(put_user('\n', ((char *) buffer) + len)) {
+			if (put_user('\n', ((char *) buffer) + len)) {
 				mutex_unlock(&lasat_info_mutex);
 				return -EFAULT;
 			}
@@ -245,28 +256,27 @@ int proc_lasat_ip(ctl_table *table, int write, struct file *filp,
 	}
 	update_bcastaddr();
 	mutex_unlock(&lasat_info_mutex);
+
 	return 0;
 }
 #endif /* defined(CONFIG_INET) */
 
 static int sysctl_lasat_eeprom_value(ctl_table *table, int *name, int nlen,
 				     void *oldval, size_t *oldlenp,
-				     void *newval, size_t newlen,
-				     void **context)
+				     void *newval, size_t newlen)
 {
 	int r;
 
 	mutex_lock(&lasat_info_mutex);
-	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen, context);
+	r = sysctl_intvec(table, name, nlen, oldval, oldlenp, newval, newlen);
 	if (r < 0) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
 
-	if (newval && newlen)
-	{
+	if (newval && newlen) {
 		if (name && *name == LASAT_PRID)
-			lasat_board_info.li_eeprom_info.prid = *(int*)newval;
+			lasat_board_info.li_eeprom_info.prid = *(int *)newval;
 
 		lasat_write_eeprom_info();
 		lasat_init_board_info();
@@ -280,21 +290,24 @@ int proc_lasat_eeprom_value(ctl_table *table, int write, struct file *filp,
 		       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int r;
+
 	mutex_lock(&lasat_info_mutex);
 	r = proc_dointvec(table, write, filp, buffer, lenp, ppos);
-	if ( (!write) || r) {
+	if ((!write) || r) {
 		mutex_unlock(&lasat_info_mutex);
 		return r;
 	}
-	if (filp && filp->f_dentry)
-	{
-		if (!strcmp(filp->f_dentry->d_name.name, "prid"))
-			lasat_board_info.li_eeprom_info.prid = lasat_board_info.li_prid;
-		if (!strcmp(filp->f_dentry->d_name.name, "debugaccess"))
-			lasat_board_info.li_eeprom_info.debugaccess = lasat_board_info.li_debugaccess;
+	if (filp && filp->f_path.dentry) {
+		if (!strcmp(filp->f_path.dentry->d_name.name, "prid"))
+			lasat_board_info.li_eeprom_info.prid =
+				lasat_board_info.li_prid;
+		if (!strcmp(filp->f_path.dentry->d_name.name, "debugaccess"))
+			lasat_board_info.li_eeprom_info.debugaccess =
+				lasat_board_info.li_debugaccess;
 	}
 	lasat_write_eeprom_info();
 	mutex_unlock(&lasat_info_mutex);
+
 	return 0;
 }
 
@@ -303,42 +316,130 @@ extern int lasat_boot_to_service;
 #ifdef CONFIG_SYSCTL
 
 static ctl_table lasat_table[] = {
-	{LASAT_CPU_HZ, "cpu-hz", &lasat_board_info.li_cpu_hz, sizeof(int),
-	 0444, NULL, &proc_dointvec, &sysctl_intvec},
-	{LASAT_BUS_HZ, "bus-hz", &lasat_board_info.li_bus_hz, sizeof(int),
-	 0444, NULL, &proc_dointvec, &sysctl_intvec},
-	{LASAT_MODEL, "bmid", &lasat_board_info.li_bmid, sizeof(int),
-	 0444, NULL, &proc_dointvec, &sysctl_intvec},
-	{LASAT_PRID, "prid", &lasat_board_info.li_prid, sizeof(int),
-	 0644, NULL, &proc_lasat_eeprom_value, &sysctl_lasat_eeprom_value},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "cpu-hz",
+		.data		= &lasat_board_info.li_cpu_hz,
+		.maxlen		= sizeof(int),
+		.mode		= 0444,
+		.proc_handler	= &proc_dointvec,
+		.strategy	= &sysctl_intvec
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "bus-hz",
+		.data		= &lasat_board_info.li_bus_hz,
+		.maxlen		= sizeof(int),
+		.mode		= 0444,
+		.proc_handler	= &proc_dointvec,
+		.strategy	= &sysctl_intvec
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "bmid",
+		.data		= &lasat_board_info.li_bmid,
+		.maxlen		= sizeof(int),
+		.mode		= 0444,
+		.proc_handler	= &proc_dointvec,
+		.strategy	= &sysctl_intvec
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "prid",
+		.data		= &lasat_board_info.li_prid,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_lasat_eeprom_value,
+		.strategy	= &sysctl_lasat_eeprom_value
+	},
 #ifdef CONFIG_INET
-	{LASAT_IPADDR, "ipaddr", &lasat_board_info.li_eeprom_info.ipaddr, sizeof(int),
-	 0644, NULL, &proc_lasat_ip, &sysctl_lasat_intvec},
-	{LASAT_NETMASK, "netmask", &lasat_board_info.li_eeprom_info.netmask, sizeof(int),
-	 0644, NULL, &proc_lasat_ip, &sysctl_lasat_intvec},
-	{LASAT_BCAST, "bcastaddr", &lasat_bcastaddr,
-		sizeof(lasat_bcastaddr), 0600, NULL,
-		&proc_dostring, &sysctl_string},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "ipaddr",
+		.data		= &lasat_board_info.li_eeprom_info.ipaddr,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_lasat_ip,
+		.strategy	= &sysctl_lasat_intvec
+	},
+	{
+		.ctl_name	= LASAT_NETMASK,
+		.procname	= "netmask",
+		.data		= &lasat_board_info.li_eeprom_info.netmask,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_lasat_ip,
+		.strategy	= &sysctl_lasat_intvec
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "bcastaddr",
+		.data		= &lasat_bcastaddr,
+		.maxlen		= sizeof(lasat_bcastaddr),
+		.mode		= 0600,
+		.proc_handler	= &proc_dostring,
+		.strategy	= &sysctl_string
+	},
 #endif
-	{LASAT_PASSWORD, "passwd_hash", &lasat_board_info.li_eeprom_info.passwd_hash, sizeof(lasat_board_info.li_eeprom_info.passwd_hash),
-	 0600, NULL, &proc_dolasatstring, &sysctl_lasatstring},
-	{LASAT_SBOOT, "boot-service", &lasat_boot_to_service, sizeof(int),
-	 0644, NULL, &proc_dointvec, &sysctl_intvec},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "passwd_hash",
+		.data		= &lasat_board_info.li_eeprom_info.passwd_hash,
+		.maxlen		=
+			sizeof(lasat_board_info.li_eeprom_info.passwd_hash),
+		.mode		= 0600,
+		.proc_handler	= &proc_dolasatstring,
+		.strategy	= &sysctl_lasatstring
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "boot-service",
+		.data		= &lasat_boot_to_service,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+		.strategy	= &sysctl_intvec
+	},
 #ifdef CONFIG_DS1603
-	{LASAT_RTC, "rtc", &rtctmp, sizeof(int),
-	 0644, NULL, &proc_dolasatrtc, &sysctl_lasat_rtc},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "rtc",
+		.data		= &rtctmp,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dolasatrtc,
+		.strategy	= &sysctl_lasat_rtc
+	},
 #endif
-	{LASAT_NAMESTR, "namestr", &lasat_board_info.li_namestr, sizeof(lasat_board_info.li_namestr),
-	 0444, NULL, &proc_dostring, &sysctl_string},
-	{LASAT_TYPESTR, "typestr", &lasat_board_info.li_typestr, sizeof(lasat_board_info.li_typestr),
-	 0444, NULL, &proc_dostring, &sysctl_string},
-	{0}
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "namestr",
+		.data		= &lasat_board_info.li_namestr,
+		.maxlen		= sizeof(lasat_board_info.li_namestr),
+		.mode		= 0444,
+		.proc_handler	=  &proc_dostring,
+		.strategy	= &sysctl_string
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "typestr",
+		.data		= &lasat_board_info.li_typestr,
+		.maxlen		= sizeof(lasat_board_info.li_typestr),
+		.mode		= 0444,
+		.proc_handler	= &proc_dostring,
+		.strategy	= &sysctl_string
+	},
+	{}
 };
 
-#define CTL_LASAT 1	// CTL_ANY ???
 static ctl_table lasat_root_table[] = {
-	{ CTL_LASAT, "lasat", NULL, 0, 0555, lasat_table },
-	{ 0 }
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "lasat",
+		.mode		=  0555,
+		.child		= lasat_table
+	},
+	{}
 };
 
 static int __init lasat_register_sysctl(void)
@@ -346,7 +447,7 @@ static int __init lasat_register_sysctl(void)
 	struct ctl_table_header *lasat_table_header;
 
 	lasat_table_header =
-		register_sysctl_table(lasat_root_table, 0);
+		register_sysctl_table(lasat_root_table);
 
 	return 0;
 }

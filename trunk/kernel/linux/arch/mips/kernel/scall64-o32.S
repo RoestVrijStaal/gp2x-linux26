@@ -28,7 +28,7 @@
 NESTED(handle_sys, PT_SIZE, sp)
 	.set	noat
 	SAVE_SOME
-	TRACE_IRQS_ON
+	TRACE_IRQS_ON_RELOAD
 	STI
 	.set	at
 	ld	t1, PT_EPC(sp)		# skip syscall on return
@@ -226,7 +226,7 @@ sys_call_table:
 	PTR	sys_ni_syscall			/* was sys_stat */
 	PTR	sys_lseek
 	PTR	sys_getpid			/* 4020 */
-	PTR	sys_mount
+	PTR	compat_sys_mount
 	PTR	sys_oldumount
 	PTR	sys_setuid
 	PTR	sys_getuid
@@ -307,7 +307,7 @@ sys_call_table:
 	PTR	compat_sys_statfs
 	PTR	compat_sys_fstatfs		/* 4100 */
 	PTR	sys_ni_syscall			/* sys_ioperm */
-	PTR	sys32_socketcall
+	PTR	compat_sys_socketcall
 	PTR	sys_syslog
 	PTR	compat_sys_setitimer
 	PTR	compat_sys_getitimer		/* 4105 */
@@ -321,7 +321,7 @@ sys_call_table:
 	PTR	sys_ni_syscall			/* sys_vm86 */
 	PTR	compat_sys_wait4
 	PTR	sys_swapoff			/* 4115 */
-	PTR	sys32_sysinfo
+	PTR	compat_sys_sysinfo
 	PTR	sys32_ipc
 	PTR	sys_fsync
 	PTR	sys32_sigreturn
@@ -459,10 +459,10 @@ sys_call_table:
 	PTR	sys_remap_file_pages
 	PTR	sys_set_tid_address
 	PTR	sys_restart_syscall
-	PTR	sys_fadvise64_64
+	PTR	sys32_fadvise64_64
 	PTR	compat_sys_statfs64		/* 4255 */
 	PTR	compat_sys_fstatfs64
-	PTR	sys32_timer_create
+	PTR	compat_sys_timer_create
 	PTR	compat_sys_timer_settime
 	PTR	compat_sys_timer_gettime
 	PTR	sys_timer_getoverrun		/* 4260 */
@@ -498,7 +498,7 @@ sys_call_table:
 	PTR	sys_mknodat			/* 4290 */
 	PTR	sys_fchownat
 	PTR	compat_sys_futimesat
-	PTR	compat_sys_newfstatat
+	PTR	sys_newfstatat
 	PTR	sys_unlinkat
 	PTR	sys_renameat			/* 4295 */
 	PTR	sys_linkat
@@ -506,7 +506,7 @@ sys_call_table:
 	PTR	sys_readlinkat
 	PTR	sys_fchmodat
 	PTR	sys_faccessat			/* 4300 */
-	PTR	sys_pselect6
+	PTR	compat_sys_pselect6
 	PTR	sys_ppoll
 	PTR	sys_unshare
 	PTR	sys_splice
@@ -514,4 +514,16 @@ sys_call_table:
 	PTR	sys_tee
 	PTR	sys_vmsplice
 	PTR	compat_sys_move_pages
+	PTR	compat_sys_set_robust_list
+	PTR	compat_sys_get_robust_list	/* 4310 */
+	PTR	compat_sys_kexec_load
+	PTR	sys_getcpu
+	PTR	compat_sys_epoll_pwait
+	PTR	sys_ioprio_set
+	PTR	sys_ioprio_get			/* 4315 */
+	PTR	compat_sys_utimensat
+	PTR	compat_sys_signalfd
+	PTR	compat_sys_timerfd
+	PTR	sys_eventfd
+	PTR	sys32_fallocate			/* 4320 */
 	.size	sys_call_table,.-sys_call_table

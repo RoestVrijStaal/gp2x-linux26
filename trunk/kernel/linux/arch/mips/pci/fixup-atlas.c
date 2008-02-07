@@ -21,16 +21,16 @@
 
 #include <asm/mips-boards/atlasint.h>
 
-#define PCIA		ATLASINT_PCIA
-#define PCIB		ATLASINT_PCIB
-#define PCIC		ATLASINT_PCIC
-#define PCID		ATLASINT_PCID
-#define INTA		ATLASINT_INTA
-#define INTB		ATLASINT_INTB
-#define ETH		ATLASINT_ETH
-#define INTC		ATLASINT_INTC
-#define SCSI		ATLASINT_SCSI
-#define INTD		ATLASINT_INTD
+#define PCIA		ATLAS_INT_PCIA
+#define PCIB		ATLAS_INT_PCIB
+#define PCIC		ATLAS_INT_PCIC
+#define PCID		ATLAS_INT_PCID
+#define INTA		ATLAS_INT_INTA
+#define INTB		ATLAS_INT_INTB
+#define ETH		ATLAS_INT_ETH
+#define INTC		ATLAS_INT_INTC
+#define SCSI		ATLAS_INT_SCSI
+#define INTD		ATLAS_INT_INTD
 
 static char irq_tab[][5] __initdata = {
 	/*      INTA    INTB    INTC    INTD */
@@ -58,7 +58,7 @@ static char irq_tab[][5] __initdata = {
 	{0,	0,	0,	0,	0 }	/* 21: Unused */
 };
 
-int __init pcibios_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
+int __init pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	return irq_tab[slot][pin];
 }
@@ -77,12 +77,12 @@ int pcibios_plat_dev_init(struct pci_dev *dev)
  * code, but it is better than nothing...
  */
 
-static void atlas_saa9730_base_fixup (struct pci_dev *pdev)
+static void atlas_saa9730_base_fixup(struct pci_dev *pdev)
 {
 	extern void *saa9730_base;
 	if (pdev->bus == 0 && PCI_SLOT(pdev->devfn) == 19)
-		(void) pci_read_config_dword (pdev, 0x14, (u32 *)&saa9730_base);
-	printk ("saa9730_base = %x\n", saa9730_base);
+		(void) pci_read_config_dword(pdev, 0x14, (u32 *)&saa9730_base);
+	printk("saa9730_base = %x\n", saa9730_base);
 }
 
 DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_PHILIPS, PCI_DEVICE_ID_PHILIPS_SAA9730,

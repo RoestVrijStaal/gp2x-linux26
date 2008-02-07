@@ -10,13 +10,13 @@
 #include <linux/mm.h>
 #include <linux/errno.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/time.h>
 #include <linux/ptrace.h>
 #include <linux/resource.h>
 
 #include <asm/ptrace.h>
 #include <asm/uaccess.h>
+#include <asm/unistd.h>
 
 #undef DEBUG_SIG
 
@@ -24,8 +24,12 @@
 
 #define _BLOCKABLE (~(_S(SIGKILL) | _S(SIGSTOP)))
 
+#define _IRIX_NSIG		128
+#define _IRIX_NSIG_BPW		BITS_PER_LONG
+#define _IRIX_NSIG_WORDS	(_IRIX_NSIG / _IRIX_NSIG_BPW)
+
 typedef struct {
-	unsigned long sig[4];
+	unsigned long sig[_IRIX_NSIG_WORDS];
 } irix_sigset_t;
 
 struct sigctx_irix5 {
@@ -163,20 +167,21 @@ static inline int handle_signal(unsigned long sig, siginfo_t *info,
 		ret = setup_irix_frame(ka, regs, sig, oldset);
 
 	spin_lock_irq(&current->sighand->siglock);
-	sigorsets(&current->blocked,&current->blocked,&ka->sa.sa_mask);
+	sigorsets(&current->blocked, &current->blocked, &ka->sa.sa_mask);
 	if (!(ka->sa.sa_flags & SA_NODEFER))
-		sigaddset(&current->blocked,sig);
+		sigaddset(&current->blocked, sig);
 	recalc_sigpending();
 	spin_unlock_irq(&current->sighand->siglock);
 
 	return ret;
 }
 
-asmlinkage int do_irix_signal(sigset_t *oldset, struct pt_regs *regs)
+void do_irix_signal(struct pt_regs *regs)
 {
 	struct k_sigaction ka;
 	siginfo_t info;
 	int signr;
+	sigset_t *oldset;
 
 	/*
 	 * We want the common case to go fast, which is why we may in certain
@@ -184,19 +189,28 @@ asmlinkage int do_irix_signal(sigset_t *oldset, struct pt_regs *regs)
 	 * if so.
 	 */
 	if (!user_mode(regs))
-		return 1;
+		return;
 
-	if (try_to_freeze())
-		goto no_signal;
-
-	if (!oldset)
+	if (test_thread_flag(TIF_RESTORE_SIGMASK))
+		oldset = &current->saved_sigmask;
+	else
 		oldset = &current->blocked;
 
 	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
-	if (signr > 0)
-		return handle_signal(signr, &info, &ka, oldset, regs);
+	if (signr > 0) {
+		/* Whee!  Actually deliver the signal.  */
+		if (handle_signal(signr, &info, &ka, oldset, regs) == 0) {
+			/* a signal was successfully delivered; the saved
+			 * sigmask will have been stored in the signal frame,
+			 * and will be restored by sigreturn, so we can simply
+			 * clear the TIF_RESTORE_SIGMASK flag */
+			if (test_thread_flag(TIF_RESTORE_SIGMASK))
+				clear_thread_flag(TIF_RESTORE_SIGMASK);
+		}
 
-no_signal:
+		return;
+	}
+
 	/*
 	 * Who's code doesn't conform to the restartable syscall convention
 	 * dies here!!!  The li instruction, a single machine instruction,
@@ -208,8 +222,22 @@ no_signal:
 		    regs->regs[2] == ERESTARTNOINTR) {
 			regs->cp0_epc -= 8;
 		}
+		if (regs->regs[2] == ERESTART_RESTARTBLOCK) {
+			regs->regs[2] = __NR_restart_syscall;
+			regs->regs[7] = regs->regs[26];
+			regs->cp0_epc -= 4;
+		}
+		regs->regs[0] = 0;	/* Don't deal with this again.  */
 	}
-	return 0;
+
+	/*
+	* If there's no signal to deliver, we just put the saved sigmask
+	* back
+	*/
+	if (test_thread_flag(TIF_RESTORE_SIGMASK)) {
+		clear_thread_flag(TIF_RESTORE_SIGMASK);
+		sigprocmask(SIG_SETMASK, &current->saved_sigmask, NULL);
+	}
 }
 
 asmlinkage void
@@ -297,6 +325,9 @@ struct sigact_irix5 {
 	u32 sigset[4];
 	int _unused0[2];
 };
+
+#define SIG_SETMASK32	256	/* Goodie from SGI for BSD compatibility:
+				   set only the low 32 bit of the sigset.  */
 
 #ifdef DEBUG_SIG
 static inline void dump_sigact_irix5(struct sigact_irix5 *p)
@@ -399,6 +430,7 @@ asmlinkage int irix_sigprocmask(int how, irix_sigset_t __user *new,
 			break;
 
 		default:
+			spin_unlock_irq(&current->sighand->siglock);
 			return -EINVAL;
 		}
 		recalc_sigpending();
@@ -413,7 +445,7 @@ asmlinkage int irix_sigprocmask(int how, irix_sigset_t __user *new,
 
 asmlinkage int irix_sigsuspend(struct pt_regs *regs)
 {
-	sigset_t saveset, newset;
+	sigset_t newset;
 	sigset_t __user *uset;
 
 	uset = (sigset_t __user *) regs->regs[4];
@@ -422,18 +454,15 @@ asmlinkage int irix_sigsuspend(struct pt_regs *regs)
 	sigdelsetmask(&newset, ~_BLOCKABLE);
 
 	spin_lock_irq(&current->sighand->siglock);
-	saveset = current->blocked;
+	current->saved_sigmask = current->blocked;
 	current->blocked = newset;
 	recalc_sigpending();
 	spin_unlock_irq(&current->sighand->siglock);
 
-	regs->regs[2] = -EINTR;
-	while (1) {
-		current->state = TASK_INTERRUPTIBLE;
-		schedule();
-		if (do_irix_signal(&saveset, regs))
-			return -EINTR;
-	}
+	current->state = TASK_INTERRUPTIBLE;
+	schedule();
+	set_thread_flag(TIF_RESTORE_SIGMASK);
+	return -ERESTARTNOHAND;
 }
 
 /* hate hate hate... */
@@ -503,7 +532,7 @@ asmlinkage int irix_sigpoll_sys(unsigned long __user *set,
 
 		expire = schedule_timeout_interruptible(expire);
 
-		for (i=0; i<=4; i++)
+		for (i=0; i < _IRIX_NSIG_WORDS; i++)
 			tmp |= (current->pending.signal.sig[i] & kset.sig[i]);
 
 		if (tmp)
@@ -581,11 +610,11 @@ repeat:
 	current->state = TASK_INTERRUPTIBLE;
 	read_lock(&tasklist_lock);
 	tsk = current;
-	list_for_each(_p,&tsk->children) {
-		p = list_entry(_p,struct task_struct,sibling);
+	list_for_each(_p, &tsk->children) {
+		p = list_entry(_p, struct task_struct, sibling);
 		if ((type == IRIX_P_PID) && p->pid != pid)
 			continue;
-		if ((type == IRIX_P_PGID) && process_group(p) != pid)
+		if ((type == IRIX_P_PGID) && task_pgrp_nr(p) != pid)
 			continue;
 		if ((p->exit_signal != SIGCHLD))
 			continue;
@@ -701,7 +730,7 @@ asmlinkage int irix_getcontext(struct pt_regs *regs)
 	       current->comm, current->pid, ctx);
 #endif
 
-	if (!access_ok(VERIFY_WRITE, ctx, sizeof(*ctx)));
+	if (!access_ok(VERIFY_WRITE, ctx, sizeof(*ctx)))
 		return -EFAULT;
 
 	error = __put_user(current->thread.irix_oldctx, &ctx->link);
