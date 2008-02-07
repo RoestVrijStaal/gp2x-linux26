@@ -13,24 +13,18 @@
 #include <linux/errno.h>
 #include <linux/workqueue.h>
 #include <linux/time.h>
+#include <linux/device.h>
 #include <linux/kthread.h>
-
+#include <asm/etr.h>
 #include <asm/lowcore.h>
-
+#include <asm/cio.h>
+#include "cio/cio.h"
+#include "cio/chsc.h"
+#include "cio/css.h"
+#include "cio/chp.h"
 #include "s390mach.h"
 
-#define DBG printk
-// #define DBG(args,...) do {} while (0);
-
 static struct semaphore m_sem;
-
-extern int css_process_crw(int, int);
-extern int chsc_process_crw(void);
-extern int chp_process_crw(int, int);
-extern void css_reiterate_subchannels(void);
-
-extern struct workqueue_struct *slow_path_wq;
-extern struct work_struct slow_path_work;
 
 static NORET_TYPE void
 s390_handle_damage(char *msg)
@@ -51,14 +45,13 @@ static int
 s390_collect_crw_info(void *param)
 {
 	struct crw crw[2];
-	int ccode, ret, slow;
+	int ccode;
 	struct semaphore *sem;
 	unsigned int chain;
 
 	sem = (struct semaphore *)param;
 repeat:
 	down_interruptible(sem);
-	slow = 0;
 	chain = 0;
 	while (1) {
 		if (unlikely(chain > 1)) {
@@ -83,17 +76,16 @@ repeat:
 		ccode = stcrw(&crw[chain]);
 		if (ccode != 0)
 			break;
-		DBG(KERN_DEBUG "crw_info : CRW reports slct=%d, oflw=%d, "
-		    "chn=%d, rsc=%X, anc=%d, erc=%X, rsid=%X\n",
-		    crw[chain].slct, crw[chain].oflw, crw[chain].chn,
-		    crw[chain].rsc, crw[chain].anc, crw[chain].erc,
-		    crw[chain].rsid);
+		printk(KERN_DEBUG "crw_info : CRW reports slct=%d, oflw=%d, "
+		       "chn=%d, rsc=%X, anc=%d, erc=%X, rsid=%X\n",
+		       crw[chain].slct, crw[chain].oflw, crw[chain].chn,
+		       crw[chain].rsc, crw[chain].anc, crw[chain].erc,
+		       crw[chain].rsid);
 		/* Check for overflows. */
 		if (crw[chain].oflw) {
 			pr_debug("%s: crw overflow detected!\n", __FUNCTION__);
-			css_reiterate_subchannels();
+			css_schedule_eval_all();
 			chain = 0;
-			slow = 1;
 			continue;
 		}
 		switch (crw[chain].rsc) {
@@ -101,10 +93,7 @@ repeat:
 			if (crw[0].chn && !chain)
 				break;
 			pr_debug("source is subchannel %04X\n", crw[0].rsid);
-			ret = css_process_crw (crw[0].rsid,
-					       chain ? crw[1].rsid : 0);
-			if (ret == -EAGAIN)
-				slow = 1;
+			css_process_crw(crw[0].rsid, chain ? crw[1].rsid : 0);
 			break;
 		case CRW_RSC_MONITOR:
 			pr_debug("source is monitoring facility\n");
@@ -117,34 +106,29 @@ repeat:
 			 * reported to the common I/O layer.
 			 */
 			if (crw[chain].slct) {
-				DBG(KERN_INFO"solicited machine check for "
-				    "channel path %02X\n", crw[0].rsid);
+				pr_debug("solicited machine check for "
+					 "channel path %02X\n", crw[0].rsid);
 				break;
 			}
 			switch (crw[0].erc) {
 			case CRW_ERC_IPARM: /* Path has come. */
-				ret = chp_process_crw(crw[0].rsid, 1);
+				chp_process_crw(crw[0].rsid, 1);
 				break;
 			case CRW_ERC_PERRI: /* Path has gone. */
 			case CRW_ERC_PERRN:
-				ret = chp_process_crw(crw[0].rsid, 0);
+				chp_process_crw(crw[0].rsid, 0);
 				break;
 			default:
 				pr_debug("Don't know how to handle erc=%x\n",
 					 crw[0].erc);
-				ret = 0;
 			}
-			if (ret == -EAGAIN)
-				slow = 1;
 			break;
 		case CRW_RSC_CONFIG:
 			pr_debug("source is configuration-alert facility\n");
 			break;
 		case CRW_RSC_CSS:
 			pr_debug("source is channel subsystem\n");
-			ret = chsc_process_crw();
-			if (ret == -EAGAIN)
-				slow = 1;
+			chsc_process_crw();
 			break;
 		default:
 			pr_debug("unknown source\n");
@@ -153,8 +137,6 @@ repeat:
 		/* chain is always 0 or 1 here. */
 		chain = crw[chain].chn ? chain + 1 : 0;
 	}
-	if (slow)
-		queue_work(slow_path_wq, &slow_path_work);
 	goto repeat;
 	return 0;
 }
@@ -211,7 +193,7 @@ s390_handle_mcck(void)
 		 */
 		__ctl_clear_bit(14, 24);	/* Disable WARNING MCH */
 		if (xchg(&mchchk_wng_posted, 1) == 0)
-			kill_proc(1, SIGPWR, 1);
+			kill_cad_pid(SIGPWR, 1);
 	}
 #endif
 
@@ -256,11 +238,12 @@ s390_revalidate_registers(struct mci *mci)
 		kill_task = 1;
 
 #ifndef CONFIG_64BIT
-	asm volatile("ld 0,0(%0)\n"
-		     "ld 2,8(%0)\n"
-		     "ld 4,16(%0)\n"
-		     "ld 6,24(%0)"
-		     : : "a" (&S390_lowcore.floating_pt_save_area));
+	asm volatile(
+		"	ld	0,0(%0)\n"
+		"	ld	2,8(%0)\n"
+		"	ld	4,16(%0)\n"
+		"	ld	6,24(%0)"
+		: : "a" (&S390_lowcore.floating_pt_save_area));
 #endif
 
 	if (MACHINE_HAS_IEEE) {
@@ -277,37 +260,36 @@ s390_revalidate_registers(struct mci *mci)
 			 * Floating point control register can't be restored.
 			 * Task will be terminated.
 			 */
-			asm volatile ("lfpc 0(%0)" : : "a" (&zero), "m" (zero));
+			asm volatile("lfpc 0(%0)" : : "a" (&zero), "m" (zero));
 			kill_task = 1;
 
-		}
-		else
-			asm volatile (
-				"lfpc 0(%0)"
-				: : "a" (fpt_creg_save_area));
+		} else
+			asm volatile("lfpc 0(%0)" : : "a" (fpt_creg_save_area));
 
-		asm volatile("ld  0,0(%0)\n"
-			     "ld  1,8(%0)\n"
-			     "ld  2,16(%0)\n"
-			     "ld  3,24(%0)\n"
-			     "ld  4,32(%0)\n"
-			     "ld  5,40(%0)\n"
-			     "ld  6,48(%0)\n"
-			     "ld  7,56(%0)\n"
-			     "ld  8,64(%0)\n"
-			     "ld  9,72(%0)\n"
-			     "ld 10,80(%0)\n"
-			     "ld 11,88(%0)\n"
-			     "ld 12,96(%0)\n"
-			     "ld 13,104(%0)\n"
-			     "ld 14,112(%0)\n"
-			     "ld 15,120(%0)\n"
-			     : : "a" (fpt_save_area));
+		asm volatile(
+			"	ld	0,0(%0)\n"
+			"	ld	1,8(%0)\n"
+			"	ld	2,16(%0)\n"
+			"	ld	3,24(%0)\n"
+			"	ld	4,32(%0)\n"
+			"	ld	5,40(%0)\n"
+			"	ld	6,48(%0)\n"
+			"	ld	7,56(%0)\n"
+			"	ld	8,64(%0)\n"
+			"	ld	9,72(%0)\n"
+			"	ld	10,80(%0)\n"
+			"	ld	11,88(%0)\n"
+			"	ld	12,96(%0)\n"
+			"	ld	13,104(%0)\n"
+			"	ld	14,112(%0)\n"
+			"	ld	15,120(%0)\n"
+			: : "a" (fpt_save_area));
 	}
 
 	/* Revalidate access registers */
-	asm volatile("lam 0,15,0(%0)"
-		     : : "a" (&S390_lowcore.access_regs_save_area));
+	asm volatile(
+		"	lam	0,15,0(%0)"
+		: : "a" (&S390_lowcore.access_regs_save_area));
 	if (!mci->ar)
 		/*
 		 * Access registers have unknown contents.
@@ -324,11 +306,13 @@ s390_revalidate_registers(struct mci *mci)
 		s390_handle_damage("invalid control registers.");
 	else
 #ifdef CONFIG_64BIT
-		asm volatile("lctlg 0,15,0(%0)"
-			     : : "a" (&S390_lowcore.cregs_save_area));
+		asm volatile(
+			"	lctlg	0,15,0(%0)"
+			: : "a" (&S390_lowcore.cregs_save_area));
 #else
-		asm volatile("lctl 0,15,0(%0)"
-			     : : "a" (&S390_lowcore.cregs_save_area));
+		asm volatile(
+			"	lctl	0,15,0(%0)"
+			: : "a" (&S390_lowcore.cregs_save_area));
 #endif
 
 	/*
@@ -342,20 +326,23 @@ s390_revalidate_registers(struct mci *mci)
 	 * old contents (should be zero) otherwise set it to zero.
 	 */
 	if (!mci->pr)
-		asm volatile("sr 0,0\n"
-			     "sckpf"
-			     : : : "0", "cc");
+		asm volatile(
+			"	sr	0,0\n"
+			"	sckpf"
+			: : : "0", "cc");
 	else
 		asm volatile(
-			"l 0,0(%0)\n"
-			"sckpf"
-			: : "a" (&S390_lowcore.tod_progreg_save_area) : "0", "cc");
+			"	l	0,0(%0)\n"
+			"	sckpf"
+			: : "a" (&S390_lowcore.tod_progreg_save_area)
+			: "0", "cc");
 #endif
 
 	/* Revalidate clock comparator register */
-	asm volatile ("stck 0(%1)\n"
-		      "sckc 0(%1)"
-		      : "=m" (tmpclock) : "a" (&(tmpclock)) : "cc", "memory");
+	asm volatile(
+		"	stck	0(%1)\n"
+		"	sckc	0(%1)"
+		: "=m" (tmpclock) : "a" (&(tmpclock)) : "cc", "memory");
 
 	/* Check if old PSW is valid */
 	if (!mci->wp)
@@ -468,6 +455,19 @@ s390_do_machine_check(struct pt_regs *regs)
 			s390_handle_damage("unable to revalidate registers.");
 	}
 
+	if (mci->cd) {
+		/* Timing facility damage */
+		s390_handle_damage("TOD clock damaged");
+	}
+
+	if (mci->ed && mci->ec) {
+		/* External damage */
+		if (S390_lowcore.external_damage_code & (1U << ED_ETR_SYNC))
+			etr_sync_check();
+		if (S390_lowcore.external_damage_code & (1U << ED_ETR_SWITCH))
+			etr_switch_to_local();
+	}
+
 	if (mci->se)
 		/* Storage error uncorrected */
 		s390_handle_damage("received storage error uncorrected "
@@ -506,7 +506,7 @@ static int
 machine_check_init(void)
 {
 	init_MUTEX_LOCKED(&m_sem);
-	ctl_clear_bit(14, 25);	/* disable external damage MCH */
+	ctl_set_bit(14, 25);	/* enable external damage MCH */
 	ctl_set_bit(14, 27);    /* enable system recovery MCH */
 #ifdef CONFIG_MACHCHK_WARNING
 	ctl_set_bit(14, 24);	/* enable warning MCH */
@@ -527,7 +527,11 @@ arch_initcall(machine_check_init);
 static int __init
 machine_check_crw_init (void)
 {
-	kthread_run(s390_collect_crw_info, &m_sem, "kmcheck");
+	struct task_struct *task;
+
+	task = kthread_run(s390_collect_crw_info, &m_sem, "kmcheck");
+	if (IS_ERR(task))
+		return PTR_ERR(task);
 	ctl_set_bit(14, 28);	/* enable channel report MCH */
 	return 0;
 }
