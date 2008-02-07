@@ -19,8 +19,8 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <asm/debug.h>
 #include <linux/ctype.h>
+#include <asm/debug.h>
 #include "zfcp_ext.h"
 
 static u32 dbfsize = 4;
@@ -31,21 +31,21 @@ MODULE_PARM_DESC(dbfsize,
 
 #define ZFCP_LOG_AREA			ZFCP_LOG_AREA_OTHER
 
-static inline int
+static int
 zfcp_dbf_stck(char *out_buf, const char *label, unsigned long long stck)
 {
 	unsigned long long sec;
-	struct timespec xtime;
+	struct timespec dbftime;
 	int len = 0;
 
 	stck -= 0x8126d60e46000000LL - (0x3c26700LL * 1000000 * 4096);
 	sec = stck >> 12;
 	do_div(sec, 1000000);
-	xtime.tv_sec = sec;
+	dbftime.tv_sec = sec;
 	stck -= (sec * 1000000) << 12;
-	xtime.tv_nsec = ((stck * 1000) >> 12);
+	dbftime.tv_nsec = ((stck * 1000) >> 12);
 	len += sprintf(out_buf + len, "%-24s%011lu:%06lu\n",
-		       label, xtime.tv_sec, xtime.tv_nsec);
+		       label, dbftime.tv_sec, dbftime.tv_nsec);
 
 	return len;
 }
@@ -106,7 +106,7 @@ zfcp_dbf_view_dump(char *out_buf, const char *label,
 	return len;
 }
 
-static inline int
+static int
 zfcp_dbf_view_header(debug_info_t * id, struct debug_view *view, int area,
 		     debug_entry_t * entry, char *out_buf)
 {
@@ -130,7 +130,7 @@ zfcp_dbf_view_header(debug_info_t * id, struct debug_view *view, int area,
 	return len;
 }
 
-inline void zfcp_hba_dbf_event_fsf_response(struct zfcp_fsf_req *fsf_req)
+void zfcp_hba_dbf_event_fsf_response(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_adapter *adapter = fsf_req->adapter;
 	struct fsf_qtcb *qtcb = fsf_req->qtcb;
@@ -241,7 +241,7 @@ inline void zfcp_hba_dbf_event_fsf_response(struct zfcp_fsf_req *fsf_req)
 	spin_unlock_irqrestore(&adapter->hba_dbf_lock, flags);
 }
 
-inline void
+void
 zfcp_hba_dbf_event_fsf_unsol(const char *tag, struct zfcp_adapter *adapter,
 			     struct fsf_status_read_buffer *status_buffer)
 {
@@ -295,7 +295,7 @@ zfcp_hba_dbf_event_fsf_unsol(const char *tag, struct zfcp_adapter *adapter,
 	spin_unlock_irqrestore(&adapter->hba_dbf_lock, flags);
 }
 
-inline void
+void
 zfcp_hba_dbf_event_qdio(struct zfcp_adapter *adapter, unsigned int status,
 			unsigned int qdio_error, unsigned int siga_error,
 			int sbal_index, int sbal_count)
@@ -316,7 +316,7 @@ zfcp_hba_dbf_event_qdio(struct zfcp_adapter *adapter, unsigned int status,
 	spin_unlock_irqrestore(&adapter->hba_dbf_lock, flags);
 }
 
-static inline int
+static int
 zfcp_hba_dbf_view_response(char *out_buf,
 			   struct zfcp_hba_dbf_record_response *rec)
 {
@@ -403,7 +403,7 @@ zfcp_hba_dbf_view_response(char *out_buf,
 	return len;
 }
 
-static inline int
+static int
 zfcp_hba_dbf_view_status(char *out_buf, struct zfcp_hba_dbf_record_status *rec)
 {
 	int len = 0;
@@ -424,7 +424,7 @@ zfcp_hba_dbf_view_status(char *out_buf, struct zfcp_hba_dbf_record_status *rec)
 	return len;
 }
 
-static inline int
+static int
 zfcp_hba_dbf_view_qdio(char *out_buf, struct zfcp_hba_dbf_record_qdio *rec)
 {
 	int len = 0;
@@ -469,7 +469,7 @@ zfcp_hba_dbf_view_format(debug_info_t * id, struct debug_view *view,
 	return len;
 }
 
-struct debug_view zfcp_hba_dbf_view = {
+static struct debug_view zfcp_hba_dbf_view = {
 	"structured",
 	NULL,
 	&zfcp_dbf_view_header,
@@ -478,7 +478,7 @@ struct debug_view zfcp_hba_dbf_view = {
 	NULL
 };
 
-inline void
+static void
 _zfcp_san_dbf_event_common_ct(const char *tag, struct zfcp_fsf_req *fsf_req,
 			      u32 s_id, u32 d_id, void *buffer, int buflen)
 {
@@ -519,7 +519,7 @@ _zfcp_san_dbf_event_common_ct(const char *tag, struct zfcp_fsf_req *fsf_req,
 	spin_unlock_irqrestore(&adapter->san_dbf_lock, flags);
 }
 
-inline void zfcp_san_dbf_event_ct_request(struct zfcp_fsf_req *fsf_req)
+void zfcp_san_dbf_event_ct_request(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_send_ct *ct = (struct zfcp_send_ct *)fsf_req->data;
 	struct zfcp_port *port = ct->port;
@@ -531,7 +531,7 @@ inline void zfcp_san_dbf_event_ct_request(struct zfcp_fsf_req *fsf_req)
 				      ct->req->length);
 }
 
-inline void zfcp_san_dbf_event_ct_response(struct zfcp_fsf_req *fsf_req)
+void zfcp_san_dbf_event_ct_response(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_send_ct *ct = (struct zfcp_send_ct *)fsf_req->data;
 	struct zfcp_port *port = ct->port;
@@ -543,7 +543,7 @@ inline void zfcp_san_dbf_event_ct_response(struct zfcp_fsf_req *fsf_req)
 				      ct->resp->length);
 }
 
-static inline void
+static void
 _zfcp_san_dbf_event_common_els(const char *tag, int level,
 			       struct zfcp_fsf_req *fsf_req, u32 s_id,
 			       u32 d_id, u8 ls_code, void *buffer, int buflen)
@@ -585,7 +585,7 @@ _zfcp_san_dbf_event_common_els(const char *tag, int level,
 	spin_unlock_irqrestore(&adapter->san_dbf_lock, flags);
 }
 
-inline void zfcp_san_dbf_event_els_request(struct zfcp_fsf_req *fsf_req)
+void zfcp_san_dbf_event_els_request(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_send_els *els = (struct zfcp_send_els *)fsf_req->data;
 
@@ -597,7 +597,7 @@ inline void zfcp_san_dbf_event_els_request(struct zfcp_fsf_req *fsf_req)
 				       els->req->length);
 }
 
-inline void zfcp_san_dbf_event_els_response(struct zfcp_fsf_req *fsf_req)
+void zfcp_san_dbf_event_els_response(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_send_els *els = (struct zfcp_send_els *)fsf_req->data;
 
@@ -608,7 +608,7 @@ inline void zfcp_san_dbf_event_els_response(struct zfcp_fsf_req *fsf_req)
 				       els->resp->length);
 }
 
-inline void zfcp_san_dbf_event_incoming_els(struct zfcp_fsf_req *fsf_req)
+void zfcp_san_dbf_event_incoming_els(struct zfcp_fsf_req *fsf_req)
 {
 	struct zfcp_adapter *adapter = fsf_req->adapter;
 	struct fsf_status_read_buffer *status_buffer =
@@ -693,7 +693,7 @@ zfcp_san_dbf_view_format(debug_info_t * id, struct debug_view *view,
 	return len;
 }
 
-struct debug_view zfcp_san_dbf_view = {
+static struct debug_view zfcp_san_dbf_view = {
 	"structured",
 	NULL,
 	&zfcp_dbf_view_header,
@@ -702,12 +702,12 @@ struct debug_view zfcp_san_dbf_view = {
 	NULL
 };
 
-static inline void
+static void
 _zfcp_scsi_dbf_event_common(const char *tag, const char *tag2, int level,
 			    struct zfcp_adapter *adapter,
 			    struct scsi_cmnd *scsi_cmnd,
 			    struct zfcp_fsf_req *fsf_req,
-			    struct zfcp_fsf_req *old_fsf_req)
+			    unsigned long old_req_id)
 {
 	struct zfcp_scsi_dbf_record *rec = &adapter->scsi_dbf_buf;
 	struct zfcp_dbf_dump *dump = (struct zfcp_dbf_dump *)rec;
@@ -768,8 +768,7 @@ _zfcp_scsi_dbf_event_common(const char *tag, const char *tag2, int level,
 				rec->fsf_seqno = fsf_req->seq_no;
 				rec->fsf_issued = fsf_req->issued;
 			}
-			rec->type.old_fsf_reqid =
-				    (unsigned long) old_fsf_req;
+			rec->type.old_fsf_reqid = old_req_id;
 		} else {
 			strncpy(dump->tag, "dump", ZFCP_DBF_TAG_SIZE);
 			dump->total_size = buflen;
@@ -787,34 +786,34 @@ _zfcp_scsi_dbf_event_common(const char *tag, const char *tag2, int level,
 	spin_unlock_irqrestore(&adapter->scsi_dbf_lock, flags);
 }
 
-inline void
+void
 zfcp_scsi_dbf_event_result(const char *tag, int level,
 			   struct zfcp_adapter *adapter,
 			   struct scsi_cmnd *scsi_cmnd,
 			   struct zfcp_fsf_req *fsf_req)
 {
 	_zfcp_scsi_dbf_event_common("rslt", tag, level,
-			adapter, scsi_cmnd, fsf_req, NULL);
+			adapter, scsi_cmnd, fsf_req, 0);
 }
 
-inline void
+void
 zfcp_scsi_dbf_event_abort(const char *tag, struct zfcp_adapter *adapter,
 			  struct scsi_cmnd *scsi_cmnd,
 			  struct zfcp_fsf_req *new_fsf_req,
-			  struct zfcp_fsf_req *old_fsf_req)
+			  unsigned long old_req_id)
 {
 	_zfcp_scsi_dbf_event_common("abrt", tag, 1,
-			adapter, scsi_cmnd, new_fsf_req, old_fsf_req);
+			adapter, scsi_cmnd, new_fsf_req, old_req_id);
 }
 
-inline void
+void
 zfcp_scsi_dbf_event_devreset(const char *tag, u8 flag, struct zfcp_unit *unit,
 			     struct scsi_cmnd *scsi_cmnd)
 {
 	struct zfcp_adapter *adapter = unit->port->adapter;
 
 	_zfcp_scsi_dbf_event_common(flag == FCP_TARGET_RESET ? "trst" : "lrst",
-			tag, 1, adapter, scsi_cmnd, NULL, NULL);
+			tag, 1, adapter, scsi_cmnd, NULL, 0);
 }
 
 static int
@@ -885,7 +884,7 @@ zfcp_scsi_dbf_view_format(debug_info_t * id, struct debug_view *view,
 	return len;
 }
 
-struct debug_view zfcp_scsi_dbf_view = {
+static struct debug_view zfcp_scsi_dbf_view = {
 	"structured",
 	NULL,
 	&zfcp_dbf_view_header,
