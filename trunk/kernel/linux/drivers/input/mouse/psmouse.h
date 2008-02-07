@@ -62,12 +62,13 @@ struct psmouse {
 	unsigned int resync_time;
 	unsigned int smartscroll;	/* Logitech only */
 
-	psmouse_ret_t (*protocol_handler)(struct psmouse *psmouse, struct pt_regs *regs);
+	psmouse_ret_t (*protocol_handler)(struct psmouse *psmouse);
 	void (*set_rate)(struct psmouse *psmouse, unsigned int rate);
 	void (*set_resolution)(struct psmouse *psmouse, unsigned int resolution);
 
 	int (*reconnect)(struct psmouse *psmouse);
 	void (*disconnect)(struct psmouse *psmouse);
+	void (*cleanup)(struct psmouse *psmouse);
 	int (*poll)(struct psmouse *psmouse);
 
 	void (*pt_activate)(struct psmouse *psmouse);
@@ -86,6 +87,8 @@ enum psmouse_type {
 	PSMOUSE_ALPS,
 	PSMOUSE_LIFEBOOK,
 	PSMOUSE_TRACKPOINT,
+	PSMOUSE_TOUCHKIT_PS2,
+	PSMOUSE_CORTRON,
 	PSMOUSE_AUTO		/* This one should always be last */
 };
 
@@ -116,7 +119,6 @@ static struct psmouse_attribute psmouse_attr_##_name = {			\
 		.attr	= {							\
 			.name	= __stringify(_name),				\
 			.mode	= _mode,					\
-			.owner	= THIS_MODULE,					\
 		},								\
 		.show	= psmouse_attr_show_helper,				\
 		.store	= psmouse_attr_set_helper,				\
