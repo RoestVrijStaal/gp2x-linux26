@@ -48,7 +48,7 @@
 #include "mmu_decl.h"
 
 #if defined(CONFIG_KERNEL_START_BOOL) || defined(CONFIG_LOWMEM_SIZE_BOOL)
-/* The ammount of lowmem must be within 0xF0000000 - KERNELBASE. */
+/* The amount of lowmem must be within 0xF0000000 - KERNELBASE. */
 #if (CONFIG_LOWMEM_SIZE > (0xF0000000 - KERNELBASE))
 #error "You must adjust CONFIG_LOWMEM_SIZE or CONFIG_START_KERNEL"
 #endif
@@ -358,8 +358,8 @@ void __init do_init_bootmem(void)
  */
 void __init paging_init(void)
 {
-	unsigned long zones_size[MAX_NR_ZONES], i;
-
+	unsigned long start_pfn, end_pfn;
+	unsigned long max_zone_pfns[MAX_NR_ZONES];
 #ifdef CONFIG_HIGHMEM
 	map_page(PKMAP_BASE, 0, 0);	/* XXX gross */
 	pkmap_page_table = pte_offset_kernel(pmd_offset(pgd_offset_k
@@ -369,19 +369,19 @@ void __init paging_init(void)
 			(KMAP_FIX_BEGIN), KMAP_FIX_BEGIN), KMAP_FIX_BEGIN);
 	kmap_prot = PAGE_KERNEL;
 #endif /* CONFIG_HIGHMEM */
+	/* All pages are DMA-able so we put them all in the DMA zone. */
+	start_pfn = __pa(PAGE_OFFSET) >> PAGE_SHIFT;
+	end_pfn = start_pfn + (total_memory >> PAGE_SHIFT);
+	add_active_range(0, start_pfn, end_pfn);
 
-	/*
-	 * All pages are DMA-able so we put them all in the DMA zone.
-	 */
-	zones_size[ZONE_DMA] = total_lowmem >> PAGE_SHIFT;
-	for (i = 1; i < MAX_NR_ZONES; i++)
-		zones_size[i] = 0;
-
+	memset(max_zone_pfns, 0, sizeof(max_zone_pfns));
 #ifdef CONFIG_HIGHMEM
-	zones_size[ZONE_HIGHMEM] = (total_memory - total_lowmem) >> PAGE_SHIFT;
+	max_zone_pfns[ZONE_DMA] = total_lowmem >> PAGE_SHIFT;
+	max_zone_pfns[ZONE_HIGHMEM] = total_memory >> PAGE_SHIFT;
+#else
+	max_zone_pfns[ZONE_DMA] = total_memory >> PAGE_SHIFT;
 #endif /* CONFIG_HIGHMEM */
-
-	free_area_init(zones_size);
+	free_area_init_nodes(max_zone_pfns);
 }
 
 void __init mem_init(void)
@@ -561,7 +561,7 @@ void update_mmu_cache(struct vm_area_struct *vma, unsigned long address,
 		 * That means the zeroed TLB has to be invalidated
 		 * whenever a page miss occurs.
 		 */
-		_tlbie(address);
+		_tlbie(address, 0 /* 8xx doesn't care about PID */);
 #endif
 		if (!PageReserved(page)
 		    && !test_bit(PG_arch_1, &page->flags)) {

@@ -86,7 +86,7 @@ static struct hw_interrupt_type xilinx_intc = {
 };
 
 int
-xilinx_pic_get_irq(struct pt_regs *regs)
+xilinx_pic_get_irq(void)
 {
 	int irq;
 
@@ -130,7 +130,7 @@ ppc4xx_pic_init(void)
 
 	/*
 	 * Disable all external interrupts until they are
-	 * explicity requested.
+	 * explicitly requested.
 	 */
 	intc_out_be32(intc + IER, 0);
 

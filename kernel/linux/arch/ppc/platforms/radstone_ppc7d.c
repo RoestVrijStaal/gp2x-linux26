@@ -35,6 +35,7 @@
 #include <linux/serial.h>
 #include <linux/tty.h>		/* for linux/serial_core.h */
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 #include <linux/mv643xx.h>
 #include <linux/netdevice.h>
 #include <linux/platform_device.h>
@@ -451,11 +452,11 @@ static void __init ppc7d_calibrate_decr(void)
  * Interrupt stuff
  *****************************************************************************/
 
-static irqreturn_t ppc7d_i8259_intr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t ppc7d_i8259_intr(int irq, void *dev_id)
 {
 	u32 temp = mv64x60_read(&bh, MV64x60_GPP_INTR_CAUSE);
 	if (temp & (1 << 28)) {
-		i8259_irq(regs);
+		i8259_irq();
 		mv64x60_write(&bh, MV64x60_GPP_INTR_CAUSE, temp & (~(1 << 28)));
 		return IRQ_HANDLED;
 	}
@@ -536,13 +537,13 @@ static u32 ppc7d_irq_canonicalize(u32 irq)
 	return irq;
 }
 
-static int ppc7d_get_irq(struct pt_regs *regs)
+static int ppc7d_get_irq(void)
 {
 	int irq;
 
-	irq = mv64360_get_irq(regs);
+	irq = mv64360_get_irq();
 	if (irq == (mv64360_irq_base + MV64x60_IRQ_GPP28))
-		irq = i8259_irq(regs);
+		irq = i8259_irq();
 	return irq;
 }
 
@@ -1371,7 +1372,7 @@ void __init platform_init(unsigned long r3, unsigned long r4, unsigned long r5,
 	 * are non-zero, then we should use the board info from the bd_t
 	 * structure and the cmdline pointed to by r6 instead of the
 	 * information from birecs, if any.  Otherwise, use the information
-	 * from birecs as discovered by the preceeding call to
+	 * from birecs as discovered by the preceding call to
 	 * parse_bootinfo().  This rule should work with both PPCBoot, which
 	 * uses a bd_t board info structure, and the kernel boot wrapper,
 	 * which uses birecs.
