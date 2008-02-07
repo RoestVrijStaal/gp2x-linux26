@@ -37,14 +37,14 @@ struct amba_kmi_port {
 	unsigned int		open;
 };
 
-static irqreturn_t amba_kmi_int(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t amba_kmi_int(int irq, void *dev_id)
 {
 	struct amba_kmi_port *kmi = dev_id;
 	unsigned int status = readb(KMIIR);
 	int handled = IRQ_NONE;
 
 	while (status & KMIIR_RXINTR) {
-		serio_interrupt(kmi->io, readb(KMIDATA), 0, regs);
+		serio_interrupt(kmi->io, readb(KMIDATA), 0);
 		status = readb(KMIIR);
 		handled = IRQ_HANDLED;
 	}
@@ -117,15 +117,13 @@ static int amba_kmi_probe(struct amba_device *dev, void *id)
 	if (ret)
 		return ret;
 
-	kmi = kmalloc(sizeof(struct amba_kmi_port), GFP_KERNEL);
-	io = kmalloc(sizeof(struct serio), GFP_KERNEL);
+	kmi = kzalloc(sizeof(struct amba_kmi_port), GFP_KERNEL);
+	io = kzalloc(sizeof(struct serio), GFP_KERNEL);
 	if (!kmi || !io) {
 		ret = -ENOMEM;
 		goto out;
 	}
 
-	memset(kmi, 0, sizeof(struct amba_kmi_port));
-	memset(io, 0, sizeof(struct serio));
 
 	io->id.type	= SERIO_8042;
 	io->write	= amba_kmi_write;
