@@ -101,14 +101,6 @@ ia64_do_tlb_purge:
 	;;
 	srlz.d
 	;;
-	// 2. Purge DTR for PERCPU data.
-	movl r16=PERCPU_ADDR
-	mov r18=PERCPU_PAGE_SHIFT<<2
-	;;
-	ptr.d r16,r18
-	;;
-	srlz.d
-	;;
 	// 3. Purge ITR for PAL code.
 	GET_THIS_PADDR(r2, ia64_mca_pal_base)
 	;;
@@ -141,14 +133,6 @@ ia64_do_tlb_purge:
 //StartMain////////////////////////////////////////////////////////////////////
 
 ia64_os_mca_dispatch:
-	// Serialize all MCA processing
-	mov	r3=1;;
-	LOAD_PHYSICAL(p0,r2,ia64_mca_serialize);;
-ia64_os_mca_spin:
-	xchg4	r4=[r2],r3;;
-	cmp.ne	p6,p0=r4,r0
-(p6)	br ia64_os_mca_spin
-
 	mov r3=IA64_MCA_CPU_MCA_STACK_OFFSET	// use the MCA stack
 	LOAD_PHYSICAL(p0,r2,1f)			// return address
 	mov r19=1				// All MCA events are treated as monarch (for now)
@@ -194,22 +178,6 @@ ia64_reload_tr:
         itr.d dtr[r16]=r18
         ;;
 	srlz.i
-	srlz.d
-	;;
-	// 2. Reload DTR register for PERCPU data.
-	GET_THIS_PADDR(r2, ia64_mca_per_cpu_pte)
-	;;
-	movl r16=PERCPU_ADDR		// vaddr
-	movl r18=PERCPU_PAGE_SHIFT<<2
-	;;
-	mov cr.itir=r18
-	mov cr.ifa=r16
-	;;
-	ld8 r18=[r2]			// load per-CPU PTE
-	mov r16=IA64_TR_PERCPU_DATA;
-	;;
-	itr.d dtr[r16]=r18
-	;;
 	srlz.d
 	;;
 	// 3. Reload ITR for PAL code.
@@ -314,10 +282,6 @@ END(ia64_os_mca_virtual_begin)
 1:
 
 	mov		b0=r12			// SAL_CHECK return address
-
-	// release lock
-	LOAD_PHYSICAL(p0,r3,ia64_mca_serialize);;
-	st4.rel		[r3]=r0
 
 	br		b0
 
@@ -1025,18 +989,13 @@ ia64_old_stack:
 
 ia64_set_kernel_registers:
 	add temp3=MCA_SP_OFFSET, r3
-	add temp4=MCA_SOS_OFFSET+SOS(OS_GP), r3
 	mov b0=r2		// save return address
 	GET_IA64_MCA_DATA(temp1)
 	;;
-	add temp4=temp4, temp1	// &struct ia64_sal_os_state.os_gp
 	add r12=temp1, temp3	// kernel stack pointer on MCA/INIT stack
 	add r13=temp1, r3	// set current to start of MCA/INIT stack
 	add r20=temp1, r3	// physical start of MCA/INIT stack
 	;;
-	ld8 r1=[temp4]		// OS GP from SAL OS state
-	;;
-	DATA_PA_TO_VA(r1,temp1)
 	DATA_PA_TO_VA(r12,temp2)
 	DATA_PA_TO_VA(r13,temp3)
 	;;
@@ -1067,6 +1026,10 @@ ia64_set_kernel_registers:
 	mov cr.itir=r18
 	mov cr.ifa=r13
 	mov r20=IA64_TR_CURRENT_STACK
+
+	movl r17=FPSR_DEFAULT
+	;;
+	mov.m ar.fpsr=r17			// set ar.fpsr to kernel default value
 	;;
 	itr.d dtr[r20]=r21
 	;;

@@ -34,6 +34,7 @@
 #include <linux/efi.h>
 #include <linux/nodemask.h>
 #include <linux/bitops.h>         /* hweight64() */
+#include <linux/crash_dump.h>
 
 #include <asm/delay.h>		/* ia64_get_itc() */
 #include <asm/io.h>
@@ -42,6 +43,8 @@
 #include <asm/system.h>		/* wmb() */
 
 #include <asm/acpi-ext.h>
+
+extern int swiotlb_late_init_with_default_size (size_t size);
 
 #define PFX "IOC: "
 
@@ -75,7 +78,7 @@
 ** If a device prefetches beyond the end of a valid pdir entry, it will cause
 ** a hard failure, ie. MCA.  Version 3.0 and later of the zx1 LBA should
 ** disconnect on 4k boundaries and prevent such issues.  If the device is
-** particularly agressive, this option will keep the entire pdir valid such
+** particularly aggressive, this option will keep the entire pdir valid such
 ** that prefetching will hit a valid address.  This could severely impact
 ** error containment, and is therefore off by default.  The page that is
 ** used for spill-over is poisoned, so that should help debugging somewhat.
@@ -243,7 +246,7 @@ static int reserve_sba_gart = 1;
 static SBA_INLINE void sba_mark_invalid(struct ioc *, dma_addr_t, size_t);
 static SBA_INLINE void sba_free_range(struct ioc *, dma_addr_t, size_t);
 
-#define sba_sg_address(sg)	(page_address((sg)->page) + (sg)->offset)
+#define sba_sg_address(sg)	sg_virt((sg))
 
 #ifdef FULL_VALID_PDIR
 static u64 prefetch_spill_page;
@@ -258,10 +261,10 @@ static u64 prefetch_spill_page;
 
 /*
 ** DMA_CHUNK_SIZE is used by the SCSI mid-layer to break up
-** (or rather not merge) DMA's into managable chunks.
+** (or rather not merge) DMAs into manageable chunks.
 ** On parisc, this is more of the software/tuning constraint
-** rather than the HW. I/O MMU allocation alogorithms can be
-** faster with smaller size is (to some degree).
+** rather than the HW. I/O MMU allocation algorithms can be
+** faster with smaller sizes (to some degree).
 */
 #define DMA_CHUNK_SIZE  (BITS_PER_LONG*iovp_size)
 
@@ -393,7 +396,7 @@ sba_dump_sg( struct ioc *ioc, struct scatterlist *startsg, int nents)
 		printk(KERN_DEBUG " %d : DMA %08lx/%05x CPU %p\n", nents,
 		       startsg->dma_address, startsg->dma_length,
 		       sba_sg_address(startsg));
-		startsg++;
+		startsg = sg_next(startsg);
 	}
 }
 
@@ -406,7 +409,7 @@ sba_check_sg( struct ioc *ioc, struct scatterlist *startsg, int nents)
 	while (the_nents-- > 0) {
 		if (sba_sg_address(the_sg) == 0x0UL)
 			sba_dump_sg(NULL, startsg, nents);
-		the_sg++;
+		the_sg = sg_next(the_sg);
 	}
 }
 
@@ -1176,7 +1179,6 @@ sba_fill_pdir(
 	u64 *pdirp = NULL;
 	unsigned long dma_offset = 0;
 
-	dma_sg--;
 	while (nents-- > 0) {
 		int     cnt = startsg->dma_length;
 		startsg->dma_length = 0;
@@ -1198,7 +1200,8 @@ sba_fill_pdir(
 			u32 pide = startsg->dma_address & ~PIDE_FLAG;
 			dma_offset = (unsigned long) pide & ~iovp_mask;
 			startsg->dma_address = 0;
-			dma_sg++;
+			if (n_mappings)
+				dma_sg = sg_next(dma_sg);
 			dma_sg->dma_address = pide | ioc->ibase;
 			pdirp = &(ioc->pdir_base[pide >> iovp_shift]);
 			n_mappings++;
@@ -1225,7 +1228,7 @@ sba_fill_pdir(
 				pdirp++;
 			} while (cnt > 0);
 		}
-		startsg++;
+		startsg = sg_next(startsg);
 	}
 	/* force pdir update */
 	wmb();
@@ -1294,7 +1297,7 @@ sba_coalesce_chunks( struct ioc *ioc,
 		while (--nents > 0) {
 			unsigned long vaddr;	/* tmp */
 
-			startsg++;
+			startsg = sg_next(startsg);
 
 			/* PARANOID */
 			startsg->dma_address = startsg->dma_length = 0;
@@ -1404,7 +1407,7 @@ int sba_map_sg(struct device *dev, struct scatterlist *sglist, int nents, int di
 #ifdef ALLOW_IOV_BYPASS_SG
 	ASSERT(to_pci_dev(dev)->dma_mask);
 	if (likely((ioc->dma_mask & ~to_pci_dev(dev)->dma_mask) == 0)) {
-		for (sg = sglist ; filled < nents ; filled++, sg++){
+		for_each_sg(sglist, sg, nents, filled) {
 			sg->dma_length = sg->length;
 			sg->dma_address = virt_to_phys(sba_sg_address(sg));
 		}
@@ -1498,7 +1501,7 @@ void sba_unmap_sg (struct device *dev, struct scatterlist *sglist, int nents, in
 	while (nents && sglist->dma_length) {
 
 		sba_unmap_single(dev, sglist->dma_address, sglist->dma_length, dir);
-		sglist++;
+		sglist = sg_next(sglist);
 		nents--;
 	}
 
@@ -1672,15 +1675,13 @@ ioc_sac_init(struct ioc *ioc)
 	 * SAC (single address cycle) addressable, so allocate a
 	 * pseudo-device to enforce that.
 	 */
-	sac = kmalloc(sizeof(*sac), GFP_KERNEL);
+	sac = kzalloc(sizeof(*sac), GFP_KERNEL);
 	if (!sac)
 		panic(PFX "Couldn't allocate struct pci_dev");
-	memset(sac, 0, sizeof(*sac));
 
-	controller = kmalloc(sizeof(*controller), GFP_KERNEL);
+	controller = kzalloc(sizeof(*controller), GFP_KERNEL);
 	if (!controller)
 		panic(PFX "Couldn't allocate struct pci_controller");
-	memset(controller, 0, sizeof(*controller));
 
 	controller->iommu = ioc;
 	sac->sysdata = controller;
@@ -1737,11 +1738,9 @@ ioc_init(u64 hpa, void *handle)
 	struct ioc *ioc;
 	struct ioc_iommu *info;
 
-	ioc = kmalloc(sizeof(*ioc), GFP_KERNEL);
+	ioc = kzalloc(sizeof(*ioc), GFP_KERNEL);
 	if (!ioc)
 		return NULL;
-
-	memset(ioc, 0, sizeof(*ioc));
 
 	ioc->next = ioc_list;
 	ioc_list = ioc;
@@ -1885,7 +1884,7 @@ ioc_open(struct inode *inode, struct file *file)
 	return seq_open(file, &ioc_seq_ops);
 }
 
-static struct file_operations ioc_fops = {
+static const struct file_operations ioc_fops = {
 	.open    = ioc_open,
 	.read    = seq_read,
 	.llseek  = seq_lseek,
@@ -2016,9 +2015,14 @@ acpi_sba_ioc_add(struct acpi_device *device)
 	return 0;
 }
 
+static const struct acpi_device_id hp_ioc_iommu_device_ids[] = {
+	{"HWP0001", 0},
+	{"HWP0004", 0},
+	{"", 0},
+};
 static struct acpi_driver acpi_sba_ioc_driver = {
 	.name		= "IOC IOMMU Driver",
-	.ids		= "HWP0001,HWP0004",
+	.ids		= hp_ioc_iommu_device_ids,
 	.ops		= {
 		.add	= acpi_sba_ioc_add,
 	},
@@ -2030,11 +2034,25 @@ sba_init(void)
 	if (!ia64_platform_is("hpzx1") && !ia64_platform_is("hpzx1_swiotlb"))
 		return 0;
 
+#if defined(CONFIG_IA64_GENERIC) && defined(CONFIG_CRASH_DUMP) && \
+        defined(CONFIG_PROC_FS)
+	/* If we are booting a kdump kernel, the sba_iommu will
+	 * cause devices that were not shutdown properly to MCA
+	 * as soon as they are turned back on.  Our only option for
+	 * a successful kdump kernel boot is to use the swiotlb.
+	 */
+	if (elfcorehdr_addr < ELFCORE_ADDR_MAX) {
+		if (swiotlb_late_init_with_default_size(64 * (1<<20)) != 0)
+			panic("Unable to initialize software I/O TLB:"
+				  " Try machvec=dig boot option");
+		machvec_init("dig");
+		return 0;
+	}
+#endif
+
 	acpi_bus_register_driver(&acpi_sba_ioc_driver);
 	if (!ioc_list) {
 #ifdef CONFIG_IA64_GENERIC
-		extern int swiotlb_late_init_with_default_size (size_t size);
-
 		/*
 		 * If we didn't find something sba_iommu can claim, we
 		 * need to setup the swiotlb and switch to the dig machvec.
