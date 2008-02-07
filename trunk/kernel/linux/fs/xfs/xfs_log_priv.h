@@ -30,18 +30,16 @@ struct xfs_mount;
  */
 
 #define XLOG_MIN_ICLOGS		2
-#define XLOG_MED_ICLOGS		4
 #define XLOG_MAX_ICLOGS		8
-#define XLOG_CALLBACK_SIZE	10
 #define XLOG_HEADER_MAGIC_NUM	0xFEEDbabe	/* Invalid cycle number */
 #define XLOG_VERSION_1		1
 #define XLOG_VERSION_2		2		/* Large IClogs, Log sunit */
 #define XLOG_VERSION_OKBITS	(XLOG_VERSION_1 | XLOG_VERSION_2)
-#define XLOG_RECORD_BSIZE	(16*1024)	/* eventually 32k */
+#define XLOG_MIN_RECORD_BSIZE	(16*1024)	/* eventually 32k */
 #define XLOG_BIG_RECORD_BSIZE	(32*1024)	/* 32k buffers */
 #define XLOG_MAX_RECORD_BSIZE	(256*1024)
 #define XLOG_HEADER_CYCLE_SIZE	(32*1024)	/* cycle data in header */
-#define XLOG_RECORD_BSHIFT	14		/* 16384 == 1 << 14 */
+#define XLOG_MIN_RECORD_BSHIFT	14		/* 16384 == 1 << 14 */
 #define XLOG_BIG_RECORD_BSHIFT	15		/* 32k == 1 << 15 */
 #define XLOG_MAX_RECORD_BSHIFT	18		/* 256k == 1 << 18 */
 #define XLOG_BTOLSUNIT(log, b)  (((b)+(log)->l_mp->m_sb.sb_logsunit-1) / \
@@ -149,9 +147,6 @@ struct xfs_mount;
 #define XLOG_WAS_CONT_TRANS	0x08	/* Cont this trans into new region */
 #define XLOG_END_TRANS		0x10	/* End a continued transaction */
 #define XLOG_UNMOUNT_TRANS	0x20	/* Unmount a filesystem transaction */
-#define XLOG_SKIP_TRANS		(XLOG_COMMIT_TRANS | XLOG_CONTINUE_TRANS | \
-				 XLOG_WAS_CONT_TRANS | XLOG_END_TRANS | \
-				 XLOG_UNMOUNT_TRANS)
 
 #ifdef __KERNEL__
 /*
@@ -254,22 +249,6 @@ typedef __uint32_t xlog_tid_t;
 
 /* Ticket reservation region accounting */ 
 #define XLOG_TIC_LEN_MAX	15
-#define XLOG_TIC_RESET_RES(t) ((t)->t_res_num = \
-				(t)->t_res_arr_sum = (t)->t_res_num_ophdrs = 0)
-#define XLOG_TIC_ADD_OPHDR(t) ((t)->t_res_num_ophdrs++)
-#define XLOG_TIC_ADD_REGION(t, len, type)				\
-	do {								\
-		if ((t)->t_res_num == XLOG_TIC_LEN_MAX) { 		\
-			/* add to overflow and start again */		\
-			(t)->t_res_o_flow += (t)->t_res_arr_sum;	\
-			(t)->t_res_num = 0;				\
-			(t)->t_res_arr_sum = 0;				\
-		}							\
-		(t)->t_res_arr[(t)->t_res_num].r_len = (len);		\
-		(t)->t_res_arr[(t)->t_res_num].r_type = (type);		\
-		(t)->t_res_arr_sum += (len);				\
-		(t)->t_res_num++;					\
-	} while (0)
 
 /*
  * Reservation region
@@ -505,6 +484,12 @@ extern int	 xlog_bread(xlog_t *, xfs_daddr_t, int, struct xfs_buf *);
 #define XLOG_TRACE_REL_FLUSH   2
 #define XLOG_TRACE_SLEEP_FLUSH 3
 #define XLOG_TRACE_WAKE_FLUSH  4
+
+/*
+ * Unmount record type is used as a pseudo transaction type for the ticket.
+ * It's value must be outside the range of XFS_TRANS_* values.
+ */
+#define XLOG_UNMOUNT_REC_TYPE	(-1U)
 
 #endif	/* __KERNEL__ */
 

@@ -51,7 +51,6 @@
 
 #include <support/ktrace.h>
 #include <support/debug.h>
-#include <support/move.h>
 #include <support/uuid.h>
 
 #include <linux/mm.h>
@@ -75,6 +74,7 @@
 #include <linux/cpu.h>
 #include <linux/notifier.h>
 #include <linux/delay.h>
+#include <linux/log2.h>
 
 #include <asm/page.h>
 #include <asm/div64.h>
@@ -83,7 +83,6 @@
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
-#include <xfs_behavior.h>
 #include <xfs_vfs.h>
 #include <xfs_cred.h>
 #include <xfs_vnode.h>
@@ -101,23 +100,12 @@
  * Feature macros (disable/enable)
  */
 #undef  HAVE_REFCACHE	/* reference cache not needed for NFS in 2.6 */
-#define HAVE_SENDFILE	/* sendfile(2) exists in 2.6, but not in 2.4 */
 #define HAVE_SPLICE	/* a splice(2) exists in 2.6, but not in 2.4 */
 #ifdef CONFIG_SMP
 #define HAVE_PERCPU_SB	/* per cpu superblock counters are a 2.6 feature */
 #else
 #undef  HAVE_PERCPU_SB	/* per cpu superblock counters are a 2.6 feature */
 #endif
-
-/*
- * State flag for unwritten extent buffers.
- *
- * We need to be able to distinguish between these and delayed
- * allocate buffers within XFS.  The generic IO path code does
- * not need to distinguish - we use the BH_Delay flag for both
- * delalloc and these ondisk-uninitialised buffers.
- */
-BUFFER_FNS(PrivateStart, unwritten);
 
 #define restricted_chown	xfs_params.restrict_chown.val
 #define irix_sgid_inherit	xfs_params.sgid_inherit.val
@@ -134,6 +122,7 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define xfs_inherit_nosymlinks	xfs_params.inherit_nosym.val
 #define xfs_rotorstep		xfs_params.rotorstep.val
 #define xfs_inherit_nodefrag	xfs_params.inherit_nodfrg.val
+#define xfs_fstrm_centisecs	xfs_params.fstrm_timer.val
 
 #define current_cpu()		(raw_smp_processor_id())
 #define current_pid()		(current->pid)
@@ -148,11 +137,7 @@ BUFFER_FNS(PrivateStart, unwritten);
 		(current->flags = ((current->flags & ~(f)) | (*(sp) & (f))))
 
 #define NBPP		PAGE_SIZE
-#define DPPSHFT		(PAGE_SHIFT - 9)
 #define NDPP		(1 << (PAGE_SHIFT - 9))
-#define dtop(DD)	(((DD) + NDPP - 1) >> DPPSHFT)
-#define dtopt(DD)	((DD) >> DPPSHFT)
-#define dpoff(DD)	((DD) & (NDPP-1))
 
 #define NBBY		8		/* number of bits per byte */
 #define	NBPC		PAGE_SIZE	/* Number of bytes per click */
@@ -172,8 +157,6 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define	btoct(x)	((__psunsigned_t)(x)>>BPCSHIFT)
 #define	btoc64(x)	(((__uint64_t)(x)+(NBPC-1))>>BPCSHIFT)
 #define	btoct64(x)	((__uint64_t)(x)>>BPCSHIFT)
-#define	io_btoc(x)	(((__psunsigned_t)(x)+(IO_NBPC-1))>>IO_BPCSHIFT)
-#define	io_btoct(x)	((__psunsigned_t)(x)>>IO_BPCSHIFT)
 
 /* off_t bytes to clicks */
 #define offtoc(x)       (((__uint64_t)(x)+(NBPC-1))>>BPCSHIFT)
@@ -186,7 +169,6 @@ BUFFER_FNS(PrivateStart, unwritten);
 #define	ctob(x)		((__psunsigned_t)(x)<<BPCSHIFT)
 #define btoct(x)        ((__psunsigned_t)(x)>>BPCSHIFT)
 #define	ctob64(x)	((__uint64_t)(x)<<BPCSHIFT)
-#define	io_ctob(x)	((__psunsigned_t)(x)<<IO_BPCSHIFT)
 
 /* bytes to clicks */
 #define btoc(x)         (((__psunsigned_t)(x)+(NBPC-1))>>BPCSHIFT)
@@ -337,6 +319,13 @@ static inline __uint64_t roundup_64(__uint64_t x, __uint32_t y)
 	x += y - 1;
 	do_div(x, y);
 	return(x * y);
+}
+
+static inline __uint64_t howmany_64(__uint64_t x, __uint32_t y)
+{
+	x += y - 1;
+	do_div(x, y);
+	return x;
 }
 
 #endif /* __XFS_LINUX__ */

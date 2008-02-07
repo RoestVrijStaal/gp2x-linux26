@@ -63,14 +63,14 @@ typedef enum {
 
 	/* flags used only internally */
 	_XBF_PAGE_CACHE = (1 << 17),/* backed by pagecache		   */
-	_XBF_KMEM_ALLOC = (1 << 18),/* backed by kmem_alloc()		   */
+	_XBF_PAGES = (1 << 18),	    /* backed by refcounted pages	   */
 	_XBF_RUN_QUEUES = (1 << 19),/* run block device task queue	   */
 	_XBF_DELWRI_Q = (1 << 21),   /* buffer on delwri queue		   */
 } xfs_buf_flags_t;
 
 typedef enum {
-	XBT_FORCE_SLEEP = (0 << 1),
-	XBT_FORCE_FLUSH = (1 << 1),
+	XBT_FORCE_SLEEP = 0,
+	XBT_FORCE_FLUSH = 1,
 } xfs_buftarg_flags_t;
 
 typedef struct xfs_bufhash {
@@ -298,11 +298,6 @@ extern void xfs_buf_trace(xfs_buf_t *, char *, void *, void *);
 #define XFS_BUF_UNWRITE(bp)	((bp)->b_flags &= ~XBF_WRITE)
 #define XFS_BUF_ISWRITE(bp)	((bp)->b_flags & XBF_WRITE)
 
-#define XFS_BUF_ISUNINITIAL(bp)	(0)
-#define XFS_BUF_UNUNINITIAL(bp)	(0)
-
-#define XFS_BUF_BP_ISMAPPED(bp)	(1)
-
 #define XFS_BUF_IODONE_FUNC(bp)			((bp)->b_iodone)
 #define XFS_BUF_SET_IODONE_FUNC(bp, func)	((bp)->b_iodone = (func))
 #define XFS_BUF_CLR_IODONE_FUNC(bp)		((bp)->b_iodone = NULL)
@@ -393,8 +388,6 @@ static inline int XFS_bwrite(xfs_buf_t *bp)
 	return error;
 }
 
-#define XFS_bdwrite(bp)		xfs_buf_iostart(bp, XBF_DELWRI | XBF_ASYNC)
-
 static inline int xfs_bdwrite(void *mp, xfs_buf_t *bp)
 {
 	bp->b_strat = xfs_bdstrat_cb;
@@ -418,6 +411,9 @@ extern void xfs_free_buftarg(xfs_buftarg_t *, int);
 extern void xfs_wait_buftarg(xfs_buftarg_t *);
 extern int xfs_setsize_buftarg(xfs_buftarg_t *, unsigned int, unsigned int);
 extern int xfs_flush_buftarg(xfs_buftarg_t *, int);
+#ifdef CONFIG_KDB_MODULES
+extern struct list_head *xfs_get_buftarg_list(void);
+#endif
 
 #define xfs_getsize_buftarg(buftarg)	block_size((buftarg)->bt_bdev)
 #define xfs_readonly_buftarg(buftarg)	bdev_read_only((buftarg)->bt_bdev)

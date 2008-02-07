@@ -49,6 +49,7 @@
 #include "xfs_trans_space.h"
 #include "xfs_acl.h"
 #include "xfs_rw.h"
+#include "xfs_vnodeops.h"
 
 /*
  * xfs_attr.c
@@ -57,9 +58,9 @@
  */
 
 #define ATTR_SYSCOUNT	2
-STATIC struct attrnames posix_acl_access;
-STATIC struct attrnames posix_acl_default;
-STATIC struct attrnames *attr_system_names[ATTR_SYSCOUNT];
+static struct attrnames posix_acl_access;
+static struct attrnames posix_acl_default;
+static struct attrnames *attr_system_names[ATTR_SYSCOUNT];
 
 /*========================================================================
  * Function prototypes for the kernel.
@@ -91,7 +92,6 @@ STATIC int xfs_attr_refillstate(xfs_da_state_t *state);
 /*
  * Routines to manipulate out-of-line attribute values.
  */
-STATIC int xfs_attr_rmtval_get(xfs_da_args_t *args);
 STATIC int xfs_attr_rmtval_set(xfs_da_args_t *args);
 STATIC int xfs_attr_rmtval_remove(xfs_da_args_t *args);
 
@@ -157,10 +157,14 @@ xfs_attr_fetch(xfs_inode_t *ip, const char *name, int namelen,
 }
 
 int
-xfs_attr_get(bhv_desc_t *bdp, const char *name, char *value, int *valuelenp,
-	     int flags, struct cred *cred)
+xfs_attr_get(
+	xfs_inode_t	*ip,
+	const char	*name,
+	char		*value,
+	int		*valuelenp,
+	int		flags,
+	cred_t		*cred)
 {
-	xfs_inode_t	*ip = XFS_BHVTOI(bdp);
 	int		error, namelen;
 
 	XFS_STATS_INC(xs_attr_get);
@@ -180,7 +184,7 @@ xfs_attr_get(bhv_desc_t *bdp, const char *name, char *value, int *valuelenp,
 	return(error);
 }
 
-STATIC int
+int
 xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 		 char *value, int valuelen, int flags)
 {
@@ -200,18 +204,14 @@ xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 		return (error);
 
 	/*
-	 * Determine space new attribute will use, and if it would be
-	 * "local" or "remote" (note: local != inline).
-	 */
-	size = xfs_attr_leaf_newentsize(namelen, valuelen,
-					mp->m_sb.sb_blocksize, &local);
-
-	/*
 	 * If the inode doesn't have an attribute fork, add one.
 	 * (inode must not be locked when we call this routine)
 	 */
 	if (XFS_IFORK_Q(dp) == 0) {
-		if ((error = xfs_bmap_add_attrfork(dp, size, rsvd)))
+		int sf_size = sizeof(xfs_attr_sf_hdr_t) +
+			      XFS_ATTR_SF_ENTSIZE_BYNAME(namelen, valuelen);
+
+		if ((error = xfs_bmap_add_attrfork(dp, sf_size, rsvd)))
 			return(error);
 	}
 
@@ -231,6 +231,13 @@ xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 	args.whichfork = XFS_ATTR_FORK;
 	args.addname = 1;
 	args.oknoent = 1;
+
+	/*
+	 * Determine space new attribute will use, and if it would be
+	 * "local" or "remote" (note: local != inline).
+	 */
+	size = xfs_attr_leaf_newentsize(namelen, valuelen,
+					mp->m_sb.sb_blocksize, &local);
 
 	nblks = XFS_DAENTER_SPACE_RES(mp, XFS_ATTR_FORK);
 	if (local) {
@@ -326,8 +333,7 @@ xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 				xfs_trans_set_sync(args.trans);
 			}
 			err2 = xfs_trans_commit(args.trans,
-						 XFS_TRANS_RELEASE_LOG_RES,
-						 NULL);
+						 XFS_TRANS_RELEASE_LOG_RES);
 			xfs_iunlock(dp, XFS_ILOCK_EXCL);
 
 			/*
@@ -347,7 +353,7 @@ xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 		error = xfs_attr_shortform_to_leaf(&args);
 		if (!error) {
 			error = xfs_bmap_finish(&args.trans, args.flist,
-						*args.firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -395,8 +401,7 @@ xfs_attr_set_int(xfs_inode_t *dp, const char *name, int namelen,
 	 * Commit the last in the sequence of transactions.
 	 */
 	xfs_trans_log_inode(args.trans, dp, XFS_ILOG_CORE);
-	error = xfs_trans_commit(args.trans, XFS_TRANS_RELEASE_LOG_RES,
-				 NULL);
+	error = xfs_trans_commit(args.trans, XFS_TRANS_RELEASE_LOG_RES);
 	xfs_iunlock(dp, XFS_ILOCK_EXCL);
 
 	/*
@@ -417,10 +422,13 @@ out:
 }
 
 int
-xfs_attr_set(bhv_desc_t *bdp, const char *name, char *value, int valuelen, int flags,
-	     struct cred *cred)
+xfs_attr_set(
+	xfs_inode_t	*dp,
+	const char	*name,
+	char		*value,
+	int		valuelen,
+	int		flags)
 {
-	xfs_inode_t	*dp;
 	int             namelen;
 
 	namelen = strlen(name);
@@ -429,7 +437,6 @@ xfs_attr_set(bhv_desc_t *bdp, const char *name, char *value, int valuelen, int f
 
 	XFS_STATS_INC(xs_attr_set);
 
-	dp = XFS_BHVTOI(bdp);
 	if (XFS_FORCED_SHUTDOWN(dp->i_mount))
 		return (EIO);
 
@@ -440,7 +447,7 @@ xfs_attr_set(bhv_desc_t *bdp, const char *name, char *value, int valuelen, int f
  * Generic handler routine to remove a name from an attribute list.
  * Transitions attribute list from Btree to shortform as necessary.
  */
-STATIC int
+int
 xfs_attr_remove_int(xfs_inode_t *dp, const char *name, int namelen, int flags)
 {
 	xfs_da_args_t	args;
@@ -542,8 +549,7 @@ xfs_attr_remove_int(xfs_inode_t *dp, const char *name, int namelen, int flags)
 	 * Commit the last in the sequence of transactions.
 	 */
 	xfs_trans_log_inode(args.trans, dp, XFS_ILOG_CORE);
-	error = xfs_trans_commit(args.trans, XFS_TRANS_RELEASE_LOG_RES,
-				 NULL);
+	error = xfs_trans_commit(args.trans, XFS_TRANS_RELEASE_LOG_RES);
 	xfs_iunlock(dp, XFS_ILOCK_EXCL);
 
 	/*
@@ -564,10 +570,12 @@ out:
 }
 
 int
-xfs_attr_remove(bhv_desc_t *bdp, const char *name, int flags, struct cred *cred)
+xfs_attr_remove(
+	xfs_inode_t	*dp,
+	const char	*name,
+	int		flags)
 {
-	xfs_inode_t         *dp;
-	int                 namelen;
+	int		namelen;
 
 	namelen = strlen(name);
 	if (namelen >= MAXNAMELEN)
@@ -575,7 +583,6 @@ xfs_attr_remove(bhv_desc_t *bdp, const char *name, int flags, struct cred *cred)
 
 	XFS_STATS_INC(xs_attr_remove);
 
-	dp = XFS_BHVTOI(bdp);
 	if (XFS_FORCED_SHUTDOWN(dp->i_mount))
 		return (EIO);
 
@@ -591,6 +598,110 @@ xfs_attr_remove(bhv_desc_t *bdp, const char *name, int flags, struct cred *cred)
 	return xfs_attr_remove_int(dp, name, namelen, flags);
 }
 
+int								/* error */
+xfs_attr_list_int(xfs_attr_list_context_t *context)
+{
+	int error;
+	xfs_inode_t *dp = context->dp;
+
+	/*
+	 * Decide on what work routines to call based on the inode size.
+	 */
+	if (XFS_IFORK_Q(dp) == 0 ||
+	    (dp->i_d.di_aformat == XFS_DINODE_FMT_EXTENTS &&
+	     dp->i_d.di_anextents == 0)) {
+		error = 0;
+	} else if (dp->i_d.di_aformat == XFS_DINODE_FMT_LOCAL) {
+		error = xfs_attr_shortform_list(context);
+	} else if (xfs_bmap_one_block(dp, XFS_ATTR_FORK)) {
+		error = xfs_attr_leaf_list(context);
+	} else {
+		error = xfs_attr_node_list(context);
+	}
+	return error;
+}
+
+#define	ATTR_ENTBASESIZE		/* minimum bytes used by an attr */ \
+	(((struct attrlist_ent *) 0)->a_name - (char *) 0)
+#define	ATTR_ENTSIZE(namelen)		/* actual bytes used by an attr */ \
+	((ATTR_ENTBASESIZE + (namelen) + 1 + sizeof(u_int32_t)-1) \
+	 & ~(sizeof(u_int32_t)-1))
+
+/*
+ * Format an attribute and copy it out to the user's buffer.
+ * Take care to check values and protect against them changing later,
+ * we may be reading them directly out of a user buffer.
+ */
+/*ARGSUSED*/
+STATIC int
+xfs_attr_put_listent(xfs_attr_list_context_t *context, attrnames_t *namesp,
+		     char *name, int namelen,
+		     int valuelen, char *value)
+{
+	attrlist_ent_t *aep;
+	int arraytop;
+
+	ASSERT(!(context->flags & ATTR_KERNOVAL));
+	ASSERT(context->count >= 0);
+	ASSERT(context->count < (ATTR_MAX_VALUELEN/8));
+	ASSERT(context->firstu >= sizeof(*context->alist));
+	ASSERT(context->firstu <= context->bufsize);
+
+	arraytop = sizeof(*context->alist) +
+			context->count * sizeof(context->alist->al_offset[0]);
+	context->firstu -= ATTR_ENTSIZE(namelen);
+	if (context->firstu < arraytop) {
+		xfs_attr_trace_l_c("buffer full", context);
+		context->alist->al_more = 1;
+		context->seen_enough = 1;
+		return 1;
+	}
+
+	aep = (attrlist_ent_t *)&(((char *)context->alist)[ context->firstu ]);
+	aep->a_valuelen = valuelen;
+	memcpy(aep->a_name, name, namelen);
+	aep->a_name[ namelen ] = 0;
+	context->alist->al_offset[ context->count++ ] = context->firstu;
+	context->alist->al_count = context->count;
+	xfs_attr_trace_l_c("add", context);
+	return 0;
+}
+
+STATIC int
+xfs_attr_kern_list(xfs_attr_list_context_t *context, attrnames_t *namesp,
+		     char *name, int namelen,
+		     int valuelen, char *value)
+{
+	char *offset;
+	int arraytop;
+
+	ASSERT(context->count >= 0);
+
+	arraytop = context->count + namesp->attr_namelen + namelen + 1;
+	if (arraytop > context->firstu) {
+		context->count = -1;	/* insufficient space */
+		return 1;
+	}
+	offset = (char *)context->alist + context->count;
+	strncpy(offset, namesp->attr_name, namesp->attr_namelen);
+	offset += namesp->attr_namelen;
+	strncpy(offset, name, namelen);			/* real name */
+	offset += namelen;
+	*offset = '\0';
+	context->count += namesp->attr_namelen + namelen + 1;
+	return 0;
+}
+
+/*ARGSUSED*/
+STATIC int
+xfs_attr_kern_list_sizes(xfs_attr_list_context_t *context, attrnames_t *namesp,
+		     char *name, int namelen,
+		     int valuelen, char *value)
+{
+	context->count += namesp->attr_namelen + namelen + 1;
+	return 0;
+}
+
 /*
  * Generate a list of extended attribute names and optionally
  * also value lengths.  Positive return value follows the XFS
@@ -599,11 +710,14 @@ xfs_attr_remove(bhv_desc_t *bdp, const char *name, int flags, struct cred *cred)
  * success.
  */
 int
-xfs_attr_list(bhv_desc_t *bdp, char *buffer, int bufsize, int flags,
-		      attrlist_cursor_kern_t *cursor, struct cred *cred)
+xfs_attr_list(
+	xfs_inode_t	*dp,
+	char		*buffer,
+	int		bufsize,
+	int		flags,
+	attrlist_cursor_kern_t *cursor)
 {
 	xfs_attr_list_context_t context;
-	xfs_inode_t *dp;
 	int error;
 
 	XFS_STATS_INC(xs_attr_list);
@@ -615,72 +729,66 @@ xfs_attr_list(bhv_desc_t *bdp, char *buffer, int bufsize, int flags,
 		return(XFS_ERROR(EINVAL));
 	if ((cursor->initted == 0) &&
 	    (cursor->hashval || cursor->blkno || cursor->offset))
-		return(XFS_ERROR(EINVAL));
+		return XFS_ERROR(EINVAL);
 
 	/*
 	 * Check for a properly aligned buffer.
 	 */
 	if (((long)buffer) & (sizeof(int)-1))
-		return(XFS_ERROR(EFAULT));
+		return XFS_ERROR(EFAULT);
 	if (flags & ATTR_KERNOVAL)
 		bufsize = 0;
 
 	/*
 	 * Initialize the output buffer.
 	 */
-	context.dp = dp = XFS_BHVTOI(bdp);
+	context.dp = dp;
 	context.cursor = cursor;
 	context.count = 0;
 	context.dupcnt = 0;
 	context.resynch = 1;
 	context.flags = flags;
-	if (!(flags & ATTR_KERNAMELS)) {
+	context.seen_enough = 0;
+	context.alist = (attrlist_t *)buffer;
+	context.put_value = 0;
+
+	if (flags & ATTR_KERNAMELS) {
+		context.bufsize = bufsize;
+		context.firstu = context.bufsize;
+		if (flags & ATTR_KERNOVAL)
+			context.put_listent = xfs_attr_kern_list_sizes;
+		else
+			context.put_listent = xfs_attr_kern_list;
+	} else {
 		context.bufsize = (bufsize & ~(sizeof(int)-1));  /* align */
 		context.firstu = context.bufsize;
-		context.alist = (attrlist_t *)buffer;
 		context.alist->al_count = 0;
 		context.alist->al_more = 0;
 		context.alist->al_offset[0] = context.bufsize;
-	}
-	else {
-		context.bufsize = bufsize;
-		context.firstu = context.bufsize;
-		context.alist = (attrlist_t *)buffer;
+		context.put_listent = xfs_attr_put_listent;
 	}
 
 	if (XFS_FORCED_SHUTDOWN(dp->i_mount))
-		return (EIO);
+		return EIO;
 
 	xfs_ilock(dp, XFS_ILOCK_SHARED);
-	/*
-	 * Decide on what work routines to call based on the inode size.
-	 */
 	xfs_attr_trace_l_c("syscall start", &context);
-	if (XFS_IFORK_Q(dp) == 0 ||
-	    (dp->i_d.di_aformat == XFS_DINODE_FMT_EXTENTS &&
-	     dp->i_d.di_anextents == 0)) {
-		error = 0;
-	} else if (dp->i_d.di_aformat == XFS_DINODE_FMT_LOCAL) {
-		error = xfs_attr_shortform_list(&context);
-	} else if (xfs_bmap_one_block(dp, XFS_ATTR_FORK)) {
-		error = xfs_attr_leaf_list(&context);
-	} else {
-		error = xfs_attr_node_list(&context);
-	}
+
+	error = xfs_attr_list_int(&context);
+
 	xfs_iunlock(dp, XFS_ILOCK_SHARED);
 	xfs_attr_trace_l_c("syscall end", &context);
 
-	if (!(context.flags & (ATTR_KERNOVAL|ATTR_KERNAMELS))) {
-		ASSERT(error >= 0);
-	}
-	else {	/* must return negated buffer size or the error */
+	if (context.flags & (ATTR_KERNOVAL|ATTR_KERNAMELS)) {
+		/* must return negated buffer size or the error */
 		if (context.count < 0)
 			error = XFS_ERROR(ERANGE);
 		else
 			error = -context.count;
-	}
+	} else
+		ASSERT(error >= 0);
 
-	return(error);
+	return error;
 }
 
 int								/* error */
@@ -759,8 +867,7 @@ xfs_attr_inactive(xfs_inode_t *dp)
 	 * Commit the last in the sequence of transactions.
 	 */
 	xfs_trans_log_inode(trans, dp, XFS_ILOG_CORE);
-	error = xfs_trans_commit(trans, XFS_TRANS_RELEASE_LOG_RES,
-				 NULL);
+	error = xfs_trans_commit(trans, XFS_TRANS_RELEASE_LOG_RES);
 	xfs_iunlock(dp, XFS_ILOCK_EXCL);
 
 	return(error);
@@ -876,7 +983,7 @@ xfs_attr_leaf_addname(xfs_da_args_t *args)
 		error = xfs_attr_leaf_to_node(args);
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -977,7 +1084,6 @@ xfs_attr_leaf_addname(xfs_da_args_t *args)
 			if (!error) {
 				error = xfs_bmap_finish(&args->trans,
 							args->flist,
-							*args->firstblock,
 							&committed);
 			}
 			if (error) {
@@ -1055,7 +1161,7 @@ xfs_attr_leaf_removename(xfs_da_args_t *args)
 		/* bp is gone due to xfs_da_shrink_inode */
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -1122,19 +1228,19 @@ xfs_attr_leaf_list(xfs_attr_list_context_t *context)
 	context->cursor->blkno = 0;
 	error = xfs_da_read_buf(NULL, context->dp, 0, -1, &bp, XFS_ATTR_FORK);
 	if (error)
-		return(error);
+		return XFS_ERROR(error);
 	ASSERT(bp != NULL);
 	leaf = bp->data;
 	if (unlikely(be16_to_cpu(leaf->hdr.info.magic) != XFS_ATTR_LEAF_MAGIC)) {
 		XFS_CORRUPTION_ERROR("xfs_attr_leaf_list", XFS_ERRLEVEL_LOW,
 				     context->dp->i_mount, leaf);
 		xfs_da_brelse(NULL, bp);
-		return(XFS_ERROR(EFSCORRUPTED));
+		return XFS_ERROR(EFSCORRUPTED);
 	}
 
-	(void)xfs_attr_leaf_list_int(bp, context);
+	error = xfs_attr_leaf_list_int(bp, context);
 	xfs_da_brelse(NULL, bp);
-	return(0);
+	return XFS_ERROR(error);
 }
 
 
@@ -1210,7 +1316,6 @@ restart:
 			if (!error) {
 				error = xfs_bmap_finish(&args->trans,
 							args->flist,
-							*args->firstblock,
 							&committed);
 			}
 			if (error) {
@@ -1250,7 +1355,7 @@ restart:
 		error = xfs_da_split(state);
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -1362,7 +1467,6 @@ restart:
 			if (!error) {
 				error = xfs_bmap_finish(&args->trans,
 							args->flist,
-							*args->firstblock,
 							&committed);
 			}
 			if (error) {
@@ -1497,7 +1601,7 @@ xfs_attr_node_removename(xfs_da_args_t *args)
 		error = xfs_da_join(state);
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -1549,7 +1653,6 @@ xfs_attr_node_removename(xfs_da_args_t *args)
 			if (!error) {
 				error = xfs_bmap_finish(&args->trans,
 							args->flist,
-							*args->firstblock,
 							&committed);
 			}
 			if (error) {
@@ -1858,8 +1961,12 @@ xfs_attr_node_list(xfs_attr_list_context_t *context)
 			return(XFS_ERROR(EFSCORRUPTED));
 		}
 		error = xfs_attr_leaf_list_int(bp, context);
-		if (error || !leaf->hdr.info.forw)
-			break;	/* not really an error, buffer full or EOF */
+		if (error) {
+			xfs_da_brelse(NULL, bp);
+			return error;
+		}
+		if (context->seen_enough || leaf->hdr.info.forw == 0)
+			break;
 		cursor->blkno = be32_to_cpu(leaf->hdr.info.forw);
 		xfs_da_brelse(NULL, bp);
 		error = xfs_da_read_buf(NULL, context->dp, cursor->blkno, -1,
@@ -1886,7 +1993,7 @@ xfs_attr_node_list(xfs_attr_list_context_t *context)
  * Read the value associated with an attribute from the out-of-line buffer
  * that we stored it in.
  */
-STATIC int
+int
 xfs_attr_rmtval_get(xfs_da_args_t *args)
 {
 	xfs_bmbt_irec_t map[ATTR_RMTVALUE_MAPSIZE];
@@ -1989,7 +2096,7 @@ xfs_attr_rmtval_set(xfs_da_args_t *args)
 				  args->flist, NULL);
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -2145,7 +2252,7 @@ xfs_attr_rmtval_remove(xfs_da_args_t *args)
 				    NULL, &done);
 		if (!error) {
 			error = xfs_bmap_finish(&args->trans, args->flist,
-						*args->firstblock, &committed);
+						&committed);
 		}
 		if (error) {
 			ASSERT(committed);
@@ -2376,7 +2483,7 @@ posix_acl_default_exists(
 	return xfs_acl_vhasacl_default(vp);
 }
 
-STATIC struct attrnames posix_acl_access = {
+static struct attrnames posix_acl_access = {
 	.attr_name	= "posix_acl_access",
 	.attr_namelen	= sizeof("posix_acl_access") - 1,
 	.attr_get	= posix_acl_access_get,
@@ -2385,7 +2492,7 @@ STATIC struct attrnames posix_acl_access = {
 	.attr_exists	= posix_acl_access_exists,
 };
 
-STATIC struct attrnames posix_acl_default = {
+static struct attrnames posix_acl_default = {
 	.attr_name	= "posix_acl_default",
 	.attr_namelen	= sizeof("posix_acl_default") - 1,
 	.attr_get	= posix_acl_default_get,
@@ -2394,7 +2501,7 @@ STATIC struct attrnames posix_acl_default = {
 	.attr_exists	= posix_acl_default_exists,
 };
 
-STATIC struct attrnames *attr_system_names[] =
+static struct attrnames *attr_system_names[] =
 	{ &posix_acl_access, &posix_acl_default };
 
 
@@ -2406,7 +2513,7 @@ STATIC int
 attr_generic_set(
 	bhv_vnode_t *vp, char *name, void *data, size_t size, int xflags)
 {
-	return -bhv_vop_attr_set(vp, name, data, size, xflags, NULL);
+	return -xfs_attr_set(xfs_vtoi(vp), name, data, size, xflags);
 }
 
 STATIC int
@@ -2415,7 +2522,8 @@ attr_generic_get(
 {
 	int	error, asize = size;
 
-	error = bhv_vop_attr_get(vp, name, data, &asize, xflags, NULL);
+	error = xfs_attr_get(xfs_vtoi(vp), name, data,
+				    &asize, xflags, NULL);
 	if (!error)
 		return asize;
 	return -error;
@@ -2425,7 +2533,7 @@ STATIC int
 attr_generic_remove(
 	bhv_vnode_t *vp, char *name, int xflags)
 {
-	return -bhv_vop_attr_remove(vp, name, xflags, NULL);
+	return -xfs_attr_remove(xfs_vtoi(vp), name, xflags);
 }
 
 STATIC int
@@ -2480,7 +2588,7 @@ attr_generic_list(
 	attrlist_cursor_kern_t	cursor = { 0 };
 	int			error;
 
-	error = bhv_vop_attr_list(vp, data, size, xflags, &cursor, NULL);
+	error = xfs_attr_list(xfs_vtoi(vp), data, size, xflags, &cursor);
 	if (error > 0)
 		return -error;
 	*result = -error;

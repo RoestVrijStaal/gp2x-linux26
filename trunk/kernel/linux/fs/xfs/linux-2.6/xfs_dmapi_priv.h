@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2003,2005 Silicon Graphics, Inc.
+ * Copyright (c) 2000-2006 Silicon Graphics, Inc.
  * All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -15,10 +15,14 @@
  * along with this program; if not, write the Free Software Foundation,
  * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
-#ifndef __XFS_GLOBALS_H__
-#define __XFS_GLOBALS_H__
+#ifndef __XFS_DMAPI_PRIV_H__
+#define __XFS_DMAPI_PRIV_H__
 
-extern uint64_t	xfs_panic_mask;		/* set to cause more panics */
-extern struct cred *sys_cred;
+/*
+ *	Based on IO_ISDIRECT, decide which i_ flag is set.
+ */
+#define DM_SEM_FLAG_RD(ioflags) (((ioflags) & IO_ISDIRECT) ? \
+			      DM_FLAGS_IMUX : 0)
+#define DM_SEM_FLAG_WR	(DM_FLAGS_IALLOCSEM_WR | DM_FLAGS_IMUX)
 
-#endif	/* __XFS_GLOBALS_H__ */
+#endif /*__XFS_DMAPI_PRIV_H__*/
