@@ -27,8 +27,6 @@
 
 #include "ati_ids.h"
 
-static void radeon_reinitialize_M10(struct radeonfb_info *rinfo);
-
 /*
  * Workarounds for bugs in PC laptops:
  * - enable D2 sleep in some IBM Thinkpads
@@ -39,6 +37,8 @@ static void radeon_reinitialize_M10(struct radeonfb_info *rinfo);
  */
 
 #if defined(CONFIG_PM) && defined(CONFIG_X86)
+static void radeon_reinitialize_M10(struct radeonfb_info *rinfo);
+
 struct radeon_device_id {
         const char *ident;                     /* (arbitrary) Name */
         const unsigned short subsystem_vendor; /* Subsystem Vendor ID */
@@ -85,6 +85,9 @@ static struct radeon_device_id radeon_workaround_list[] = {
 	       radeon_pm_d2, NULL),
 	BUGFIX("Samsung P35",
 	       PCI_VENDOR_ID_SAMSUNG, 0xc00c,
+	       radeon_pm_off, radeon_reinitialize_M10),
+	BUGFIX("Acer Aspire 2010",
+	       PCI_VENDOR_ID_AI, 0x0061,
 	       radeon_pm_off, radeon_reinitialize_M10),
 	{ .ident = NULL }
 };
@@ -1259,7 +1262,7 @@ static void radeon_pm_full_reset_sdram(struct radeonfb_info *rinfo)
 	/* This is the code for the Aluminium PowerBooks M10 / iBooks M11 */
 	if (rinfo->family == CHIP_FAMILY_RV350) {
 		u32 sdram_mode_reg = rinfo->save_regs[35];
-		static u32 default_mrtable[] =
+		static const u32 default_mrtable[] =
 			{ 0x21320032,
 			  0x21321000, 0xa1321000, 0x21321000, 0xffffffff,
 			  0x21320032, 0xa1320032, 0x21320032, 0xffffffff,
@@ -1268,7 +1271,7 @@ static void radeon_pm_full_reset_sdram(struct radeonfb_info *rinfo)
 			  0x21320032, 0xa1320032, 0x21320032, 0xffffffff,
 			  0x31320032 };
 
-		u32 *mrtable = default_mrtable;
+		const u32 *mrtable = default_mrtable;
 		int i, mrtable_size = ARRAY_SIZE(default_mrtable);
 
 		mdelay(30);
@@ -1287,7 +1290,7 @@ static void radeon_pm_full_reset_sdram(struct radeonfb_info *rinfo)
 		if (rinfo->of_node != NULL) {
 			int size;
 
-			mrtable = (u32 *)get_property(rinfo->of_node, "ATY,MRT", &size);
+			mrtable = of_get_property(rinfo->of_node, "ATY,MRT", &size);
 			if (mrtable)
 				mrtable_size = size >> 2;
 			else
@@ -2621,25 +2624,28 @@ static int radeon_restore_pci_cfg(struct radeonfb_info *rinfo)
 }
 
 
-int radeonfb_pci_suspend(struct pci_dev *pdev, pm_message_t state)
+int radeonfb_pci_suspend(struct pci_dev *pdev, pm_message_t mesg)
 {
         struct fb_info *info = pci_get_drvdata(pdev);
         struct radeonfb_info *rinfo = info->par;
 	int i;
 
-	if (state.event == pdev->dev.power.power_state.event)
+	if (mesg.event == pdev->dev.power.power_state.event)
 		return 0;
 
-	printk(KERN_DEBUG "radeonfb (%s): suspending to state: %d...\n",
-	       pci_name(pdev), state.event);
+	printk(KERN_DEBUG "radeonfb (%s): suspending for event: %d...\n",
+	       pci_name(pdev), mesg.event);
 
 	/* For suspend-to-disk, we cheat here. We don't suspend anything and
 	 * let fbcon continue drawing until we are all set. That shouldn't
 	 * really cause any problem at this point, provided that the wakeup
 	 * code knows that any state in memory may not match the HW
 	 */
-	if (state.event == PM_EVENT_FREEZE)
+	switch (mesg.event) {
+	case PM_EVENT_FREEZE:		/* about to take snapshot */
+	case PM_EVENT_PRETHAW:		/* before restoring snapshot */
 		goto done;
+	}
 
 	acquire_console_sem();
 
@@ -2706,7 +2712,7 @@ int radeonfb_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 	release_console_sem();
 
  done:
-	pdev->dev.power.power_state = state;
+	pdev->dev.power.power_state = mesg;
 
 	return 0;
 }
@@ -2820,11 +2826,15 @@ void radeonfb_pm_init(struct radeonfb_info *rinfo, int dynclk, int ignore_devlis
 	rinfo->pm_reg = pci_find_capability(rinfo->pdev, PCI_CAP_ID_PM);
 
 	/* Enable/Disable dynamic clocks: TODO add sysfs access */
-	rinfo->dynclk = dynclk;
-	if (dynclk == 1) {
+	if (rinfo->family == CHIP_FAMILY_RS480)
+		rinfo->dynclk = -1;
+	else
+		rinfo->dynclk = dynclk;
+
+	if (rinfo->dynclk == 1) {
 		radeon_pm_enable_dynamic_mode(rinfo);
 		printk("radeonfb: Dynamic Clock Power Management enabled\n");
-	} else if (dynclk == 0) {
+	} else if (rinfo->dynclk == 0) {
 		radeon_pm_disable_dynamic_mode(rinfo);
 		printk("radeonfb: Dynamic Clock Power Management disabled\n");
 	}
