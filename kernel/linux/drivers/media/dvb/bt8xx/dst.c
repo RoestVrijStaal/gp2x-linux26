@@ -1161,7 +1161,7 @@ static int dst_get_device_id(struct dst_state *state)
 		}
 	}
 
-	if (i >= sizeof (dst_tlist) / sizeof (dst_tlist [0])) {
+	if (i >= ARRAY_SIZE(dst_tlist)) {
 		dprintk(verbose, DST_ERROR, 1, "Unable to recognize %s or %s", &state->rxbuffer[0], &state->rxbuffer[1]);
 		dprintk(verbose, DST_ERROR, 1, "please email linux-dvb@linuxtv.org with this type in");
 		use_dst_type = DST_TYPE_IS_SAT;
@@ -1652,7 +1652,7 @@ static int dst_set_frontend(struct dvb_frontend *fe, struct dvb_frontend_paramet
 static int dst_tune_frontend(struct dvb_frontend* fe,
 			    struct dvb_frontend_parameters* p,
 			    unsigned int mode_flags,
-			    int *delay,
+			    unsigned int *delay,
 			    fe_status_t *status)
 {
 	struct dst_state *state = fe->demodulator_priv;
@@ -1715,6 +1715,12 @@ static int dst_get_frontend(struct dvb_frontend *fe, struct dvb_frontend_paramet
 static void dst_release(struct dvb_frontend *fe)
 {
 	struct dst_state *state = fe->demodulator_priv;
+	if (state->dst_ca) {
+		dvb_unregister_device(state->dst_ca);
+#ifdef CONFIG_DVB_CORE_ATTACH
+		symbol_put(dst_ca_attach);
+#endif
+	}
 	kfree(state);
 }
 

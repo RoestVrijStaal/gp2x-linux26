@@ -1,4 +1,4 @@
-dvb-usb-objs = dvb-usb-firmware.o dvb-usb-init.o dvb-usb-urb.o dvb-usb-i2c.o dvb-usb-dvb.o dvb-usb-remote.o
+dvb-usb-objs = dvb-usb-firmware.o dvb-usb-init.o dvb-usb-urb.o dvb-usb-i2c.o dvb-usb-dvb.o dvb-usb-remote.o usb-urb.o
 obj-$(CONFIG_DVB_USB) += dvb-usb.o
 
 dvb-usb-vp7045-objs = vp7045.o vp7045-fe.o
@@ -30,10 +30,38 @@ obj-$(CONFIG_DVB_USB_NOVA_T_USB2) += dvb-usb-dibusb-common.o dvb-usb-nova-t-usb2
 dvb-usb-umt-010-objs = umt-010.o
 obj-$(CONFIG_DVB_USB_UMT_010) += dvb-usb-dibusb-common.o dvb-usb-umt-010.o
 
+dvb-usb-m920x-objs = m920x.o
+obj-$(CONFIG_DVB_USB_M920X) += dvb-usb-m920x.o
+
+dvb-usb-gl861-objs = gl861.o
+obj-$(CONFIG_DVB_USB_GL861) += dvb-usb-gl861.o
+
+dvb-usb-au6610-objs = au6610.o
+obj-$(CONFIG_DVB_USB_AU6610) += dvb-usb-au6610.o
+
 dvb-usb-digitv-objs = digitv.o
 obj-$(CONFIG_DVB_USB_DIGITV) += dvb-usb-digitv.o
 
 dvb-usb-cxusb-objs = cxusb.o
 obj-$(CONFIG_DVB_USB_CXUSB) += dvb-usb-cxusb.o
 
-EXTRA_CFLAGS = -Idrivers/media/dvb/dvb-core/ -Idrivers/media/dvb/frontends/
+dvb-usb-ttusb2-objs = ttusb2.o
+obj-$(CONFIG_DVB_USB_TTUSB2) += dvb-usb-ttusb2.o
+
+dvb-usb-dib0700-objs = dib0700_core.o dib0700_devices.o
+obj-$(CONFIG_DVB_USB_DIB0700) += dvb-usb-dib0700.o
+
+dvb-usb-opera-objs = opera1.o
+obj-$(CONFIG_DVB_USB_OPERA1) += dvb-usb-opera.o
+
+
+dvb-usb-af9005-objs = af9005.o af9005-fe.o
+obj-$(CONFIG_DVB_USB_AF9005) += dvb-usb-af9005.o
+
+dvb-usb-af9005-remote-objs = af9005-remote.o
+obj-$(CONFIG_DVB_USB_AF9005_REMOTE) += dvb-usb-af9005-remote.o
+
+EXTRA_CFLAGS += -Idrivers/media/dvb/dvb-core/ -Idrivers/media/dvb/frontends/
+# due to tuner-xc3028
+EXTRA_CFLAGS += -Idrivers/media/video
+

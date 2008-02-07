@@ -480,7 +480,7 @@ static int ca_send_message(struct dst_state *state, struct ca_msg *p_ca_message,
 	struct ca_msg *hw_buffer;
 	int result = 0;
 
-	if ((hw_buffer = (struct ca_msg *) kmalloc(sizeof (struct ca_msg), GFP_KERNEL)) == NULL) {
+	if ((hw_buffer = kmalloc(sizeof (struct ca_msg), GFP_KERNEL)) == NULL) {
 		dprintk(verbose, DST_CA_ERROR, 1, " Memory allocation failure");
 		return -ENOMEM;
 	}
@@ -699,12 +699,17 @@ static struct dvb_device dvbdev_ca = {
 	.fops = &dst_ca_fops
 };
 
-int dst_ca_attach(struct dst_state *dst, struct dvb_adapter *dvb_adapter)
+struct dvb_device *dst_ca_attach(struct dst_state *dst, struct dvb_adapter *dvb_adapter)
 {
 	struct dvb_device *dvbdev;
+
 	dprintk(verbose, DST_CA_ERROR, 1, "registering DST-CA device");
-	dvb_register_device(dvb_adapter, &dvbdev, &dvbdev_ca, dst, DVB_DEVICE_CA);
-	return 0;
+	if (dvb_register_device(dvb_adapter, &dvbdev, &dvbdev_ca, dst, DVB_DEVICE_CA) == 0) {
+		dst->dst_ca = dvbdev;
+		return dst->dst_ca;
+	}
+
+	return NULL;
 }
 
 EXPORT_SYMBOL(dst_ca_attach);

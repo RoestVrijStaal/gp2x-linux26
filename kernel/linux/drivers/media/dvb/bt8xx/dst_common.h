@@ -22,7 +22,6 @@
 #ifndef DST_COMMON_H
 #define DST_COMMON_H
 
-#include <linux/smp_lock.h>
 #include <linux/dvb/frontend.h>
 #include <linux/device.h>
 #include <linux/mutex.h>
@@ -140,6 +139,7 @@ struct dst_state {
 	char *tuner_name;
 	struct mutex dst_mutex;
 	u8 fw_name[8];
+	struct dvb_device *dst_ca;
 };
 
 struct tuner_types {
@@ -178,7 +178,7 @@ int write_dst(struct dst_state *state, u8 * data, u8 len);
 int read_dst(struct dst_state *state, u8 * ret, u8 len);
 u8 dst_check_sum(u8 * buf, u32 len);
 struct dst_state* dst_attach(struct dst_state* state, struct dvb_adapter *dvb_adapter);
-int dst_ca_attach(struct dst_state *state, struct dvb_adapter *dvb_adapter);
+struct dvb_device *dst_ca_attach(struct dst_state *state, struct dvb_adapter *dvb_adapter);
 int dst_gpio_outb(struct dst_state* state, u32 mask, u32 enbb, u32 outhigh, int delay);
 
 int dst_command(struct dst_state* state, u8 * data, u8 len);
