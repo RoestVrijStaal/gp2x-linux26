@@ -30,24 +30,25 @@ the beginning of each description states the restrictions within which a
 parameter is applicable:
 
 	ACPI	ACPI support is enabled.
+	AGP	AGP (Accelerated Graphics Port) is enabled.
 	ALSA	ALSA sound support is enabled.
 	APIC	APIC support is enabled.
 	APM	Advanced Power Management support is enabled.
 	AX25	Appropriate AX.25 support is enabled.
-	CD	Appropriate CD support is enabled.
+	BLACKFIN Blackfin architecture is enabled.
 	DRM	Direct Rendering Management support is enabled.
 	EDD	BIOS Enhanced Disk Drive Services (EDD) is enabled
 	EFI	EFI Partitioning (GPT) is enabled
 	EIDE	EIDE/ATAPI support is enabled.
 	FB	The frame buffer device is enabled.
 	HW	Appropriate hardware is enabled.
-	IA-32	IA-32 aka i386 architecture is enabled.
 	IA-64	IA-64 architecture is enabled.
 	IOSCHED	More than one I/O scheduler is enabled.
 	IP_PNP	IP DHCP, BOOTP, or RARP is enabled.
 	ISAPNP	ISA PnP code is enabled.
 	ISDN	Appropriate ISDN support is enabled.
 	JOY	Appropriate joystick support is enabled.
+	LIBATA  Libata driver is enabled
 	LP	Printer support is enabled.
 	LOOP	Loopback device support is enabled.
 	M68k	M68k architecture is enabled.
@@ -57,27 +58,32 @@ parameter is applicable:
 	MDA	MDA console support is enabled.
 	MOUSE	Appropriate mouse support is enabled.
 	MSI	Message Signaled Interrupts (PCI).
-	MTD	MTD support is enabled.
+	MTD	MTD (Memory Technology Device) support is enabled.
 	NET	Appropriate network support is enabled.
 	NUMA	NUMA support is enabled.
 	GENERIC_TIME The generic timeofday code is enabled.
 	NFS	Appropriate NFS support is enabled.
 	OSS	OSS sound support is enabled.
-	PARIDE	The ParIDE subsystem is enabled.
+	PV_OPS	A paravirtualized kernel is enabled.
+	PARIDE	The ParIDE (parallel port IDE) subsystem is enabled.
 	PARISC	The PA-RISC architecture is enabled.
 	PCI	PCI bus support is enabled.
+	PCIE	PCI Express support is enabled.
 	PCMCIA	The PCMCIA subsystem is enabled.
 	PNP	Plug & Play support is enabled.
 	PPC	PowerPC architecture is enabled.
 	PPT	Parallel port support is enabled.
 	PS2	Appropriate PS/2 support is enabled.
 	RAM	RAM disk support is enabled.
+	ROOTPLUG The example Root Plug LSM is enabled.
 	S390	S390 architecture is enabled.
 	SCSI	Appropriate SCSI support is enabled.
 			A lot of drivers has their options described inside of
 			Documentation/scsi/.
+	SECURITY Different security models are enabled.
 	SELINUX SELinux support is enabled.
 	SERIAL	Serial support is enabled.
+	SH	SuperH architecture is enabled.
 	SMP	The kernel is an SMP kernel.
 	SPARC	Sparc architecture is enabled.
 	SWSUSP	Software suspend is enabled.
@@ -89,6 +95,7 @@ parameter is applicable:
 	VT	Virtual terminal support is enabled.
 	WDT	Watchdog support is enabled.
 	XT	IBM PC/XT MFM hard disk support is enabled.
+	X86-32	X86-32, aka i386 architecture is enabled.
 	X86-64	X86-64 architecture is enabled.
 			More X86-64 boot options can be found in
 			Documentation/x86_64/boot-options.txt .
@@ -104,17 +111,24 @@ loader, and have no meaning to the kernel directly.
 Do not modify the syntax of boot loader parameters without extreme
 need or coordination with <Documentation/i386/boot.txt>.
 
+There are also arch-specific kernel-parameters not documented here.
+See for example <Documentation/x86_64/boot-options.txt>.
+
 Note that ALL kernel parameters listed below are CASE SENSITIVE, and that
 a trailing = on the name of any parameter states that that parameter will
 be entered as an environment variable, whereas its absence indicates that
 it will appear as a kernel argument readable via /proc/cmdline by programs
 running once the system is up.
 
-	53c7xx=		[HW,SCSI] Amiga SCSI controllers
-			See header of drivers/scsi/53c7xx.c.
-			See also Documentation/scsi/ncr53c7xx.txt.
+The number of kernel parameters is not limited, but the length of the
+complete command line (parameters including spaces etc.) is limited to
+a fixed number of characters. This limit depends on the architecture
+and is between 256 and 4096 characters. It is defined in the file
+./include/asm/setup.h as COMMAND_LINE_SIZE.
 
-	acpi=		[HW,ACPI] Advanced Configuration and Power Interface
+
+	acpi=		[HW,ACPI,X86-64,i386]
+			Advanced Configuration and Power Interface
 			Format: { force | off | ht | strict | noirq }
 			force -- enable ACPI if default was off
 			off -- disable ACPI if default was on
@@ -124,6 +138,12 @@ running once the system is up.
 				strictly ACPI specification compliant.
 
 			See also Documentation/pm.txt, pci=noacpi
+
+	acpi_apic_instance=	[ACPI, IOAPIC]
+			Format: <int>
+			2: use 2nd APIC table, if available
+			1,0: use 1st APIC table
+			default: 0
 
 	acpi_sleep=	[HW,ACPI] Sleep options
 			Format: { s3_bios, s3_mode }
@@ -147,42 +167,71 @@ running once the system is up.
 	acpi_irq_isa=	[HW,ACPI] If irq_balance, mark listed IRQs used by ISA
 			Format: <irq>,<irq>...
 
+	acpi_no_auto_ssdt	[HW,ACPI] Disable automatic loading of SSDT
+
 	acpi_os_name=	[HW,ACPI] Tell ACPI BIOS the name of the OS
 			Format: To spoof as Windows 98: ="Microsoft Windows"
 
-	acpi_osi=	[HW,ACPI] empty param disables _OSI
+	acpi_osi=	[HW,ACPI] Modify list of supported OS interface strings
+			acpi_osi="string1"	# add string1 -- only one string
+			acpi_osi="!string2"	# remove built-in string2
+			acpi_osi=		# disable all strings
 
 	acpi_serialize	[HW,ACPI] force serialization of AML methods
 
 	acpi_skip_timer_override [HW,ACPI]
 			Recognize and ignore IRQ0/pin2 Interrupt Override.
 			For broken nForce2 BIOS resulting in XT-PIC timer.
+	acpi_use_timer_override [HW,ACPI}
+			Use timer override. For some broken Nvidia NF5 boards
+			that require a timer override, but don't have
+			HPET
 
-	acpi_dbg_layer=	[HW,ACPI]
+	acpi.debug_layer=	[HW,ACPI]
 			Format: <int>
 			Each bit of the <int> indicates an ACPI debug layer,
 			1: enable, 0: disable. It is useful for boot time
 			debugging. After system has booted up, it can be set
-			via /proc/acpi/debug_layer.
+			via /sys/module/acpi/parameters/debug_layer.
+			CONFIG_ACPI_DEBUG must be enabled for this to produce any output.
+			Available bits (add the numbers together) to enable debug output
+			for specific parts of the ACPI subsystem:
+			0x01 utilities 0x02 hardware 0x04 events 0x08 tables
+			0x10 namespace 0x20 parser 0x40 dispatcher
+			0x80 executer 0x100 resources 0x200 acpica debugger
+			0x400 os services 0x800 acpica disassembler.
+			The number can be in decimal or prefixed with 0x in hex.
+			Warning: Many of these options can produce a lot of
+			output and make your system unusable. Be very careful.
 
-	acpi_dbg_level=	[HW,ACPI]
+	acpi.debug_level=	[HW,ACPI]
 			Format: <int>
 			Each bit of the <int> indicates an ACPI debug level,
 			1: enable, 0: disable. It is useful for boot time
 			debugging. After system has booted up, it can be set
-			via /proc/acpi/debug_level.
+			via /sys/module/acpi/parameters/debug_level.
+			CONFIG_ACPI_DEBUG must be enabled for this to produce any output.
+			Available bits (add the numbers together) to enable different
+			debug output levels of the ACPI subsystem:
+			0x01 error 0x02 warn 0x04 init 0x08 debug object
+			0x10 info 0x20 init names 0x40 parse 0x80 load
+			0x100 dispatch 0x200 execute 0x400 names 0x800 operation region
+			0x1000 bfield 0x2000 tables 0x4000 values 0x8000 objects
+			0x10000 resources 0x20000 user requests 0x40000 package.
+			The number can be in decimal or prefixed with 0x in hex.
+			Warning: Many of these options can produce a lot of
+			output and make your system unusable. Be very careful.
 
-	acpi_fake_ecdt	[HW,ACPI] Workaround failure due to BIOS lacking ECDT
-
-	acpi_generic_hotkey [HW,ACPI]
-			Allow consolidated generic hotkey driver to
-			override platform specific driver.
-			See also Documentation/acpi-hotkey.txt.
-
-	acpi_pm_good	[IA-32,X86-64]
+	acpi_pm_good	[X86-32,X86-64]
 			Override the pmtimer bug detection: force the kernel
 			to assume that this machine's pmtimer latches its value
 			and always returns good values.
+
+	agp=		[AGP]
+			{ off | try_unsupported }
+			off: disable AGP support
+			try_unsupported: try to drive unsupported chipsets
+				(may crash computer or cause data corruption)
 
 	enable_timer_pin_1 [i386,x86-64]
 			Enable PIN 1 of APIC timer
@@ -194,15 +243,8 @@ running once the system is up.
 			Disable PIN 1 of APIC timer
 			Can be useful to work around chipset bugs.
 
-	ad1816=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>
-			See also Documentation/sound/oss/AD1816.
-
 	ad1848=		[HW,OSS]
 			Format: <io>,<irq>,<dma>,<dma2>,<type>
-
-	adlib=		[HW,OSS]
-			Format: <io>
 
 	advansys=	[HW,SCSI]
 			See header of drivers/scsi/advansys.c.
@@ -243,16 +285,14 @@ running once the system is up.
 			not play well with APC CPU idle - disable it if you have
 			APC and your system crashes randomly.
 
-	apic=		[APIC,i386] Change the output verbosity whilst booting
+	apic=		[APIC,i386] Advanced Programmable Interrupt Controller
+			Change the output verbosity whilst booting
 			Format: { quiet (default) | verbose | debug }
 			Change the amount of debugging information output
 			when initialising the APIC and IO-APIC components.
 
 	apm=		[APM] Advanced Power Management
 			See header of arch/i386/kernel/apm.c.
-
-	applicom=	[HW]
-			Format: <mem>,<irq>
 
 	arcrimi=	[HW,NET] ARCnet - "RIM I" (entirely mem-mapped) cards
 			Format: <io>,<irq>,<nodeID>
@@ -282,12 +322,6 @@ running once the system is up.
 
 	autotest	[IA64]
 
-	awe=		[HW,OSS] AWE32/SB32/AWE64 wave table synth
-			Format: <io>,<memsize>,<isapnp>
-
-	aztcd=		[HW,CD] Aztech CD268 CDROM driver
-			Format: <io>,0x79 (?)
-
 	baycom_epp=	[HW,AX25]
 			Format: <io>,<mode>
 
@@ -305,11 +339,10 @@ running once the system is up.
 			Format: <io>,<irq>,<mode>
 			See header of drivers/net/hamradio/baycom_ser_hdx.c.
 
-	blkmtd_device=	[HW,MTD]
-	blkmtd_erasesz=
-	blkmtd_ro=
-	blkmtd_bs=
-	blkmtd_count=
+	boot_delay=	Milliseconds to delay each printk during boot.
+			Values larger than 10 seconds (10000) are changed to
+			no delay (0).
+			Format: integer
 
 	bttv.card=	[HW,V4L] bttv (bt848 + bt878 based grabber cards)
 	bttv.radio=	Most important insmod options are available as
@@ -323,16 +356,18 @@ running once the system is up.
 
 	c101=		[NET] Moxa C101 synchronous serial card
 
-	cachesize=	[BUGS=IA-32] Override level 2 CPU cache size detection.
+	cachesize=	[BUGS=X86-32] Override level 2 CPU cache size detection.
 			Sometimes CPU hardware bugs make them report the cache
 			size incorrectly. The kernel will attempt work arounds
 			to fix known problems, but for some CPUs it is not
 			possible to determine what the correct size should be.
 			This option provides an override for these situations.
 
-	cdu31a=		[HW,CD]
-			Format: <io>,<irq>[,PAS]
-			See header of drivers/cdrom/cdu31a.c.
+	capability.disable=
+			[SECURITY] Disable capabilities.  This would normally
+			be used only if an alternative security model is to be
+			configured.  Potentially dangerous and should only be
+			used if you are entirely sure of the consequences.
 
 	chandev=	[HW,NET] Generic channel device initialisation
 
@@ -346,12 +381,37 @@ running once the system is up.
 			Value can be changed at runtime via
 				/selinux/checkreqprot.
 
-	clock=		[BUGS=IA-32, HW] gettimeofday clocksource override.
+	clock=		[BUGS=X86-32, HW] gettimeofday clocksource override.
 			[Deprecated]
-			Forces specified clocksource (if avaliable) to be used
+			Forces specified clocksource (if available) to be used
 			when calculating gettimeofday(). If specified
-			clocksource is not avalible, it defaults to PIT.
+			clocksource is not available, it defaults to PIT.
 			Format: { pit | tsc | cyclone | pmtmr }
+
+	clocksource=	[GENERIC_TIME] Override the default clocksource
+			Format: <string>
+			Override the default clocksource and use the clocksource
+			with the name specified.
+			Some clocksource names to choose from, depending on
+			the platform:
+			[all] jiffies (this is the base, fallback clocksource)
+			[ACPI] acpi_pm
+			[ARM] imx_timer1,OSTS,netx_timer,mpu_timer2,
+				pxa_timer,timer3,32k_counter,timer0_1
+			[AVR32] avr32
+			[X86-32] pit,hpet,tsc,vmi-timer;
+				scx200_hrt on Geode; cyclone on IBM x440
+			[MIPS] MIPS
+			[PARISC] cr16
+			[S390] tod
+			[SH] SuperH
+			[SPARC64] tick
+			[X86-64] hpet,tsc
+
+	code_bytes	[IA32] How many bytes of object code to print in an
+			oops report.
+			Range: 0 - 8192
+			Default: 64
 
 	disable_8254_timer
 	enable_8254_timer
@@ -359,11 +419,11 @@ running once the system is up.
 			over the 8254 in addition to over the IO-APIC. The
 			kernel tries to set a sensible default.
 
-	hpet=		[IA-32,HPET] option to disable HPET and use PIT.
-			Format: disable
-
-	cm206=		[HW,CD]
-			Format: { auto | [<io>,][<irq>] }
+	hpet=		[X86-32,HPET] option to control HPET usage
+			Format: { enable (default) | disable | force }
+			disable: disable HPET and use PIT instead
+			force: allow force enabled of undocumented chips (ICH4,
+			VIA, nVidia)
 
 	com20020=	[HW,NET] ARCnet - COM20020 chipset
 			Format:
@@ -396,23 +456,44 @@ running once the system is up.
 			Documentation/networking/netconsole.txt for an
 			alternative.
 
-		uart,io,<addr>[,options]
-		uart,mmio,<addr>[,options]
+		uart[8250],io,<addr>[,options]
+		uart[8250],mmio,<addr>[,options]
 			Start an early, polled-mode console on the 8250/16550
 			UART at the specified I/O port or MMIO address,
 			switching to the matching ttyS device later.  The
 			options are the same as for ttyS, above.
 
+	earlycon=	[KNL] Output early console device and options.
+		uart[8250],io,<addr>[,options]
+		uart[8250],mmio,<addr>[,options]
+			Start an early, polled-mode console on the 8250/16550
+			UART at the specified I/O port or MMIO address.
+			The options are the same as for ttyS, above.
+
+	no_console_suspend
+			[HW] Never suspend the console
+			Disable suspending of consoles during suspend and
+			hibernate operations.  Once disabled, debugging
+			messages can reach various consoles while the rest
+			of the system is being put to sleep (ie, while
+			debugging driver suspend/resume hooks).  This may
+			not work reliably with all consoles, but is known
+			to work with serial and VGA consoles.
+
 	cpcihp_generic=	[HW,PCI] Generic port I/O CompactPCI driver
 			Format:
 			<first_slot>,<last_slot>,<port>,<enum_bit>[,<debug>]
 
-	cpia_pp=	[HW,PPT]
-			Format: { parport<nr> | auto | none }
-
 	crashkernel=nn[KMG]@ss[KMG]
 			[KNL] Reserve a chunk of physical memory to
 			hold a kernel to switch to with kexec on panic.
+
+	crashkernel=range1:size1[,range2:size2,...][@offset]
+			[KNL] Same as above, but depends on the memory
+			in the running system. The syntax of range is
+			start-[end] where start and end are both
+			a memory unit (amount[KMG]). See also
+			Documentation/kdump/kdump.txt for a example.
 
 	cs4232=		[HW,OSS]
 			Format: <io>,<irq>,<dma>,<dma2>,<mpuio>,<mpuirq>
@@ -422,8 +503,6 @@ running once the system is up.
 
 	cs89x0_media=	[HW,NET]
 			Format: { rj45 | aui | bnc }
-
-	cyclades=	[HW,SERIAL] Cyclades multi-serial port adapter.
 
 	dasd=		[HW,NET]
 			See header of drivers/s390/block/dasd_devmap.c.
@@ -448,6 +527,31 @@ running once the system is up.
 			Format: <area>[,<node>]
 			See also Documentation/networking/decnet.txt.
 
+	vt.default_blu=	[VT]
+			Format: <blue0>,<blue1>,<blue2>,...,<blue15>
+			Change the default blue palette of the console.
+			This is a 16-member array composed of values
+			ranging from 0-255.
+
+	vt.default_grn=	[VT]
+			Format: <green0>,<green1>,<green2>,...,<green15>
+			Change the default green palette of the console.
+			This is a 16-member array composed of values
+			ranging from 0-255.
+
+	vt.default_red=	[VT]
+			Format: <red0>,<red1>,<red2>,...,<red15>
+			Change the default red palette of the console.
+			This is a 16-member array composed of values
+			ranging from 0-255.
+
+	vt.default_utf8=
+			[VT]
+			Format=<0|1>
+			Set system-wide default UTF-8 mode for all tty's.
+			Default is 1, i.e. UTF-8 mode is enabled for all
+			newly opened terminals.
+
 	dhash_entries=	[KNL]
 			Set number of hash buckets for dentry cache.
 
@@ -458,17 +562,13 @@ running once the system is up.
 			See drivers/char/README.epca and
 			Documentation/digiepca.txt.
 
-	dmascc=		[HW,AX25,SERIAL] AX.25 Z80SCC driver with DMA
-			support available.
-			Format: <io_dev0>[,<io_dev1>[,..<io_dev32>]]
-
 	dmasound=	[HW,OSS] Sound subsystem buffers
 
 	dscc4.setup=	[NET]
 
 	dtc3181e=	[HW,SCSI]
 
-	earlyprintk=	[IA-32,X86-64]
+	earlyprintk=	[X86-32,X86-64,SH,BLACKFIN]
 			earlyprintk=vga
 			earlyprintk=serial[,ttySn[,baudrate]]
 
@@ -487,26 +587,14 @@ running once the system is up.
 
 	eata=		[HW,SCSI]
 
-	ec_intr=	[HW,ACPI] ACPI Embedded Controller interrupt mode
-			Format: <int>
-			0: polling mode
-			non-0: interrupt mode (default)
-
-	eda=		[HW,PS2]
-
-	edb=		[HW,PS2]
-
 	edd=		[EDD]
 			Format: {"of[f]" | "sk[ipmbr]"}
 			See comment in arch/i386/boot/edd.S
 
-	eicon=		[HW,ISDN]
-			Format: <id>,<membase>,<irq>
-
 	eisa_irq_edge=	[PARISC,HW]
 			See header of drivers/parisc/eisa.c.
 
-	elanfreq=	[IA-32]
+	elanfreq=	[X86-32]
 			See comment before function elanfreq_setup() in
 			arch/i386/kernel/cpu/cpufreq/elanfreq.c.
 
@@ -515,7 +603,7 @@ running once the system is up.
 			See Documentation/block/as-iosched.txt and
 			Documentation/block/deadline-iosched.txt for details.
 
-	elfcorehdr=	[IA-32, X86_64]
+	elfcorehdr=	[X86-32, X86_64]
 			Specifies physical address of start of kernel core
 			image elf header. Generally kexec loader will
 			pass this option to capture kernel.
@@ -529,10 +617,6 @@ running once the system is up.
 			Default value is 0.
 			Value can be changed at runtime via /selinux/enforce.
 
-	es1370=		[HW,OSS]
-			Format: <lineout>[,<micbias>]
-			See also header of sound/oss/es1370.c.
-
 	es1371=		[HW,OSS]
 			Format: <spdif>,[<nomix>,[<amplifier>]]
 			See also header of sound/oss/es1371.c.
@@ -544,6 +628,13 @@ running once the system is up.
 	eurwdt=		[HW,WDT] Eurotech CPU-1220/1410 onboard watchdog.
 			Format: <io>[,<irq>]
 
+	failslab=
+	fail_page_alloc=
+	fail_make_request=[KNL]
+			General fault injection mechanism.
+			Format: <interval>,<probability>,<space>,<times>
+			See also /Documentation/fault-injection/.
+
 	fd_mcs=		[HW,SCSI]
 			See header of drivers/scsi/fd_mcs.c.
 
@@ -552,9 +643,6 @@ running once the system is up.
 
 	floppy=		[HW]
 			See Documentation/floppy.txt.
-
-	ftape=		[HW] Floppy Tape subsystem debugging options.
-			See Documentation/ftape.txt.
 
 	gamecon.map[2|3]=
 			[HW,JOY] Multisystem joystick and NES/SNES/PSX pad
@@ -569,14 +657,6 @@ running once the system is up.
 
 	gpt		[EFI] Forces disk with valid GPT signature but
 			invalid Protective MBR to be treated as GPT.
-
-	gscd=		[HW,CD]
-			Format: <io>
-
-	gt96100eth=	[NET] MIPS GT96100 Advanced Communication Controller
-
-	gus=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma16>
 
 	gvp11=		[HW,SCSI]
 
@@ -598,16 +678,18 @@ running once the system is up.
 			highmem otherwise. This also works to reduce highmem
 			size on bigger boxes.
 
+	highres=	[KNL] Enable/disable high resolution timer mode.
+			Valid parameters: "on", "off"
+			Default: "on"
+
 	hisax=		[HW,ISDN]
 			See Documentation/isdn/README.HiSax.
 
-	hugepages=	[HW,IA-32,IA-64] Maximal number of HugeTLB pages.
-
-	noirqbalance	[IA-32,SMP,KNL] Disable kernel irq balancing
+	hugepages=	[HW,X86-32,IA-64] Maximal number of HugeTLB pages.
 
 	i8042.direct	[HW] Put keyboard port into non-translated mode
-	i8042.dumbkbd	[HW] Pretend that controlled can only read data from
-			     keyboard and can not control its state
+	i8042.dumbkbd	[HW] Pretend that controller can only read data from
+			     keyboard and cannot control its state
 			     (Don't attempt to blink the leds)
 	i8042.noaux	[HW] Don't check for auxiliary (== mouse) port
 	i8042.nokbd	[HW] Don't check/create keyboard port
@@ -651,8 +733,19 @@ running once the system is up.
 	idebus=		[HW] (E)IDE subsystem - VLB/PCI bus speed
 			See Documentation/ide.txt.
 
-	idle=		[HW]
-			Format: idle=poll or idle=halt
+	idle=		[X86]
+			Format: idle=poll or idle=mwait
+			Poll forces a polling idle loop that can slightly improves the performance
+			of waking up a idle CPU, but will use a lot of power and make the system
+			run hot. Not recommended.
+			idle=mwait. On systems which support MONITOR/MWAIT but the kernel chose
+			to not use it because it doesn't save as much power as a normal idle
+			loop use the MONITOR/MWAIT idle loop anyways. Performance should be the same
+			as idle=poll.
+
+	ignore_loglevel	[KNL]
+			Ignore loglevel setting - this will print /all/
+			kernel messages to the console. Useful for debugging.
 
 	ihash_entries=	[KNL]
 			Set number of hash buckets for inode cache.
@@ -674,15 +767,24 @@ running once the system is up.
 	inport.irq=	[HW] Inport (ATI XL and Microsoft) busmouse driver
 			Format: <irq>
 
-	combined_mode=	[HW] control which driver uses IDE ports in combined
-			mode: legacy IDE driver, libata, or both
-			(in the libata case, libata.atapi_enabled=1 may be
-			useful as well).  Note that using the ide or libata
-			options may affect your device naming (e.g. by
-			changing hdc to sdb).
-			Format: combined (default), ide, or libata
-
 	inttest=	[IA64]
+
+	intel_iommu=	[DMAR] Intel IOMMU driver (DMAR) option
+		off
+			Disable intel iommu driver.
+		igfx_off [Default Off]
+			By default, gfx is mapped as normal device. If a gfx
+			device has a dedicated DMAR unit, the DMAR unit is
+			bypassed by not enabling DMAR with this option. In
+			this case, gfx device will use physical address for
+			DMA.
+		forcedac [x86_64]
+			With this option iommu will not optimize to look
+			for io virtual address below 32 bit forcing dual
+			address cycle on pci bus for cards supporting greater
+			than 32 bit addressing. The default is to look
+			for translation below 32 bit and if not available
+			then look in the higher range.
 
 	io7=		[HW] IO7 for Marvel based alpha systems
 			See comment before marvel_specify_io7 in
@@ -692,7 +794,8 @@ running once the system is up.
 			See Documentation/nfsroot.txt.
 
 	ip2=		[HW] Set IO/IRQ pairs for up to 4 IntelliPort boards
-			See comment before ip2_setup() in drivers/char/ip2.c.
+			See comment before ip2_setup() in
+			drivers/char/ip2/ip2base.c.
 
 	ips=		[HW,SCSI] Adaptec / IBM ServeRAID controller
 			See header of drivers/scsi/ips.c.
@@ -718,7 +821,12 @@ running once the system is up.
 			Format: <RDP>,<reset>,<pci_scan>,<verbosity>
 
 	isolcpus=	[KNL,SMP] Isolate CPUs from the general scheduler.
-			Format: <cpu number>,...,<cpu number>
+			Format:
+			<cpu number>,...,<cpu number>
+			or
+			<cpu number>-<cpu number>  (must be a positive range in ascending order)
+			or a mixture
+			<cpu number>,...,<cpu number>-<cpu number>
 			This option can be used to specify one or more CPUs
 			to isolate from the general SMP balancing and scheduling
 			algorithms. The only way to move a process onto or off
@@ -731,29 +839,61 @@ running once the system is up.
 			tasks in the system -- can cause problems and
 			suboptimal load balancer performance.
 
-	isp16=		[HW,CD]
-			Format: <io>,<irq>,<dma>,<setup>
-
 	iucv=		[HW,NET]
 
 	js=		[HW,JOY] Analog joystick
 			See Documentation/input/joystick.txt.
 
+	kernelcore=nn[KMG]	[KNL,X86-32,IA-64,PPC,X86-64] This parameter
+			specifies the amount of memory usable by the kernel
+			for non-movable allocations.  The requested amount is
+			spread evenly throughout all nodes in the system. The
+			remaining memory in each node is used for Movable
+			pages. In the event, a node is too small to have both
+			kernelcore and Movable pages, kernelcore pages will
+			take priority and other nodes will have a larger number
+			of kernelcore pages.  The Movable zone is used for the
+			allocation of pages that may be reclaimed or moved
+			by the page migration subsystem.  This means that
+			HugeTLB pages may not be allocated from this zone.
+			Note that allocations like PTEs-from-HighMem still
+			use the HighMem zone if it exists, and the Normal
+			zone if it does not.
+
+	movablecore=nn[KMG]	[KNL,X86-32,IA-64,PPC,X86-64] This parameter
+			is similar to kernelcore except it specifies the
+			amount of memory used for migratable allocations.
+			If both kernelcore and movablecore is specified,
+			then kernelcore will be at *least* the specified
+			value but may be more. If movablecore on its own
+			is specified, the administrator must be careful
+			that the amount of memory usable for all allocations
+			is not too small.
+
 	keepinitrd	[HW,ARM]
 
-	kstack=N	[IA-32,X86-64] Print N words from the kernel stack
+	kstack=N	[X86-32,X86-64] Print N words from the kernel stack
 			in oops dumps.
 
 	l2cr=		[PPC]
 
-	lapic		[IA-32,APIC] Enable the local APIC even if BIOS
+	lapic		[X86-32,APIC] Enable the local APIC even if BIOS
 			disabled it.
 
-	lasi=		[HW,SCSI] PARISC LASI driver for the 53c700 chip
-			Format: addr:<io>,irq:<irq>
+	lapic_timer_c2_ok	[X86-32,x86-64,APIC] trust the local apic timer in
+			C2 power state.
 
-	llsc*=		[IA64] See function print_params() in
-			arch/ia64/sn/kernel/llsc4.c.
+	libata.dma=	[LIBATA] DMA control
+			libata.dma=0	  Disable all PATA and SATA DMA
+			libata.dma=1	  PATA and SATA Disk DMA only
+			libata.dma=2	  ATAPI (CDROM) DMA only
+			libata.dma=4	  Compact Flash DMA only 
+			Combinations also work, so libata.dma=3 enables DMA
+			for disks and CDROMs, but not CFs.
+
+	libata.noacpi	[LIBATA] Disables use of ACPI in libata suspend/resume
+			when set.
+			Format: <int>
 
 	load_ramdisk=	[RAM] List of ramdisks to load from floppy
 			See Documentation/ramdisk.txt.
@@ -791,6 +931,11 @@ running once the system is up.
 			Format: { n | nk | nM }
 			n must be a power of two.  The default size
 			is set in the kernel config file.
+
+	logo.nologo	[FB] Disables display of the built-in Linux logo.
+			This may be used to provide more screen space for
+			kernel log messages and is useful when debugging
+			kernel boot problems.
 
 	lp=0		[LP]	Specify parallel ports to use, e.g,
 	lp=port[,port...]	lp=none,parport0 (lp0 not configured, lp1 uses
@@ -836,18 +981,15 @@ running once the system is up.
 			(machvec) in a generic kernel.
 			Example: machvec=hpzx1_swiotlb
 
-	mad16=		[HW,OSS] Format:
-			<io>,<irq>,<dma>,<dma16>,<mpu_io>,<mpu_irq>,<joystick>
-
-	maui=		[HW,OSS]
-			Format: <io>,<irq>
-
 	max_loop=	[LOOP] Maximum number of loopback devices that can
 			be mounted
 			Format: <1-256>
 
 	maxcpus=	[SMP] Maximum number of processors that	an SMP kernel
-			should make use of
+			should make use of.  maxcpus=n : n >= 0 limits the
+			kernel to using 'n' processors.  n=0 is a special case,
+			it is equivalent to "nosmp", which also disables
+			the IO APIC.
 
 	max_addr=[KMG]	[KNL,BOOT,ia64] All physical memory greater than or
 			equal to this physical address is ignored.
@@ -859,16 +1001,13 @@ running once the system is up.
 			[SCSI] Maximum number of LUNs received.
 			Should be between 1 and 16384.
 
-	mca-pentium	[BUGS=IA-32]
+	mca-pentium	[BUGS=X86-32]
 
 	mcatest=	[IA-64]
 
-	mcd=		[HW,CD]
-			Format: <port>,<irq>,<mitsumi_bug_93_wait>
+	mce		[X86-32] Machine Check Exception
 
-	mcdx=		[HW,CD]
-
-	mce		[IA-32] Machine Check Exception
+	mce=option	[X86-64] See Documentation/x86_64/boot-options.txt
 
 	md=		[HW] RAID subsystems devices and level
 			See Documentation/md.txt.
@@ -880,14 +1019,14 @@ running once the system is up.
 	mem=nn[KMG]	[KNL,BOOT] Force usage of a specific amount of memory
 			Amount of memory to be used when the kernel is not able
 			to see the whole system memory or for test.
-			[IA-32] Use together with memmap= to avoid physical
+			[X86-32] Use together with memmap= to avoid physical
 			address space collisions. Without memmap= PCI devices
 			could be placed at addresses belonging to unused RAM.
 
-	mem=nopentium	[BUGS=IA-32] Disable usage of 4MB pages for kernel
+	mem=nopentium	[BUGS=X86-32] Disable usage of 4MB pages for kernel
 			memory.
 
-	memmap=exactmap	[KNL,IA-32,X86_64] Enable setting of an exact
+	memmap=exactmap	[KNL,X86-32,X86_64] Enable setting of an exact
 			E820 memory map, as specified by the user.
 			Such memmap=exactmap lines can be constructed based on
 			BIOS output or other requirements. See the memmap=nn@ss
@@ -908,50 +1047,11 @@ running once the system is up.
 	meye.*=		[HW] Set MotionEye Camera parameters
 			See Documentation/video4linux/meye.txt.
 
+	mfgpt_irq=	[IA-32] Specify the IRQ to use for the
+			Multi-Function General Purpose Timers on AMD Geode
+			platforms.
+
 	mga=		[HW,DRM]
-
-	migration_cost=
-			[KNL,SMP] debug: override scheduler migration costs
-			Format: <level-1-usecs>,<level-2-usecs>,...
-			This debugging option can be used to override the
-			default scheduler migration cost matrix. The numbers
-			are indexed by 'CPU domain distance'.
-			E.g. migration_cost=1000,2000,3000 on an SMT NUMA
-			box will set up an intra-core migration cost of
-			1 msec, an inter-core migration cost of 2 msecs,
-			and an inter-node migration cost of 3 msecs.
-
-			WARNING: using the wrong values here can break
-			scheduler performance, so it's only for scheduler
-			development purposes, not production environments.
-
-	migration_debug=
-			[KNL,SMP] migration cost auto-detect verbosity
-			Format=<0|1|2>
-			If a system's migration matrix reported at bootup
-			seems erroneous then this option can be used to
-			increase verbosity of the detection process.
-			We default to 0 (no extra messages), 1 will print
-			some more information, and 2 will be really
-			verbose (probably only useful if you also have a
-			serial console attached to the system).
-
-	migration_factor=
-			[KNL,SMP] multiply/divide migration costs by a factor
-			Format=<percent>
-			This debug option can be used to proportionally
-			increase or decrease the auto-detected migration
-			costs for all entries of the migration matrix.
-			E.g. migration_factor=150 will increase migration
-			costs by 50%. (and thus the scheduler will be less
-			eager migrating cache-hot tasks)
-			migration_factor=80 will decrease migration costs
-			by 20%. (thus the scheduler will be more eager to
-			migrate tasks)
-
-			WARNING: using the wrong values here can break
-			scheduler performance, so it's only for scheduler
-			development purposes, not production environments.
 
 	mousedev.tap_time=
 			[MOUSE] Maximum time between finger touching and
@@ -974,7 +1074,7 @@ running once the system is up.
 			<name>,<region-number>[,<base>,<size>,<buswidth>,<altbuswidth>]
 
 	mtdparts=	[MTD]
-			See drivers/mtd/cmdline.c.
+			See drivers/mtd/cmdlinepart.c.
 
 	mtouchusb.raw_coordinates=
 			[HW] Make the MicroTouch USB driver use raw coordinates
@@ -1016,19 +1116,27 @@ running once the system is up.
 			[NFS] set the maximum lifetime for idmapper cache
 			entries.
 
-	nmi_watchdog=	[KNL,BUGS=IA-32] Debugging features for SMP kernels
+	nfs.enable_ino64=
+			[NFS] enable 64-bit inode numbers.
+			If zero, the NFS client will fake up a 32-bit inode
+			number for the readdir() and stat() syscalls instead
+			of returning the full 64-bit number.
+			The default is to return 64-bit inode numbers.
 
-	no387		[BUGS=IA-32] Tells the kernel to use the 387 maths
+	nmi_watchdog=	[KNL,BUGS=X86-32] Debugging features for SMP kernels
+
+	no387		[BUGS=X86-32] Tells the kernel to use the 387 maths
 			emulation library even if a 387 maths coprocessor
 			is present.
+
+	noaliencache	[MM, NUMA, SLAB] Disables the allocation of alien
+			caches in the slab allocator.  Saves per-node memory,
+			but will impact performance.
 
 	noalign		[KNL,ARM]
 
 	noapic		[SMP,APIC] Tells the kernel to not make use of any
 			IOAPICs that may be present in the system.
-
-	noasync		[HW,M68K] Disables async and sync negotiation for
-			all devices.
 
 	nobats		[PPC] Do not use BATs for mapping kernel lowmem
 			on "Classic" PPC cores.
@@ -1041,17 +1149,17 @@ running once the system is up.
 
 	noexec		[IA-64]
 
-	noexec		[IA-32,X86-64]
+	noexec		[X86-32,X86-64]
 			noexec=on: enable non-executable mappings (default)
 			noexec=off: disable nn-executable mappings
 
-	nofxsr		[BUGS=IA-32] Disables x86 floating point extended
+	nofxsr		[BUGS=X86-32] Disables x86 floating point extended
 			register save and restore. The kernel will only save
 			legacy floating-point registers on task switch.
 
 	nohlt		[BUGS=ARM]
 
-	no-hlt		[BUGS=IA-32] Tells the kernel that the hlt
+	no-hlt		[BUGS=X86-32] Tells the kernel that the hlt
 			instruction doesn't work correctly and not to
 			use it.
 
@@ -1062,8 +1170,17 @@ running once the system is up.
 			in certain environments such as networked servers or
 			real-time systems.
 
-	noirqdebug	[IA-32] Disables the code which attempts to detect and
+	nohz=		[KNL] Boottime enable/disable dynamic ticks
+			Valid arguments: on, off
+			Default: on
+
+	noirqbalance	[X86-32,SMP,KNL] Disable kernel irq balancing
+
+	noirqdebug	[X86-32] Disables the code which attempts to detect and
 			disable unhandled interrupt sources.
+
+	no_timer_check	[X86-32,X86_64,APIC] Disables the code which tests for
+			broken timer IRQ sources.
 
 	noisapnp	[ISAPNP] Disables ISA PnP code.
 
@@ -1072,14 +1189,26 @@ running once the system is up.
 
 	nointroute	[IA-64]
 
-	nolapic		[IA-32,APIC] Do not enable or use the local APIC.
+	nojitter	[IA64] Disables jitter checking for ITC timers.
+
+	nolapic		[X86-32,APIC] Do not enable or use the local APIC.
+
+	nolapic_timer	[X86-32,APIC] Do not use the local APIC timer.
 
 	noltlbs		[PPC] Do not use large page/tlb entries for kernel
 			lowmem mapping on PPC40x.
 
 	nomca		[IA-64] Disable machine check abort handling
 
-	nomce		[IA-32] Machine Check Exception
+	nomce		[X86-32] Machine Check Exception
+
+	nomfgpt		[X86-32] Disable Multi-Function General Purpose
+			Timer usage (for AMD Geode machines).
+
+	noreplace-paravirt	[X86-32,PV_OPS] Don't patch paravirt_ops
+
+	noreplace-smp	[X86-32,SMP] Don't replace SMP instructions
+			with UP alternatives
 
 	noresidual	[PPC] Don't use residual data on PReP machines.
 
@@ -1092,34 +1221,33 @@ running once the system is up.
 
 	nosbagart	[IA-64]
 
-	nosep		[BUGS=IA-32] Disables x86 SYSENTER/SYSEXIT support.
+	nosep		[BUGS=X86-32] Disables x86 SYSENTER/SYSEXIT support.
 
-	nosmp		[SMP] Tells an SMP kernel to act as a UP kernel.
+	nosmp		[SMP] Tells an SMP kernel to act as a UP kernel,
+			and disable the IO APIC.  legacy for "maxcpus=0".
+
+	nosoftlockup	[KNL] Disable the soft-lockup detector.
 
 	nosync		[HW,M68K] Disables sync negotiation for all devices.
 
-	notsc		[BUGS=IA-32] Disable Time Stamp Counter
+	notsc		[BUGS=X86-32] Disable Time Stamp Counter
 
 	nousb		[USB] Disable the USB subsystem
 
 	nowb		[ARM]
+
+	numa_zonelist_order= [KNL, BOOT] Select zonelist order for NUMA.
+			one of ['zone', 'node', 'default'] can be specified
+			This can be set from sysctl after boot.
+			See Documentation/sysctl/vm.txt for details.
 
 	nr_uarts=	[SERIAL] maximum number of UARTs to be registered.
 
 	opl3=		[HW,OSS]
 			Format: <io>
 
-	opl3sa=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>,<mpu_io>,<mpu_irq>
-
-	opl3sa2=	[HW,OSS] Format:
-			<io>,<irq>,<dma>,<dma2>,<mss_io>,<mpu_io>,<ymode>,<loopback>[,<isapnp>,<multiple]
-
 	oprofile.timer=	[HW]
 			Use timer interrupt instead of performance counters
-
-	optcd=		[HW,CD]
-			Format: <io>
 
 	osst=		[HW,SCSI] SCSI Tape Driver
 			Format: <buffer_size>,<write_threshold>
@@ -1175,28 +1303,33 @@ running once the system is up.
 			See also Documentation/paride.txt.
 
 	pci=option[,option...]	[PCI] various PCI subsystem options:
-		off		[IA-32] don't probe for the PCI bus
-		bios		[IA-32] force use of PCI BIOS, don't access
+		off		[X86-32] don't probe for the PCI bus
+		bios		[X86-32] force use of PCI BIOS, don't access
 				the hardware directly. Use this if your machine
 				has a non-standard PCI host bridge.
-		nobios		[IA-32] disallow use of PCI BIOS, only direct
+		nobios		[X86-32] disallow use of PCI BIOS, only direct
 				hardware access methods are allowed. Use this
 				if you experience crashes upon bootup and you
 				suspect they are caused by the BIOS.
-		conf1		[IA-32] Force use of PCI Configuration
+		conf1		[X86-32] Force use of PCI Configuration
 				Mechanism 1.
-		conf2		[IA-32] Force use of PCI Configuration
+		conf2		[X86-32] Force use of PCI Configuration
 				Mechanism 2.
-		nommconf	[IA-32,X86_64] Disable use of MMCONFIG for PCI
+		noaer		[PCIE] If the PCIEAER kernel config parameter is
+				enabled, this kernel boot option can be used to
+				disable the use of PCIE advanced error reporting.
+		nodomains	[PCI] Disable support for multiple PCI
+				root domains (aka PCI segments, in ACPI-speak).
+		nommconf	[X86-32,X86_64] Disable use of MMCONFIG for PCI
 				Configuration
 		nomsi		[MSI] If the PCI_MSI kernel config parameter is
 				enabled, this kernel boot option can be used to
 				disable the use of MSI interrupts system-wide.
-		nosort		[IA-32] Don't sort PCI devices according to
+		nosort		[X86-32] Don't sort PCI devices according to
 				order given by the PCI BIOS. This sorting is
 				done to get a device order compatible with
 				older kernels.
-		biosirq		[IA-32] Use PCI BIOS calls to get the interrupt
+		biosirq		[X86-32] Use PCI BIOS calls to get the interrupt
 				routing table. These calls are known to be buggy
 				on several machines and they hang the machine
 				when used, but on other computers it's the only
@@ -1204,33 +1337,35 @@ running once the system is up.
 				this option if the kernel is unable to allocate
 				IRQs or discover secondary PCI buses on your
 				motherboard.
-		rom		[IA-32] Assign address space to expansion ROMs.
+		rom		[X86-32] Assign address space to expansion ROMs.
 				Use with caution as certain devices share
 				address decoders between ROMs and other
 				resources.
-		irqmask=0xMMMM	[IA-32] Set a bit mask of IRQs allowed to be
+		irqmask=0xMMMM	[X86-32] Set a bit mask of IRQs allowed to be
 				assigned automatically to PCI devices. You can
 				make the kernel exclude IRQs of your ISA cards
 				this way.
-		pirqaddr=0xAAAAA	[IA-32] Specify the physical address
+		pirqaddr=0xAAAAA	[X86-32] Specify the physical address
 				of the PIRQ table (normally generated
 				by the BIOS) if it is outside the
 				F0000h-100000h range.
-		lastbus=N	[IA-32] Scan all buses thru bus #N. Can be
+		lastbus=N	[X86-32] Scan all buses thru bus #N. Can be
 				useful if the kernel is unable to find your
 				secondary buses and you want to tell it
 				explicitly which ones they are.
-		assign-busses	[IA-32] Always assign all PCI bus
+		assign-busses	[X86-32] Always assign all PCI bus
 				numbers ourselves, overriding
 				whatever the firmware may have done.
-		usepirqmask	[IA-32] Honor the possible IRQ mask stored
+		usepirqmask	[X86-32] Honor the possible IRQ mask stored
 				in the BIOS $PIR table. This is needed on
 				some systems with broken BIOSes, notably
 				some HP Pavilion N5400 and Omnibook XE3
 				notebooks. This will have no effect if ACPI
 				IRQ routing is enabled.
-		noacpi		[IA-32] Do not use ACPI for IRQ routing
+		noacpi		[X86-32] Do not use ACPI for IRQ routing
 				or for PCI scanning.
+		use_crs		[X86-32] Use _CRS for PCI resource
+				allocation.
 		routeirq	Do IRQ routing for all PCI devices.
 				This is normally done in pci_enable_device(),
 				so this option is a temporary workaround
@@ -1240,6 +1375,21 @@ running once the system is up.
 				bootloader. This is currently used on
 				IXP2000 systems where the bus has to be
 				configured a certain way for adjunct CPUs.
+		noearly		[X86] Don't do any early type 1 scanning.
+				This might help on some broken boards which
+				machine check when some devices' config space
+				is read. But various workarounds are disabled
+				and some IOMMU drivers will not work.
+		bfsort		Sort PCI devices into breadth-first order.
+				This sorting is done to get a device
+				order compatible with older (<= 2.4) kernels.
+		nobfsort	Don't sort PCI devices into breadth-first order.
+		cbiosize=nn[KMG]	The fixed amount of bus space which is
+				reserved for the CardBus bridge's IO window.
+				The default value is 256 bytes.
+		cbmemsize=nn[KMG]	The fixed amount of bus space which is
+				reserved for the CardBus bridge's memory
+				window. The default value is 64 megabytes.
 
 	pcmv=		[HW,PCMCIA] BadgePAD 4
 
@@ -1284,11 +1434,23 @@ running once the system is up.
 			autoconfiguration.
 			Ranges are in pairs (memory base and size).
 
+	print-fatal-signals=
+			[KNL] debug: print fatal signals
+			print-fatal-signals=1: print segfault info to
+			the kernel console.
+			default: off.
+
+	printk.time=	Show timing data prefixed to each printk message line
+			Format: <bool>  (1/Y/y=enable, 0/N/n=disable)
+
 	profile=	[KNL] Enable kernel profiling via /proc/profile
 			Format: [schedule,]<number>
 			Param: "schedule" - profile schedule points.
 			Param: <number> - step/bucket size as a power of 2 for
 				statistical time based profiling.
+			Param: "sleep" - profile D-state sleeping (millisecs).
+				Requires CONFIG_SCHEDSTATS
+			Param: "kvm" - profile VM exits.
 
 	processor.max_cstate=	[HW,ACPI]
 			Limit processor to maximum C-state
@@ -1322,21 +1484,21 @@ running once the system is up.
 	pt.		[PARIDE]
 			See Documentation/paride.txt.
 
-	quiet=		[KNL] Disable log messages
+	pty.legacy_count=
+			[KNL] Number of legacy pty's. Overwrites compiled-in
+			default number.
+
+	quiet		[KNL] Disable most log messages
 
 	r128=		[HW,DRM]
 
 	raid=		[HW,RAID]
 			See Documentation/md.txt.
 
-	ramdisk=	[RAM] Sizes of RAM disks in kilobytes [deprecated]
-			See Documentation/ramdisk.txt.
-
 	ramdisk_blocksize=	[RAM]
 			See Documentation/ramdisk.txt.
 
 	ramdisk_size=	[RAM] Sizes of RAM disks in kilobytes
-			New name for the ramdisk parameter.
 			See Documentation/ramdisk.txt.
 
 	rcu.blimit=	[KNL,BOOT] Set maximum number of finished
@@ -1348,23 +1510,35 @@ running once the system is up.
 	rcu.qlowmark=	[KNL,BOOT] Set threshold of queued
 			RCU callbacks below which batch limiting is re-enabled.
 
-	rcu.rsinterval=	[KNL,BOOT,SMP] Set the number of additional
-			RCU callbacks to queued before forcing reschedule
-			on all cpus.
-
 	rdinit=		[KNL]
 			Format: <full_path>
 			Run specified binary instead of /init from the ramdisk,
 			used for early userspace startup. See initrd.
 
-	reboot=		[BUGS=IA-32,BUGS=ARM,BUGS=IA-64] Rebooting mode
+	reboot=		[BUGS=X86-32,BUGS=ARM,BUGS=IA-64] Rebooting mode
 			Format: <reboot_mode>[,<reboot_mode2>[,...]]
-			See arch/*/kernel/reboot.c.
+			See arch/*/kernel/reboot.c or arch/*/kernel/process.c			
 
 	reserve=	[KNL,BUGS] Force the kernel to ignore some iomem area
 
+	reservetop=	[X86-32]
+			Format: nn[KMG]
+			Reserves a hole at the top of the kernel virtual
+			address space.
+
+	reset_devices	[KNL] Force drivers to reset the underlying device
+			during initialization.
+
 	resume=		[SWSUSP]
 			Specify the partition device for software suspend
+
+	resume_offset=	[SWSUSP]
+			Specify the offset from the beginning of the partition
+			given by "resume=" at which the swap header is located,
+			in <PAGE_SIZE> units (needed only for swap files).
+			See  Documentation/power/swsusp-and-swap-files.txt
+
+	retain_initrd	[RAM] Keep initrd memory after extraction
 
 	rhash_entries=	[KNL,NET]
 			Set number of hash buckets for route cache
@@ -1383,6 +1557,19 @@ running once the system is up.
 
 	rootfstype=	[KNL] Set root filesystem type
 
+	rootwait	[KNL] Wait (indefinitely) for root device to show up.
+			Useful for devices that are detected asynchronously
+			(e.g. USB and MMC devices).
+
+	root_plug.vendor_id=
+			[ROOTPLUG] Override the default vendor ID
+
+	root_plug.product_id=
+			[ROOTPLUG] Override the default product ID
+
+	root_plug.debug=
+			[ROOTPLUG] Enable debugging output
+
 	rw		[KNL] Mount root device read-write on boot
 
 	S		[KNL] Run init in single mode
@@ -1390,15 +1577,7 @@ running once the system is up.
 	sa1100ir	[NET]
 			See drivers/net/irda/sa1100_ir.c.
 
-	sb=		[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>
-
 	sbni=		[NET] Granch SBNI12 leased line adapter
-
-	sbpcd=		[HW,CD] Soundblaster CD adapter
-			Format: <io>,<type>
-			See a comment before function sbpcd_setup() in
-			drivers/cdrom/sbpcd.c.
 
 	sc1200wdt=	[HW,WDT] SC1200 WDT (watchdog) driver
 			Format: <io>[,<timeout>[,<isapnp>]]
@@ -1415,6 +1594,11 @@ running once the system is up.
 			(flags are integer value)
 
 	scsi_logging=	[SCSI]
+
+	scsi_mod.scan=	[SCSI] sync (default) scans SCSI busses as they are
+			discovered.  async scans them in kernel threads,
+			allowing boot to proceed.  none ignores them, expecting
+			user space to do the scan.
 
 	selinux		[SELINUX] Disable or enable SELinux at boot time.
 			Format: { "0" | "1" }
@@ -1434,12 +1618,7 @@ running once the system is up.
                         Value can be changed at runtime via
                         /selinux/compat_net.
 
-	serialnumber	[BUGS=IA-32]
-
-	sg_def_reserved_size=	[SCSI]
-
-	sgalaxy=	[HW,OSS]
-			Format: <io>,<irq>,<dma>,<dma2>,<sgbase>
+	serialnumber	[BUGS=X86-32]
 
 	shapers=	[NET]
 			Maximal number of shapers.
@@ -1450,14 +1629,59 @@ running once the system is up.
 	simeth=		[IA-64]
 	simscsi=
 
-	sjcd=		[HW,CD]
-			Format: <io>,<irq>,<dma>
-			See header of drivers/cdrom/sjcd.c.
-
 	slram=		[HW,MTD]
+
+	slub_debug[=options[,slabs]]	[MM, SLUB]
+			Enabling slub_debug allows one to determine the
+			culprit if slab objects become corrupted. Enabling
+			slub_debug can create guard zones around objects and
+			may poison objects when not in use. Also tracks the
+			last alloc / free. For more information see
+			Documentation/vm/slub.txt.
+
+	slub_max_order= [MM, SLUB]
+			Determines the maximum allowed order for slabs.
+			A high setting may cause OOMs due to memory
+			fragmentation. For more information see
+			Documentation/vm/slub.txt.
+
+	slub_min_objects=	[MM, SLUB]
+			The minimum number of objects per slab. SLUB will
+			increase the slab order up to slub_max_order to
+			generate a sufficiently large slab able to contain
+			the number of objects indicated. The higher the number
+			of objects the smaller the overhead of tracking slabs
+			and the less frequently locks need to be acquired.
+			For more information see Documentation/vm/slub.txt.
+
+	slub_min_order=	[MM, SLUB]
+			Determines the mininum page order for slabs. Must be
+			lower than slub_max_order.
+			For more information see Documentation/vm/slub.txt.
+
+	slub_nomerge	[MM, SLUB]
+			Disable merging of slabs with similar size. May be
+			necessary if there is some reason to distinguish
+			allocs to different slabs. Debug options disable
+			merging on their own.
+			For more information see Documentation/vm/slub.txt.
 
 	smart2=		[HW]
 			Format: <io1>[,<io2>[,...,<io8>]]
+
+	smp-alt-once	[X86-32,SMP] On a hotplug CPU system, only
+			attempt to substitute SMP alternatives once at boot.
+
+	smsc-ircc2.nopnp	[HW] Don't use PNP to discover SMC devices
+	smsc-ircc2.ircc_cfg=	[HW] Device configuration I/O port
+	smsc-ircc2.ircc_sir=	[HW] SIR base I/O port
+	smsc-ircc2.ircc_fir=	[HW] FIR base I/O port
+	smsc-ircc2.ircc_irq=	[HW] IRQ line
+	smsc-ircc2.ircc_dma=	[HW] DMA channel
+	smsc-ircc2.ircc_transceiver= [HW] Transceiver type:
+				0: Toshiba Satellite 1800 (GP data pin select)
+				1: Fast pin select (default)
+				2: ATC IRMode
 
 	snd-ad1816a=	[HW,ALSA]
 
@@ -1581,12 +1805,6 @@ running once the system is up.
 
 	snd-ymfpci=	[HW,ALSA]
 
-	sonicvibes=	[HW,OSS]
-			Format: <reverb>
-
-	sonycd535=	[HW,CD]
-			Format: <io>[,<irq>]
-
 	sonypi.*=	[HW] Sony Programmable I/O Control Device driver
 			See Documentation/sonypi.txt
 
@@ -1620,12 +1838,34 @@ running once the system is up.
 	stifb=		[HW]
 			Format: bpp:<bpp1>[:<bpp2>[:<bpp3>...]]
 
+	sunrpc.pool_mode=
+			[NFS]
+			Control how the NFS server code allocates CPUs to
+			service thread pools.  Depending on how many NICs
+			you have and where their interrupts are bound, this
+			option will affect which CPUs will do NFS serving.
+			Note: this parameter cannot be changed while the
+			NFS server is running.
+
+			auto	    the server chooses an appropriate mode
+				    automatically using heuristics
+			global	    a single global pool contains all CPUs
+			percpu	    one pool for each CPU
+			pernode	    one pool for each NUMA node (equivalent
+				    to global on non-NUMA machines)
+
 	swiotlb=	[IA-64] Number of I/O TLB slabs
 
 	switches=	[HW,M68k]
 
 	sym53c416=	[HW,SCSI]
 			See header of drivers/scsi/sym53c416.c.
+
+	sysrq_always_enabled
+			[KNL]
+			Ignore sysrq setting - this boot parameter will
+			neutralize any effect of /proc/sys/kernel/sysrq.
+			Useful for debugging.
 
 	t128=		[HW,SCSI]
 			See header of drivers/scsi/t128.c.
@@ -1635,11 +1875,32 @@ running once the system is up.
 	thash_entries=	[KNL,NET]
 			Set number of hash buckets for TCP connection
 
-	time		Show timing data prefixed to each printk message line
+	thermal.act=	[HW,ACPI]
+			-1: disable all active trip points in all thermal zones
+			<degrees C>: override all lowest active trip points
 
-	clocksource=	[GENERIC_TIME] Override the default clocksource
-			Override the default clocksource and use the clocksource
-			with the name specified.
+	thermal.crt=	[HW,ACPI]
+			-1: disable all critical trip points in all thermal zones
+			<degrees C>: lower all critical trip points
+
+	thermal.nocrt=	[HW,ACPI]
+			Set to disable actions on ACPI thermal zone
+			critical and hot trip points.
+
+	thermal.off=	[HW,ACPI]
+			1: disable ACPI thermal control
+
+	thermal.psv=	[HW,ACPI]
+			-1: disable all passive trip points
+			<degrees C>: override all passive trip points to this value
+
+	thermal.tzp=	[HW,ACPI]
+			Specify global default ACPI thermal zone polling rate
+			<deci-seconds>: poll all this frequency
+			0: no polling (default)
+
+	time		Show timing data prefixed to each printk message line
+			[deprecated, see 'printk.time']
 
 	tipar.timeout=	[HW,PPT]
 			Set communications timeout in tenths of a second
@@ -1661,9 +1922,6 @@ running once the system is up.
 			Format:
 			<io>,<irq>,<dma>,<dma2>,<sb_io>,<sb_irq>,<sb_dma>,<mpu_io>,<mpu_irq>
 
-	tsdev.xres=	[TS] Horizontal screen resolution.
-	tsdev.yres=	[TS] Vertical screen resolution.
-
 	turbografx.map[2|3]=	[HW,JOY]
 			TurboGraFX parallel port interface
 			Format:
@@ -1679,17 +1937,36 @@ running once the system is up.
 	uart6850=	[HW,OSS]
 			Format: <io>,<irq>
 
+	uhci-hcd.ignore_oc=
+			[USB] Ignore overcurrent events (default N).
+			Some badly-designed motherboards generate lots of
+			bogus events, for ports that aren't wired to
+			anything.  Set this parameter to avoid log spamming.
+			Note that genuine overcurrent events won't be
+			reported either.
+
+	usbcore.autosuspend=
+			[USB] The autosuspend time delay (in seconds) used
+			for newly-detected USB devices (default 2).  This
+			is the time required before an idle device will be
+			autosuspended.  Devices for which the delay is set
+			to a negative value won't be autosuspended at all.
+
 	usbhid.mousepoll=
 			[USBHID] The interval which mice are to be polled at.
 
-	vdso=		[IA-32]
+	vdso=		[X86-32,SH,x86-64]
+			vdso=2: enable compat VDSO (default with COMPAT_VDSO)
 			vdso=1: enable VDSO (default)
 			vdso=0: disable VDSO mapping
+
+	vector=		[IA-64,SMP]
+			vector=percpu: enable percpu vector domain
 
 	video=		[FB] Frame buffer configuration
 			See Documentation/fb/modedb.txt.
 
-	vga=		[BOOT,IA-32] Select a particular video mode
+	vga=		[BOOT,X86-32] Select a particular video mode
 			See Documentation/i386/boot.txt and
 			Documentation/svga.txt.
 			Use vga=ask for menu.
@@ -1721,7 +1998,7 @@ running once the system is up.
 			See header of drivers/scsi/wd7000.c.
 
 	wdt=		[WDT] Watchdog
-			See Documentation/watchdog/watchdog.txt.
+			See Documentation/watchdog/wdt.txt.
 
 	xd=		[HW,XT] Original XT pre-IDE (RLL encoded) disks.
 	xd_geo=		See header of drivers/block/xd.c.
@@ -1732,7 +2009,6 @@ running once the system is up.
 
 	norandmaps	Don't use address space randomization
 			Equivalent to echo 0 > /proc/sys/kernel/randomize_va_space
-
 
 ______________________________________________________________________
 
