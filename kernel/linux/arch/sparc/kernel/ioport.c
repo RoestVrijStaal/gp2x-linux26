@@ -25,7 +25,6 @@
  * <zaitcev> Sounds reasonable
  */
 
-#include <linux/config.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
@@ -36,6 +35,7 @@
 #include <linux/slab.h>
 #include <linux/pci.h>		/* struct pci_dev */
 #include <linux/proc_fs.h>
+#include <linux/scatterlist.h>
 
 #include <asm/io.h>
 #include <asm/vaddrs.h>
@@ -154,7 +154,7 @@ void __iomem *of_ioremap(struct resource *res, unsigned long offset,
 }
 EXPORT_SYMBOL(of_ioremap);
 
-void of_iounmap(void __iomem *base, unsigned long size)
+void of_iounmap(struct resource *res, void __iomem *base, unsigned long size)
 {
 	iounmap(base);
 }
@@ -318,9 +318,8 @@ void *sbus_alloc_consistent(struct sbus_dev *sdev, long len, u32 *dma_addrp)
 	if ((va = __get_free_pages(GFP_KERNEL|__GFP_COMP, order)) == 0)
 		goto err_nopages;
 
-	if ((res = kmalloc(sizeof(struct resource), GFP_KERNEL)) == NULL)
+	if ((res = kzalloc(sizeof(struct resource), GFP_KERNEL)) == NULL)
 		goto err_nomem;
-	memset((char*)res, 0, sizeof(struct resource));
 
 	if (allocate_resource(&_sparc_dvma, res, len_total,
 	    _sparc_dvma.start, _sparc_dvma.end, PAGE_SIZE, NULL, NULL) != 0) {
@@ -508,6 +507,7 @@ void __init sbus_arch_bus_ranges_init(struct device_node *pn, struct sbus_bus *s
 
 void __init sbus_setup_iommu(struct sbus_bus *sbus, struct device_node *dp)
 {
+#ifndef CONFIG_SUN4
 	struct device_node *parent = dp->parent;
 
 	if (sparc_cpu_model != sun4d &&
@@ -524,6 +524,7 @@ void __init sbus_setup_iommu(struct sbus_bus *sbus, struct device_node *dp)
 
 		iounit_init(dp->node, parent->node, sbus);
 	}
+#endif
 }
 
 void __init sbus_setup_arch_props(struct sbus_bus *sbus, struct device_node *dp)
@@ -588,12 +589,11 @@ void *pci_alloc_consistent(struct pci_dev *pdev, size_t len, dma_addr_t *pba)
 		return NULL;
 	}
 
-	if ((res = kmalloc(sizeof(struct resource), GFP_KERNEL)) == NULL) {
+	if ((res = kzalloc(sizeof(struct resource), GFP_KERNEL)) == NULL) {
 		free_pages(va, order);
 		printk("pci_alloc_consistent: no core\n");
 		return NULL;
 	}
-	memset((char*)res, 0, sizeof(struct resource));
 
 	if (allocate_resource(&_sparc_dvma, res, len_total,
 	    _sparc_dvma.start, _sparc_dvma.end, PAGE_SIZE, NULL, NULL) != 0) {
@@ -618,7 +618,7 @@ void *pci_alloc_consistent(struct pci_dev *pdev, size_t len, dma_addr_t *pba)
  * size must be the same as what as passed into pci_alloc_consistent,
  * and likewise dma_addr must be the same as what *dma_addrp was set to.
  *
- * References to the memory and mappings assosciated with cpu_addr/dma_addr
+ * References to the memory and mappings associated with cpu_addr/dma_addr
  * past this call are illegal.
  */
 void pci_free_consistent(struct pci_dev *pdev, size_t n, void *p, dma_addr_t ba)
@@ -718,18 +718,18 @@ void pci_unmap_page(struct pci_dev *hwdev,
  * Device ownership issues as mentioned above for pci_map_single are
  * the same here.
  */
-int pci_map_sg(struct pci_dev *hwdev, struct scatterlist *sg, int nents,
+int pci_map_sg(struct pci_dev *hwdev, struct scatterlist *sgl, int nents,
     int direction)
 {
+	struct scatterlist *sg;
 	int n;
 
 	BUG_ON(direction == PCI_DMA_NONE);
 	/* IIep is write-through, not flushing. */
-	for (n = 0; n < nents; n++) {
-		BUG_ON(page_address(sg->page) == NULL);
-		sg->dvma_address = virt_to_phys(page_address(sg->page));
+	for_each_sg(sgl, sg, nents, n) {
+		BUG_ON(page_address(sg_page(sg)) == NULL);
+		sg->dvma_address = virt_to_phys(sg_virt(sg));
 		sg->dvma_length = sg->length;
-		sg++;
 	}
 	return nents;
 }
@@ -738,19 +738,19 @@ int pci_map_sg(struct pci_dev *hwdev, struct scatterlist *sg, int nents,
  * Again, cpu read rules concerning calls here are the same as for
  * pci_unmap_single() above.
  */
-void pci_unmap_sg(struct pci_dev *hwdev, struct scatterlist *sg, int nents,
+void pci_unmap_sg(struct pci_dev *hwdev, struct scatterlist *sgl, int nents,
     int direction)
 {
+	struct scatterlist *sg;
 	int n;
 
 	BUG_ON(direction == PCI_DMA_NONE);
 	if (direction != PCI_DMA_TODEVICE) {
-		for (n = 0; n < nents; n++) {
-			BUG_ON(page_address(sg->page) == NULL);
+		for_each_sg(sgl, sg, nents, n) {
+			BUG_ON(page_address(sg_page(sg)) == NULL);
 			mmu_inval_dma_area(
-			    (unsigned long) page_address(sg->page),
+			    (unsigned long) page_address(sg_page(sg)),
 			    (sg->length + PAGE_SIZE-1) & PAGE_MASK);
-			sg++;
 		}
 	}
 }
@@ -789,34 +789,34 @@ void pci_dma_sync_single_for_device(struct pci_dev *hwdev, dma_addr_t ba, size_t
  * The same as pci_dma_sync_single_* but for a scatter-gather list,
  * same rules and usage.
  */
-void pci_dma_sync_sg_for_cpu(struct pci_dev *hwdev, struct scatterlist *sg, int nents, int direction)
+void pci_dma_sync_sg_for_cpu(struct pci_dev *hwdev, struct scatterlist *sgl, int nents, int direction)
 {
+	struct scatterlist *sg;
 	int n;
 
 	BUG_ON(direction == PCI_DMA_NONE);
 	if (direction != PCI_DMA_TODEVICE) {
-		for (n = 0; n < nents; n++) {
-			BUG_ON(page_address(sg->page) == NULL);
+		for_each_sg(sgl, sg, nents, n) {
+			BUG_ON(page_address(sg_page(sg)) == NULL);
 			mmu_inval_dma_area(
-			    (unsigned long) page_address(sg->page),
+			    (unsigned long) page_address(sg_page(sg)),
 			    (sg->length + PAGE_SIZE-1) & PAGE_MASK);
-			sg++;
 		}
 	}
 }
 
-void pci_dma_sync_sg_for_device(struct pci_dev *hwdev, struct scatterlist *sg, int nents, int direction)
+void pci_dma_sync_sg_for_device(struct pci_dev *hwdev, struct scatterlist *sgl, int nents, int direction)
 {
+	struct scatterlist *sg;
 	int n;
 
 	BUG_ON(direction == PCI_DMA_NONE);
 	if (direction != PCI_DMA_TODEVICE) {
-		for (n = 0; n < nents; n++) {
-			BUG_ON(page_address(sg->page) == NULL);
+		for_each_sg(sgl, sg, nents, n) {
+			BUG_ON(page_address(sg_page(sg)) == NULL);
 			mmu_inval_dma_area(
-			    (unsigned long) page_address(sg->page),
+			    (unsigned long) page_address(sg_page(sg)),
 			    (sg->length + PAGE_SIZE-1) & PAGE_MASK);
-			sg++;
 		}
 	}
 }

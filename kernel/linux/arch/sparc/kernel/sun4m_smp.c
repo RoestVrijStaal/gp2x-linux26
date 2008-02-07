@@ -9,7 +9,6 @@
 #include <linux/sched.h>
 #include <linux/threads.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/kernel_stat.h>
 #include <linux/init.h>
@@ -19,6 +18,7 @@
 #include <linux/profile.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+#include <asm/irq_regs.h>
 
 #include <asm/ptrace.h>
 #include <asm/atomic.h>
@@ -30,6 +30,8 @@
 #include <asm/pgtable.h>
 #include <asm/oplib.h>
 #include <asm/cpudata.h>
+
+#include "irq.h"
 
 #define IRQ_RESCHEDULE		13
 #define IRQ_STOP_CPU		14
@@ -353,11 +355,14 @@ void smp4m_cross_call_irq(void)
 
 void smp4m_percpu_timer_interrupt(struct pt_regs *regs)
 {
+	struct pt_regs *old_regs;
 	int cpu = smp_processor_id();
+
+	old_regs = set_irq_regs(regs);
 
 	clear_profile_irq(cpu);
 
-	profile_tick(CPU_PROFILING, regs);
+	profile_tick(CPU_PROFILING);
 
 	if(!--prof_counter(cpu)) {
 		int user = user_mode(regs);
@@ -368,6 +373,7 @@ void smp4m_percpu_timer_interrupt(struct pt_regs *regs)
 
 		prof_counter(cpu) = prof_multiplier(cpu);
 	}
+	set_irq_regs(old_regs);
 }
 
 extern unsigned int lvl14_resolution;
@@ -400,7 +406,7 @@ void __init smp4m_blackbox_current(unsigned *addr)
 	
 	addr[0] = 0x81580000 | rd;		/* rd %tbr, reg */
 	addr[2] = 0x8130200a | rd | rs1;    	/* srl reg, 0xa, reg */
-	addr[4] = 0x8008200c | rd | rs1;	/* and reg, 3, reg */
+	addr[4] = 0x8008200c | rd | rs1;	/* and reg, 0xc, reg */
 }
 
 void __init sun4m_init_smp(void)

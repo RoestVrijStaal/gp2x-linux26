@@ -25,6 +25,8 @@
 #include <asm/irq.h>
 #include <asm/io.h>
 
+#include "irq.h"
+
 extern unsigned long lvl14_save[5];
 static unsigned long *linux_lvl14 = NULL;
 static unsigned long obp_lvl14[4];
@@ -55,14 +57,14 @@ void install_obp_ticker(void)
 	linux_lvl14[3] =  obp_lvl14[3]; 
 }
 
-void claim_ticker14(irqreturn_t (*handler)(int, void *, struct pt_regs *),
+void claim_ticker14(irq_handler_t handler,
 		    int irq_nr, unsigned int timeout )
 {
 	int cpu = smp_processor_id();
 
 	/* first we copy the obp handler instructions
 	 */
-	disable_irq(irq_nr);
+	__disable_irq(irq_nr);
 	if (!handler)
 		return;
     
@@ -79,6 +81,6 @@ void claim_ticker14(irqreturn_t (*handler)(int, void *, struct pt_regs *),
 			 NULL)) {
 		install_linux_ticker();
 		load_profile_irq(cpu, timeout);
-		enable_irq(irq_nr);
+		__enable_irq(irq_nr);
 	}
 }

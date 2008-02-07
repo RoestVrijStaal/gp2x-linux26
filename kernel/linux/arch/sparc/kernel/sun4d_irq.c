@@ -17,7 +17,6 @@
 #include <linux/random.h>
 #include <linux/init.h>
 #include <linux/smp.h>
-#include <linux/smp_lock.h>
 #include <linux/spinlock.h>
 #include <linux/seq_file.h>
 
@@ -38,6 +37,9 @@
 #include <asm/sbus.h>
 #include <asm/sbi.h>
 #include <asm/cacheflush.h>
+#include <asm/irq_regs.h>
+
+#include "irq.h"
 
 /* If you trust current SCSI layer to handle different SCSI IRQs, enable this. I don't trust it... -jj */
 /* #define DISTRIBUTE_IRQS */
@@ -188,7 +190,7 @@ void sun4d_free_irq(unsigned int irq, void *dev_id)
 	kfree(action);
 
 	if (!(*actionp))
-		disable_irq(irq);
+		__disable_irq(irq);
 
 out_unlock:
 	spin_unlock_irqrestore(&irq_action_lock, flags);
@@ -198,6 +200,7 @@ extern void unexpected_irq(int, void *, struct pt_regs *);
 
 void sun4d_handler_irq(int irq, struct pt_regs * regs)
 {
+	struct pt_regs *old_regs;
 	struct irqaction * action;
 	int cpu = smp_processor_id();
 	/* SBUS IRQ level (1 - 7) */
@@ -208,6 +211,7 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 	
 	cc_set_iclr(1 << irq);
 	
+	old_regs = set_irq_regs(regs);
 	irq_enter();
 	kstat_cpu(cpu).irqs[irq]++;
 	if (!sbusl) {
@@ -215,7 +219,7 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 		if (!action)
 			unexpected_irq(irq, NULL, regs);
 		do {
-			action->handler(irq, action->dev_id, regs);
+			action->handler(irq, action->dev_id);
 			action = action->next;
 		} while (action);
 	} else {
@@ -242,7 +246,7 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 						if (!action)
 							unexpected_irq(irq, NULL, regs);
 						do {
-							action->handler(irq, action->dev_id, regs);
+							action->handler(irq, action->dev_id);
 							action = action->next;
 						} while (action);
 						release_sbi(SBI2DEVID(sbino), slot);
@@ -250,6 +254,7 @@ void sun4d_handler_irq(int irq, struct pt_regs * regs)
 			}
 	}
 	irq_exit();
+	set_irq_regs(old_regs);
 }
 
 unsigned int sun4d_build_irq(struct sbus_dev *sdev, int irq)
@@ -272,7 +277,7 @@ unsigned int sun4d_sbint_to_irq(struct sbus_dev *sdev, unsigned int sbint)
 }
 
 int sun4d_request_irq(unsigned int irq,
-		irqreturn_t (*handler)(int, void *, struct pt_regs *),
+		irq_handler_t handler,
 		unsigned long irqflags, const char * devname, void *dev_id)
 {
 	struct irqaction *action, *tmp = NULL, **actionp;
@@ -323,7 +328,7 @@ int sun4d_request_irq(unsigned int irq,
 	}
 	
 	if (action == NULL)
-		action = (struct irqaction *)kmalloc(sizeof(struct irqaction),
+		action = kmalloc(sizeof(struct irqaction),
 						     GFP_ATOMIC);
 	
 	if (!action) { 
@@ -343,7 +348,7 @@ int sun4d_request_irq(unsigned int irq,
 	else
 		*actionp = action;
 		
-	enable_irq(irq);
+	__enable_irq(irq);
 
 	ret = 0;
 out_unlock:
@@ -466,7 +471,7 @@ static void sun4d_load_profile_irq(int cpu, unsigned int limit)
 	bw_set_prof_limit(cpu, limit);
 }
 
-static void __init sun4d_init_timers(irqreturn_t (*counter_fn)(int, void *, struct pt_regs *))
+static void __init sun4d_init_timers(irq_handler_t counter_fn)
 {
 	int irq;
 	int cpu;
@@ -518,7 +523,7 @@ static void __init sun4d_init_timers(irqreturn_t (*counter_fn)(int, void *, stru
 		lvl14_save[2] += smp4d_ticker - real_irq_entry;
 
 		/* For SMP we use the level 14 ticker, however the bootup code
-		 * has copied the firmwares level 14 vector into boot cpu's
+		 * has copied the firmware's level 14 vector into the boot cpu's
 		 * trap table, we must fix this now or we get squashed.
 		 */
 		local_irq_save(flags);
@@ -541,8 +546,11 @@ void __init sun4d_init_sbi_irq(void)
 	nsbi = 0;
 	for_each_sbus(sbus)
 		nsbi++;
-	sbus_actions = (struct sbus_action *)kmalloc (nsbi * 8 * 4 * sizeof(struct sbus_action), GFP_ATOMIC);
-	memset (sbus_actions, 0, (nsbi * 8 * 4 * sizeof(struct sbus_action)));
+	sbus_actions = kzalloc (nsbi * 8 * 4 * sizeof(struct sbus_action), GFP_ATOMIC);
+	if (!sbus_actions) {
+		prom_printf("SUN4D: Cannot allocate sbus_actions, halting.\n");
+		prom_halt();
+	}
 	for_each_sbus(sbus) {
 #ifdef CONFIG_SMP	
 		extern unsigned char boot_cpu_id;
