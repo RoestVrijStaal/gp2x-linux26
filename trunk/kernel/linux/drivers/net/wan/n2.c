@@ -351,12 +351,11 @@ static int __init n2_run(unsigned long io, unsigned long irq,
 		return -ENODEV;
 	}
 
-	card = kmalloc(sizeof(card_t), GFP_KERNEL);
+	card = kzalloc(sizeof(card_t), GFP_KERNEL);
 	if (card == NULL) {
 		printk(KERN_ERR "n2: unable to allocate memory\n");
 		return -ENOBUFS;
 	}
-	memset(card, 0, sizeof(card_t));
 
 	card->ports[0].dev = alloc_hdlcdev(&card->ports[0]);
 	card->ports[1].dev = alloc_hdlcdev(&card->ports[1]);
@@ -460,7 +459,6 @@ static int __init n2_run(unsigned long io, unsigned long irq,
 			port->log_node = 1;
 
 		spin_lock_init(&port->lock);
-		SET_MODULE_OWNER(dev);
 		dev->irq = irq;
 		dev->mem_start = winbase;
 		dev->mem_end = winbase + USE_WINDOWSIZE - 1;
@@ -500,7 +498,7 @@ static int __init n2_init(void)
 #ifdef MODULE
 		printk(KERN_INFO "n2: no card initialized\n");
 #endif
-		return -ENOSYS;	/* no parameters specified, abort */
+		return -EINVAL;	/* no parameters specified, abort */
 	}
 
 	printk(KERN_INFO "%s\n", version);
@@ -538,11 +536,11 @@ static int __init n2_init(void)
 			n2_run(io, irq, ram, valid[0], valid[1]);
 
 		if (*hw == '\x0')
-			return first_card ? 0 : -ENOSYS;
+			return first_card ? 0 : -EINVAL;
 	}while(*hw++ == ':');
 
 	printk(KERN_ERR "n2: invalid hardware parameters\n");
-	return first_card ? 0 : -ENOSYS;
+	return first_card ? 0 : -EINVAL;
 }
 
 
