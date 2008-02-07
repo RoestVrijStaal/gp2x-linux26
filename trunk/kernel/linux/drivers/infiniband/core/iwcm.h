@@ -1,9 +1,6 @@
 /*
- * Copyright (c) 2004 Mellanox Technologies Ltd.  All rights reserved.
- * Copyright (c) 2004 Infinicon Corporation.  All rights reserved.
- * Copyright (c) 2004 Intel Corporation.  All rights reserved.
- * Copyright (c) 2004 Topspin Corporation.  All rights reserved.
- * Copyright (c) 2004 Voltaire Corporation.  All rights reserved.
+ * Copyright (c) 2005 Network Appliance, Inc. All rights reserved.
+ * Copyright (c) 2005 Open Grid Computing, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -32,22 +29,34 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $Id: agent.h 1389 2004-12-27 22:56:47Z roland $
  */
+#ifndef IWCM_H
+#define IWCM_H
 
-#ifndef __AGENT_H_
-#define __AGENT_H_
+enum iw_cm_state {
+	IW_CM_STATE_IDLE,             /* unbound, inactive */
+	IW_CM_STATE_LISTEN,           /* listen waiting for connect */
+	IW_CM_STATE_CONN_RECV,        /* inbound waiting for user accept */
+	IW_CM_STATE_CONN_SENT,        /* outbound waiting for peer accept */
+	IW_CM_STATE_ESTABLISHED,      /* established */
+	IW_CM_STATE_CLOSING,	      /* disconnect */
+	IW_CM_STATE_DESTROYING        /* object being deleted */
+};
 
-#include <linux/err.h>
-#include <rdma/ib_mad.h>
+struct iwcm_id_private {
+	struct iw_cm_id	id;
+	enum iw_cm_state state;
+	unsigned long flags;
+	struct ib_qp *qp;
+	struct completion destroy_comp;
+	wait_queue_head_t connect_wait;
+	struct list_head work_list;
+	spinlock_t lock;
+	atomic_t refcount;
+	struct list_head work_free_list;
+};
 
-extern int ib_agent_port_open(struct ib_device *device, int port_num);
+#define IWCM_F_CALLBACK_DESTROY   1
+#define IWCM_F_CONNECT_WAIT       2
 
-extern int ib_agent_port_close(struct ib_device *device, int port_num);
-
-extern void agent_send_response(struct ib_mad *mad, struct ib_grh *grh,
-				struct ib_wc *wc, struct ib_device *device,
-				int port_num, int qpn);
-
-#endif	/* __AGENT_H_ */
+#endif /* IWCM_H */

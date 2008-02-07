@@ -79,6 +79,23 @@ enum ib_rate mult_to_ib_rate(int mult)
 }
 EXPORT_SYMBOL(mult_to_ib_rate);
 
+enum rdma_transport_type
+rdma_node_get_transport(enum rdma_node_type node_type)
+{
+	switch (node_type) {
+	case RDMA_NODE_IB_CA:
+	case RDMA_NODE_IB_SWITCH:
+	case RDMA_NODE_IB_ROUTER:
+		return RDMA_TRANSPORT_IB;
+	case RDMA_NODE_RNIC:
+		return RDMA_TRANSPORT_IWARP;
+	default:
+		BUG();
+		return 0;
+	}
+}
+EXPORT_SYMBOL(rdma_node_get_transport);
+
 /* Protection domains */
 
 struct ib_pd *ib_alloc_pd(struct ib_device *device)
@@ -150,7 +167,7 @@ int ib_init_ah_from_wc(struct ib_device *device, u8 port_num, struct ib_wc *wc,
 		ah_attr->grh.sgid_index = (u8) gid_index;
 		flow_class = be32_to_cpu(grh->version_tclass_flow);
 		ah_attr->grh.flow_label = flow_class & 0xFFFFF;
-		ah_attr->grh.hop_limit = grh->hop_limit;
+		ah_attr->grh.hop_limit = 0xFF;
 		ah_attr->grh.traffic_class = (flow_class >> 20) & 0xFF;
 	}
 	return 0;
@@ -231,7 +248,7 @@ int ib_modify_srq(struct ib_srq *srq,
 		  struct ib_srq_attr *srq_attr,
 		  enum ib_srq_attr_mask srq_attr_mask)
 {
-	return srq->device->modify_srq(srq, srq_attr, srq_attr_mask);
+	return srq->device->modify_srq(srq, srq_attr, srq_attr_mask, NULL);
 }
 EXPORT_SYMBOL(ib_modify_srq);
 
@@ -547,7 +564,7 @@ int ib_modify_qp(struct ib_qp *qp,
 		 struct ib_qp_attr *qp_attr,
 		 int qp_attr_mask)
 {
-	return qp->device->modify_qp(qp, qp_attr, qp_attr_mask);
+	return qp->device->modify_qp(qp, qp_attr, qp_attr_mask, NULL);
 }
 EXPORT_SYMBOL(ib_modify_qp);
 
@@ -592,11 +609,11 @@ EXPORT_SYMBOL(ib_destroy_qp);
 struct ib_cq *ib_create_cq(struct ib_device *device,
 			   ib_comp_handler comp_handler,
 			   void (*event_handler)(struct ib_event *, void *),
-			   void *cq_context, int cqe)
+			   void *cq_context, int cqe, int comp_vector)
 {
 	struct ib_cq *cq;
 
-	cq = device->create_cq(device, cqe, NULL, NULL);
+	cq = device->create_cq(device, cqe, comp_vector, NULL, NULL);
 
 	if (!IS_ERR(cq)) {
 		cq->device        = device;
