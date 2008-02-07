@@ -581,8 +581,13 @@ static void neo_parse_modem(struct jsm_channel *ch, u8 signals)
 		return;
 
 	/* Scrub off lower bits. They signify delta's, which I don't care about */
-	msignals &= 0xf0;
+	/* Keep DDCD and DDSR though */
+	msignals &= 0xf8;
 
+	if (msignals & UART_MSR_DDCD)
+		uart_handle_dcd_change(&ch->uart_port, msignals & UART_MSR_DCD);
+	if (msignals & UART_MSR_DDSR)
+		uart_handle_cts_change(&ch->uart_port, msignals & UART_MSR_CTS);
 	if (msignals & UART_MSR_DCD)
 		ch->ch_mistat |= UART_MSR_DCD;
 	else
@@ -1114,9 +1119,9 @@ static void neo_param(struct jsm_channel *ch)
  *
  * Neo specific interrupt handler.
  */
-static irqreturn_t neo_intr(int irq, void *voidbrd, struct pt_regs *regs)
+static irqreturn_t neo_intr(int irq, void *voidbrd)
 {
-	struct jsm_board *brd = (struct jsm_board *) voidbrd;
+	struct jsm_board *brd = voidbrd;
 	struct jsm_channel *ch;
 	int port = 0;
 	int type = 0;
