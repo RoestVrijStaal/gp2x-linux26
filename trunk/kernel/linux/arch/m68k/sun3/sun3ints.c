@@ -15,6 +15,7 @@
 #include <asm/intersil.h>
 #include <asm/oplib.h>
 #include <asm/sun3ints.h>
+#include <asm/irq_regs.h>
 #include <linux/seq_file.h>
 
 extern void sun3_leds (unsigned char);
@@ -48,7 +49,7 @@ void sun3_disable_irq(unsigned int irq)
 	*sun3_intreg &= ~(1 << irq);
 }
 
-static irqreturn_t sun3_int7(int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t sun3_int7(int irq, void *dev_id)
 {
 	*sun3_intreg |=  (1 << irq);
 	if (!(kstat_cpu(0).irqs[irq] % 2000))
@@ -56,7 +57,7 @@ static irqreturn_t sun3_int7(int irq, void *dev_id, struct pt_regs *fp)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t sun3_int5(int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t sun3_int5(int irq, void *dev_id)
 {
 #ifdef CONFIG_SUN3
 	intersil_clear();
@@ -65,16 +66,16 @@ static irqreturn_t sun3_int5(int irq, void *dev_id, struct pt_regs *fp)
 #ifdef CONFIG_SUN3
 	intersil_clear();
 #endif
-        do_timer(fp);
+        do_timer(1);
 #ifndef CONFIG_SMP
-	update_process_times(user_mode(fp));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
         if (!(kstat_cpu(0).irqs[irq] % 20))
                 sun3_leds(led_pattern[(kstat_cpu(0).irqs[irq] % 160) / 20]);
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t sun3_vec255(int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t sun3_vec255(int irq, void *dev_id)
 {
 //	intersil_clear();
 	return IRQ_HANDLED;
@@ -84,25 +85,25 @@ static void sun3_inthandle(unsigned int irq, struct pt_regs *fp)
 {
         *sun3_intreg &= ~(1 << irq);
 
-	m68k_handle_int(irq, fp);
+	__m68k_handle_int(irq, fp);
 }
 
 static struct irq_controller sun3_irq_controller = {
 	.name		= "sun3",
-	.lock		= SPIN_LOCK_UNLOCKED,
+	.lock		= __SPIN_LOCK_UNLOCKED(sun3_irq_controller.lock),
 	.startup	= m68k_irq_startup,
 	.shutdown	= m68k_irq_shutdown,
 	.enable		= sun3_enable_irq,
 	.disable	= sun3_disable_irq,
 };
 
-void sun3_init_IRQ(void)
+void __init sun3_init_IRQ(void)
 {
 	*sun3_intreg = 1;
 
 	m68k_setup_auto_interrupt(sun3_inthandle);
 	m68k_setup_irq_controller(&sun3_irq_controller, IRQ_AUTO_1, 7);
-	m68k_setup_user_interrupt(VEC_USER, 192, NULL);
+	m68k_setup_user_interrupt(VEC_USER, 128, NULL);
 
 	request_irq(IRQ_AUTO_5, sun3_int5, 0, "int5", NULL);
 	request_irq(IRQ_AUTO_7, sun3_int7, 0, "int7", NULL);
