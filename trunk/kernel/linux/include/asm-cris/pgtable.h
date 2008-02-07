@@ -111,9 +111,7 @@ extern unsigned long empty_zero_page;
  * Undefined behaviour if not..
  */
 
-static inline int pte_read(pte_t pte)           { return pte_val(pte) & _PAGE_READ; }
 static inline int pte_write(pte_t pte)          { return pte_val(pte) & _PAGE_WRITE; }
-static inline int pte_exec(pte_t pte)           { return pte_val(pte) & _PAGE_READ; }
 static inline int pte_dirty(pte_t pte)          { return pte_val(pte) & _PAGE_MODIFIED; }
 static inline int pte_young(pte_t pte)          { return pte_val(pte) & _PAGE_ACCESSED; }
 static inline int pte_file(pte_t pte)           { return pte_val(pte) & _PAGE_FILE; }
@@ -122,18 +120,6 @@ static inline pte_t pte_wrprotect(pte_t pte)
 {
         pte_val(pte) &= ~(_PAGE_WRITE | _PAGE_SILENT_WRITE);
         return pte;
-}
-
-static inline pte_t pte_rdprotect(pte_t pte)
-{
-        pte_val(pte) &= ~(_PAGE_READ | _PAGE_SILENT_READ);
-	return pte;
-}
-
-static inline pte_t pte_exprotect(pte_t pte)
-{
-        pte_val(pte) &= ~(_PAGE_READ | _PAGE_SILENT_READ);
-	return pte;
 }
 
 static inline pte_t pte_mkclean(pte_t pte)
@@ -153,22 +139,6 @@ static inline pte_t pte_mkwrite(pte_t pte)
         pte_val(pte) |= _PAGE_WRITE;
         if (pte_val(pte) & _PAGE_MODIFIED)
                 pte_val(pte) |= _PAGE_SILENT_WRITE;
-        return pte;
-}
-
-static inline pte_t pte_mkread(pte_t pte)
-{
-        pte_val(pte) |= _PAGE_READ;
-        if (pte_val(pte) & _PAGE_ACCESSED)
-                pte_val(pte) |= _PAGE_SILENT_READ;
-        return pte;
-}
-
-static inline pte_t pte_mkexec(pte_t pte)
-{
-        pte_val(pte) |= _PAGE_READ;
-        if (pte_val(pte) & _PAGE_ACCESSED)
-                pte_val(pte) |= _PAGE_SILENT_READ;
         return pte;
 }
 
@@ -253,7 +223,7 @@ static inline void pmd_set(pmd_t * pmdp, pte_t * ptep)
 { pmd_val(*pmdp) = _PAGE_TABLE | (unsigned long) ptep; }
 
 #define pmd_page(pmd)		(pfn_to_page(pmd_val(pmd) >> PAGE_SHIFT))
-#define pmd_page_kernel(pmd)	((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
+#define pmd_page_vaddr(pmd)	((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
 
 /* to find an entry in a page-table-directory. */
 #define pgd_index(address) (((address) >> PGDIR_SHIFT) & (PTRS_PER_PGD-1))
@@ -271,7 +241,7 @@ static inline pgd_t * pgd_offset(struct mm_struct * mm, unsigned long address)
 #define __pte_offset(address) \
 	(((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
 #define pte_offset_kernel(dir, address) \
-	((pte_t *) pmd_page_kernel(*(dir)) +  __pte_offset(address))
+	((pte_t *) pmd_page_vaddr(*(dir)) +  __pte_offset(address))
 #define pte_offset_map(dir, address) \
 	((pte_t *)page_address(pmd_page(*(dir))) + __pte_offset(address))
 #define pte_offset_map_nested(dir, address) pte_offset_map(dir, address)
