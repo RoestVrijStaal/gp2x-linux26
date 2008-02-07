@@ -64,7 +64,6 @@
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/pci.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/slab.h>
@@ -256,7 +255,6 @@ typedef enum {
 	AHC_DEV_PERIODIC_OTAG	 = 0x40, /* Send OTAG to prevent starvation */
 } ahc_linux_dev_flags;
 
-struct ahc_linux_target;
 struct ahc_linux_device {
 	/*
 	 * The number of transactions currently
@@ -327,12 +325,6 @@ struct ahc_linux_device {
 	 */
 	u_int			commands_since_idle_or_otag;
 #define AHC_OTAG_THRESH	500
-};
-
-struct ahc_linux_target {
-	struct scsi_device	 *sdev[AHC_NUM_LUNS];
-	struct ahc_transinfo	  last_tinfo;
-	struct ahc_softc	 *ahc;
 };
 
 /********************* Definitions Required by the Core ***********************/
@@ -532,8 +524,6 @@ ahc_unlock(struct ahc_softc *ahc, unsigned long *flags)
 #define PCIR_MAPS	0x10
 #define PCIR_SUBVEND_0	0x2c
 #define PCIR_SUBDEV_0	0x2e
-
-extern struct pci_driver aic7xxx_pci_driver;
 
 typedef enum
 {
@@ -761,7 +751,7 @@ int ahc_get_transfer_dir(struct scb *scb)
 static __inline
 void ahc_set_residual(struct scb *scb, u_long resid)
 {
-	scb->io_ctx->resid = resid;
+	scsi_set_resid(scb->io_ctx, resid);
 }
 
 static __inline
@@ -773,7 +763,7 @@ void ahc_set_sense_residual(struct scb *scb, u_long resid)
 static __inline
 u_long ahc_get_residual(struct scb *scb)
 {
-	return (scb->io_ctx->resid);
+	return scsi_get_resid(scb->io_ctx);
 }
 
 static __inline
@@ -824,17 +814,17 @@ ahc_freeze_scb(struct scb *scb)
         }
 }
 
-void	ahc_platform_set_tags(struct ahc_softc *ahc,
+void	ahc_platform_set_tags(struct ahc_softc *ahc, struct scsi_device *sdev,
 			      struct ahc_devinfo *devinfo, ahc_queue_alg);
 int	ahc_platform_abort_scbs(struct ahc_softc *ahc, int target,
 				char channel, int lun, u_int tag,
 				role_t role, uint32_t status);
 irqreturn_t
-	ahc_linux_isr(int irq, void *dev_id, struct pt_regs * regs);
+	ahc_linux_isr(int irq, void *dev_id);
 void	ahc_platform_flushwork(struct ahc_softc *ahc);
 void	ahc_done(struct ahc_softc*, struct scb*);
 void	ahc_send_async(struct ahc_softc *, char channel,
-		       u_int target, u_int lun, ac_code, void *);
+		       u_int target, u_int lun, ac_code);
 void	ahc_print_path(struct ahc_softc *, struct scb *);
 void	ahc_platform_dump_card_state(struct ahc_softc *ahc);
 
