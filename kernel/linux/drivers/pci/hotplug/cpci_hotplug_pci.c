@@ -26,9 +26,9 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/pci.h>
+#include <linux/pci_hotplug.h>
 #include <linux/proc_fs.h>
 #include "../pci.h"
-#include "pci_hotplug.h"
 #include "cpci_hotplug.h"
 
 #define MY_NAME	"cpci_hotplug"
@@ -44,8 +44,6 @@ extern int cpci_debug;
 #define err(format, arg...) printk(KERN_ERR "%s: " format "\n", MY_NAME , ## arg)
 #define info(format, arg...) printk(KERN_INFO "%s: " format "\n", MY_NAME , ## arg)
 #define warn(format, arg...) printk(KERN_WARNING "%s: " format "\n", MY_NAME , ## arg)
-
-#define ROUND_UP(x, a)		(((x) + (a) - 1) & ~((a) - 1))
 
 
 u8 cpci_get_attention_status(struct slot* slot)
