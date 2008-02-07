@@ -227,7 +227,7 @@ static int packetize_data(void *data, size_t length)
 	int packet_length;
 	u8 *temp;
 	u8 *end = (u8 *) data + length;
-	pr_debug("packetize_data: data length %d\n", length);
+	pr_debug("packetize_data: data length %zd\n", length);
 	if (!rbu_data.packetsize) {
 		printk(KERN_WARNING
 			"dell_rbu: packetsize not specified\n");
@@ -249,7 +249,7 @@ static int packetize_data(void *data, size_t length)
 		if ((rc = create_packet(temp, packet_length)))
 			return rc;
 
-		pr_debug("%lu:%lu\n", temp, (end - temp));
+		pr_debug("%p:%td\n", temp, (end - temp));
 		temp += packet_length;
 	}
 
@@ -543,8 +543,9 @@ static ssize_t read_rbu_mono_data(char *buffer, loff_t pos, size_t count)
 	return ret_count;
 }
 
-static ssize_t read_rbu_data(struct kobject *kobj, char *buffer,
-	loff_t pos, size_t count)
+static ssize_t read_rbu_data(struct kobject *kobj,
+			     struct bin_attribute *bin_attr,
+			     char *buffer, loff_t pos, size_t count)
 {
 	ssize_t ret_count = 0;
 
@@ -591,8 +592,9 @@ static void callbackfn_rbu(const struct firmware *fw, void *context)
 	spin_unlock(&rbu_data.lock);
 }
 
-static ssize_t read_rbu_image_type(struct kobject *kobj, char *buffer,
-	loff_t pos, size_t count)
+static ssize_t read_rbu_image_type(struct kobject *kobj,
+				   struct bin_attribute *bin_attr,
+				   char *buffer, loff_t pos, size_t count)
 {
 	int size = 0;
 	if (!pos)
@@ -600,8 +602,9 @@ static ssize_t read_rbu_image_type(struct kobject *kobj, char *buffer,
 	return size;
 }
 
-static ssize_t write_rbu_image_type(struct kobject *kobj, char *buffer,
-	loff_t pos, size_t count)
+static ssize_t write_rbu_image_type(struct kobject *kobj,
+				    struct bin_attribute *bin_attr,
+				    char *buffer, loff_t pos, size_t count)
 {
 	int rc = count;
 	int req_firm_rc = 0;
@@ -660,8 +663,9 @@ static ssize_t write_rbu_image_type(struct kobject *kobj, char *buffer,
 	return rc;
 }
 
-static ssize_t read_rbu_packet_size(struct kobject *kobj, char *buffer,
-	loff_t pos, size_t count)
+static ssize_t read_rbu_packet_size(struct kobject *kobj,
+				    struct bin_attribute *bin_attr,
+				    char *buffer, loff_t pos, size_t count)
 {
 	int size = 0;
 	if (!pos) {
@@ -672,8 +676,9 @@ static ssize_t read_rbu_packet_size(struct kobject *kobj, char *buffer,
 	return size;
 }
 
-static ssize_t write_rbu_packet_size(struct kobject *kobj, char *buffer,
-	loff_t pos, size_t count)
+static ssize_t write_rbu_packet_size(struct kobject *kobj,
+				     struct bin_attribute *bin_attr,
+				     char *buffer, loff_t pos, size_t count)
 {
 	unsigned long temp;
 	spin_lock(&rbu_data.lock);
@@ -687,45 +692,57 @@ static ssize_t write_rbu_packet_size(struct kobject *kobj, char *buffer,
 }
 
 static struct bin_attribute rbu_data_attr = {
-	.attr = {.name = "data",.owner = THIS_MODULE,.mode = 0444},
+	.attr = {.name = "data", .mode = 0444},
 	.read = read_rbu_data,
 };
 
 static struct bin_attribute rbu_image_type_attr = {
-	.attr = {.name = "image_type",.owner = THIS_MODULE,.mode = 0644},
+	.attr = {.name = "image_type", .mode = 0644},
 	.read = read_rbu_image_type,
 	.write = write_rbu_image_type,
 };
 
 static struct bin_attribute rbu_packet_size_attr = {
-	.attr = {.name = "packet_size",.owner = THIS_MODULE,.mode = 0644},
+	.attr = {.name = "packet_size", .mode = 0644},
 	.read = read_rbu_packet_size,
 	.write = write_rbu_packet_size,
 };
 
 static int __init dcdrbu_init(void)
 {
-	int rc = 0;
+	int rc;
 	spin_lock_init(&rbu_data.lock);
 
 	init_packet_head();
-	rbu_device =
-		platform_device_register_simple("dell_rbu", -1, NULL, 0);
-	if (!rbu_device) {
+	rbu_device = platform_device_register_simple("dell_rbu", -1, NULL, 0);
+	if (IS_ERR(rbu_device)) {
 		printk(KERN_ERR
 			"dell_rbu:%s:platform_device_register_simple "
 			"failed\n", __FUNCTION__);
-		return -EIO;
+		return PTR_ERR(rbu_device);
 	}
 
-	sysfs_create_bin_file(&rbu_device->dev.kobj, &rbu_data_attr);
-	sysfs_create_bin_file(&rbu_device->dev.kobj, &rbu_image_type_attr);
-	sysfs_create_bin_file(&rbu_device->dev.kobj,
+	rc = sysfs_create_bin_file(&rbu_device->dev.kobj, &rbu_data_attr);
+	if (rc)
+		goto out_devreg;
+	rc = sysfs_create_bin_file(&rbu_device->dev.kobj, &rbu_image_type_attr);
+	if (rc)
+		goto out_data;
+	rc = sysfs_create_bin_file(&rbu_device->dev.kobj,
 		&rbu_packet_size_attr);
+	if (rc)
+		goto out_imtype;
 
 	rbu_data.entry_created = 0;
-	return rc;
+	return 0;
 
+out_imtype:
+	sysfs_remove_bin_file(&rbu_device->dev.kobj, &rbu_image_type_attr);
+out_data:
+	sysfs_remove_bin_file(&rbu_device->dev.kobj, &rbu_data_attr);
+out_devreg:
+	platform_device_unregister(rbu_device);
+	return rc;
 }
 
 static __exit void dcdrbu_exit(void)

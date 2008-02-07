@@ -8,7 +8,7 @@
  *
  *  See Documentation/dcdbas.txt for more information.
  *
- *  Copyright (C) 1995-2005 Dell Inc.
+ *  Copyright (C) 1995-2006 Dell Inc.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License v2.0 as published by
@@ -40,7 +40,7 @@
 #include "dcdbas.h"
 
 #define DRIVER_NAME		"dcdbas"
-#define DRIVER_VERSION		"5.6.0-2"
+#define DRIVER_VERSION		"5.6.0-3.2"
 #define DRIVER_DESCRIPTION	"Dell Systems Management Base Driver"
 
 static struct platform_device *dcdbas_pdev;
@@ -149,8 +149,9 @@ static ssize_t smi_data_buf_size_store(struct device *dev,
 	return count;
 }
 
-static ssize_t smi_data_read(struct kobject *kobj, char *buf, loff_t pos,
-			     size_t count)
+static ssize_t smi_data_read(struct kobject *kobj,
+			     struct bin_attribute *bin_attr,
+			     char *buf, loff_t pos, size_t count)
 {
 	size_t max_read;
 	ssize_t ret;
@@ -170,10 +171,14 @@ out:
 	return ret;
 }
 
-static ssize_t smi_data_write(struct kobject *kobj, char *buf, loff_t pos,
-			      size_t count)
+static ssize_t smi_data_write(struct kobject *kobj,
+			      struct bin_attribute *bin_attr,
+			      char *buf, loff_t pos, size_t count)
 {
 	ssize_t ret;
+
+	if ((pos + count) > MAX_SMI_DATA_BUF_SIZE)
+		return -EINVAL;
 
 	mutex_lock(&smi_data_lock);
 
@@ -559,7 +564,7 @@ static int __devinit dcdbas_probe(struct platform_device *dev)
 			while (--i >= 0)
 				sysfs_remove_bin_file(&dev->dev.kobj,
 						      dcdbas_bin_attrs[i]);
-			sysfs_create_group(&dev->dev.kobj, &dcdbas_attr_group);
+			sysfs_remove_group(&dev->dev.kobj, &dcdbas_attr_group);
 			return error;
 		}
 	}
