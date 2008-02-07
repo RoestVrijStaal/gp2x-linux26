@@ -174,6 +174,7 @@
 #include <linux/seq_file.h>
 #include <linux/bitops.h>
 
+#include <net/net_namespace.h>
 #include <net/ax25.h>
 
 #include <asm/irq.h>
@@ -200,7 +201,7 @@ static void z8530_init(void);
 
 static void init_channel(struct scc_channel *scc);
 static void scc_key_trx (struct scc_channel *scc, char tx);
-static irqreturn_t scc_isr(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t scc_isr(int irq, void *dev_id);
 static void scc_init_timer(struct scc_channel *scc);
 
 static int scc_net_alloc(const char *name, struct scc_channel *scc);
@@ -626,7 +627,7 @@ static void scc_isr_dispatch(struct scc_channel *scc, int vector)
 
 #define SCC_IRQTIMEOUT 30000
 
-static irqreturn_t scc_isr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t scc_isr(int irq, void *dev_id)
 {
 	unsigned char vector;	
 	struct scc_channel *scc;
@@ -1540,11 +1541,6 @@ static int scc_net_alloc(const char *name, struct scc_channel *scc)
 /* *			    Network driver methods		      * */
 /* ******************************************************************** */
 
-static unsigned char ax25_bcast[AX25_ADDR_LEN] =
-{'Q' << 1, 'S' << 1, 'T' << 1, ' ' << 1, ' ' << 1, ' ' << 1, '0' << 1};
-static unsigned char ax25_nocall[AX25_ADDR_LEN] =
-{'L' << 1, 'I' << 1, 'N' << 1, 'U' << 1, 'X' << 1, ' ' << 1, '1' << 1};
-
 /* ----> Initialize device <----- */
 
 static void scc_net_setup(struct net_device *dev)
@@ -1555,15 +1551,15 @@ static void scc_net_setup(struct net_device *dev)
 	dev->stop	     = scc_net_close;
 
 	dev->hard_start_xmit = scc_net_tx;
-	dev->hard_header     = ax25_hard_header;
-	dev->rebuild_header  = ax25_rebuild_header;
+	dev->header_ops      = &ax25_header_ops;
+
 	dev->set_mac_address = scc_net_set_mac_address;
 	dev->get_stats       = scc_net_get_stats;
 	dev->do_ioctl        = scc_net_ioctl;
 	dev->tx_timeout      = NULL;
 
-	memcpy(dev->broadcast, ax25_bcast,  AX25_ADDR_LEN);
-	memcpy(dev->dev_addr,  ax25_nocall, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast,  AX25_ADDR_LEN);
+	memcpy(dev->dev_addr,  &ax25_defaddr, AX25_ADDR_LEN);
  
 	dev->flags      = 0;
 
@@ -2088,7 +2084,7 @@ static int scc_net_seq_open(struct inode *inode, struct file *file)
 	return seq_open(file, &scc_net_seq_ops);
 }
 
-static struct file_operations scc_net_seq_fops = {
+static const struct file_operations scc_net_seq_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = scc_net_seq_open,
 	.read	 = seq_read,
@@ -2119,7 +2115,7 @@ static int __init scc_init_driver (void)
 	}
 	rtnl_unlock();
 
-	proc_net_fops_create("z8530drv", 0, &scc_net_seq_fops);
+	proc_net_fops_create(&init_net, "z8530drv", 0, &scc_net_seq_fops);
 
 	return 0;
 }
@@ -2174,7 +2170,7 @@ static void __exit scc_cleanup_driver(void)
 	if (Vector_Latch)
 		release_region(Vector_Latch, 1);
 
-	proc_net_remove("z8530drv");
+	proc_net_remove(&init_net, "z8530drv");
 }
 
 MODULE_AUTHOR("Joerg Reuter <jreuter@yaina.de>");

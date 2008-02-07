@@ -64,7 +64,7 @@
 #include <net/ax25.h>
 #include <linux/inet.h>
 #include <linux/netdevice.h>
-#include <linux/if_ether.h>
+#include <linux/etherdevice.h>
 #include <linux/if_arp.h>
 #include <linux/skbuff.h>
 #include <net/sock.h>
@@ -83,15 +83,11 @@
 
 #include <net/ip.h>
 #include <net/arp.h>
+#include <net/net_namespace.h>
 
 #include <linux/bpqether.h>
 
 static char banner[] __initdata = KERN_INFO "AX.25: bpqether driver version 004\n";
-
-static unsigned char ax25_bcast[AX25_ADDR_LEN] =
-	{'Q' << 1, 'S' << 1, 'T' << 1, ' ' << 1, ' ' << 1, ' ' << 1, '0' << 1};
-static unsigned char ax25_defaddr[AX25_ADDR_LEN] =
-	{'L' << 1, 'I' << 1, 'N' << 1, 'U' << 1, 'X' << 1, ' ' << 1, '1' << 1};
 
 static char bcast_addr[6]={0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
 
@@ -99,7 +95,6 @@ static char bpq_eth_addr[6];
 
 static int bpq_rcv(struct sk_buff *, struct net_device *, struct packet_type *, struct net_device *);
 static int bpq_device_event(struct notifier_block *, unsigned long, void *);
-static const char *bpq_print_ethaddr(const unsigned char *);
 
 static struct packet_type bpq_packet_type = {
 	.type	= __constant_htons(ETH_P_BPQ),
@@ -176,6 +171,9 @@ static int bpq_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_ty
 	char * ptr;
 	struct ethhdr *eth;
 	struct bpqdev *bpq;
+
+	if (dev->nd_net != &init_net)
+		goto drop;
 
 	if ((skb = skb_share_check(skb, GFP_ATOMIC)) == NULL)
 		return NET_RX_DROP;
@@ -287,8 +285,8 @@ static int bpq_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	skb->protocol = ax25_type_trans(skb, dev);
-	skb->nh.raw = skb->data;
-	dev->hard_header(skb, dev, ETH_P_BPQ, bpq->dest_addr, NULL, 0);
+	skb_reset_network_header(skb);
+	dev_hard_header(skb, dev, ETH_P_BPQ, bpq->dest_addr, NULL, 0);
 	bpq->stats.tx_packets++;
 	bpq->stats.tx_bytes+=skb->len;
   
@@ -384,16 +382,6 @@ static int bpq_close(struct net_device *dev)
 /*
  *	Proc filesystem
  */
-static const char * bpq_print_ethaddr(const unsigned char *e)
-{
-	static char buf[18];
-
-	sprintf(buf, "%2.2X:%2.2X:%2.2X:%2.2X:%2.2X:%2.2X",
-		e[0], e[1], e[2], e[3], e[4], e[5]);
-
-	return buf;
-}
-
 static void *bpq_seq_start(struct seq_file *seq, loff_t *pos)
 {
 	int i = 1;
@@ -418,12 +406,12 @@ static void *bpq_seq_next(struct seq_file *seq, void *v, loff_t *pos)
 	++*pos;
 
 	if (v == SEQ_START_TOKEN)
-		p = bpq_devices.next;
+		p = rcu_dereference(bpq_devices.next);
 	else
-		p = ((struct bpqdev *)v)->bpq_list.next;
+		p = rcu_dereference(((struct bpqdev *)v)->bpq_list.next);
 
 	return (p == &bpq_devices) ? NULL 
-		: rcu_dereference(list_entry(p, struct bpqdev, bpq_list));
+		: list_entry(p, struct bpqdev, bpq_list);
 }
 
 static void bpq_seq_stop(struct seq_file *seq, void *v)
@@ -439,14 +427,16 @@ static int bpq_seq_show(struct seq_file *seq, void *v)
 			 "dev   ether      destination        accept from\n");
 	else {
 		const struct bpqdev *bpqdev = v;
+		DECLARE_MAC_BUF(mac);
 
 		seq_printf(seq, "%-5s %-10s %s  ",
 			bpqdev->axdev->name, bpqdev->ethdev->name,
-			bpq_print_ethaddr(bpqdev->dest_addr));
+			print_mac(mac, bpqdev->dest_addr));
 
-		seq_printf(seq, "%s\n",
-			(bpqdev->acpt_addr[0] & 0x01) ? "*" 
-			   : bpq_print_ethaddr(bpqdev->acpt_addr));
+		if (is_multicast_ether_addr(bpqdev->acpt_addr))
+			seq_printf(seq, "*\n");
+		else
+			seq_printf(seq, "%s\n", print_mac(mac, bpqdev->acpt_addr));
 
 	}
 	return 0;
@@ -464,7 +454,7 @@ static int bpq_info_open(struct inode *inode, struct file *file)
 	return seq_open(file, &bpq_seqops);
 }
 
-static struct file_operations bpq_info_fops = {
+static const struct file_operations bpq_info_fops = {
 	.owner = THIS_MODULE,
 	.open = bpq_info_open,
 	.read = seq_read,
@@ -487,14 +477,13 @@ static void bpq_setup(struct net_device *dev)
 	dev->do_ioctl	     = bpq_ioctl;
 	dev->destructor	     = free_netdev;
 
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr,  ax25_defaddr, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr,  &ax25_defaddr, AX25_ADDR_LEN);
 
 	dev->flags      = 0;
 
 #if defined(CONFIG_AX25) || defined(CONFIG_AX25_MODULE)
-	dev->hard_header     = ax25_hard_header;
-	dev->rebuild_header  = ax25_rebuild_header;
+	dev->header_ops      = &ax25_header_ops;
 #endif
 
 	dev->type            = ARPHRD_AX25;
@@ -564,6 +553,9 @@ static int bpq_device_event(struct notifier_block *this,unsigned long event, voi
 {
 	struct net_device *dev = (struct net_device *)ptr;
 
+	if (dev->nd_net != &init_net)
+		return NOTIFY_DONE;
+
 	if (!dev_is_ethdev(dev))
 		return NOTIFY_DONE;
 
@@ -599,7 +591,7 @@ static int bpq_device_event(struct notifier_block *this,unsigned long event, voi
 static int __init bpq_init_driver(void)
 {
 #ifdef CONFIG_PROC_FS
-	if (!proc_net_fops_create("bpqether", S_IRUGO, &bpq_info_fops)) {
+	if (!proc_net_fops_create(&init_net, "bpqether", S_IRUGO, &bpq_info_fops)) {
 		printk(KERN_ERR
 			"bpq: cannot create /proc/net/bpqether entry.\n");
 		return -ENOENT;
@@ -623,7 +615,7 @@ static void __exit bpq_cleanup_driver(void)
 
 	unregister_netdevice_notifier(&bpq_dev_notifier);
 
-	proc_net_remove("bpqether");
+	proc_net_remove(&init_net, "bpqether");
 
 	rtnl_lock();
 	while (!list_empty(&bpq_devices)) {
