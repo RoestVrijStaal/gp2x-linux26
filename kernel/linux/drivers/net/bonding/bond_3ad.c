@@ -29,6 +29,7 @@
 #include <linux/ethtool.h>
 #include <linux/if_bonding.h>
 #include <linux/pkt_sched.h>
+#include <net/net_namespace.h>
 #include "bonding.h"
 #include "bond_3ad.h"
 
@@ -85,6 +86,7 @@
 #define     AD_LINK_SPEED_BITMASK_10MBPS      0x2
 #define     AD_LINK_SPEED_BITMASK_100MBPS     0x4
 #define     AD_LINK_SPEED_BITMASK_1000MBPS    0x8
+#define     AD_LINK_SPEED_BITMASK_10000MBPS   0x10
 //endalloun
 
 // compare MAC addresses
@@ -99,7 +101,6 @@ static u16 __get_link_speed(struct port *port);
 static u8 __get_duplex(struct port *port);
 static inline void __initialize_port_locks(struct port *port);
 //conversions
-static void __ntohs_lacpdu(struct lacpdu *lacpdu);
 static u16 __ad_timer_to_ticks(u16 timer_type, u16 Par);
 
 
@@ -125,7 +126,7 @@ static struct aggregator *__get_active_agg(struct aggregator *aggregator);
 
 // ================= main 802.3ad protocol functions ==================
 static int ad_lacpdu_send(struct port *port);
-static int ad_marker_send(struct port *port, struct marker *marker);
+static int ad_marker_send(struct port *port, struct bond_marker *marker);
 static void ad_mux_machine(struct port *port);
 static void ad_rx_machine(struct lacpdu *lacpdu, struct port *port);
 static void ad_tx_machine(struct port *port);
@@ -138,8 +139,8 @@ static void ad_initialize_port(struct port *port, int lacp_fast);
 static void ad_initialize_lacpdu(struct lacpdu *Lacpdu);
 static void ad_enable_collecting_distributing(struct port *port);
 static void ad_disable_collecting_distributing(struct port *port);
-static void ad_marker_info_received(struct marker *marker_info, struct port *port);
-static void ad_marker_response_received(struct marker *marker, struct port *port);
+static void ad_marker_info_received(struct bond_marker *marker_info, struct port *port);
+static void ad_marker_response_received(struct bond_marker *marker, struct port *port);
 
 
 /////////////////////////////////////////////////////////////////////////////////
@@ -330,7 +331,8 @@ static inline void __release_rx_machine_lock(struct port *port)
  *     0,
  *     %AD_LINK_SPEED_BITMASK_10MBPS,
  *     %AD_LINK_SPEED_BITMASK_100MBPS,
- *     %AD_LINK_SPEED_BITMASK_1000MBPS
+ *     %AD_LINK_SPEED_BITMASK_1000MBPS,
+ *     %AD_LINK_SPEED_BITMASK_10000MBPS
  */
 static u16 __get_link_speed(struct port *port)
 {
@@ -355,6 +357,10 @@ static u16 __get_link_speed(struct port *port)
 
 		case SPEED_1000:
 			speed = AD_LINK_SPEED_BITMASK_1000MBPS;
+			break;
+
+		case SPEED_10000:
+			speed = AD_LINK_SPEED_BITMASK_10000MBPS;
 			break;
 
 		default:
@@ -413,26 +419,6 @@ static inline void __initialize_port_locks(struct port *port)
 }
 
 //conversions
-/**
- * __ntohs_lacpdu - convert the contents of a LACPDU to host byte order
- * @lacpdu: the speicifed lacpdu
- *
- * For each multi-byte field in the lacpdu, convert its content
- */
-static void __ntohs_lacpdu(struct lacpdu *lacpdu)
-{
-	if (lacpdu) {
-		lacpdu->actor_system_priority =   ntohs(lacpdu->actor_system_priority);
-		lacpdu->actor_key =               ntohs(lacpdu->actor_key);
-		lacpdu->actor_port_priority =     ntohs(lacpdu->actor_port_priority);
-		lacpdu->actor_port =              ntohs(lacpdu->actor_port);
-		lacpdu->partner_system_priority = ntohs(lacpdu->partner_system_priority);
-		lacpdu->partner_key =             ntohs(lacpdu->partner_key);
-		lacpdu->partner_port_priority =   ntohs(lacpdu->partner_port_priority);
-		lacpdu->partner_port =            ntohs(lacpdu->partner_port);
-		lacpdu->collector_max_delay =     ntohs(lacpdu->collector_max_delay);
-	}
-}
 
 /**
  * __ad_timer_to_ticks - convert a given timer type to AD module ticks
@@ -490,11 +476,11 @@ static void __record_pdu(struct lacpdu *lacpdu, struct port *port)
 	// validate lacpdu and port
 	if (lacpdu && port) {
 		// record the new parameter values for the partner operational
-		port->partner_oper_port_number = lacpdu->actor_port;
-		port->partner_oper_port_priority = lacpdu->actor_port_priority;
+		port->partner_oper_port_number = ntohs(lacpdu->actor_port);
+		port->partner_oper_port_priority = ntohs(lacpdu->actor_port_priority);
 		port->partner_oper_system = lacpdu->actor_system;
-		port->partner_oper_system_priority = lacpdu->actor_system_priority;
-		port->partner_oper_key = lacpdu->actor_key;
+		port->partner_oper_system_priority = ntohs(lacpdu->actor_system_priority);
+		port->partner_oper_key = ntohs(lacpdu->actor_key);
 		// zero partener's lase states
 		port->partner_oper_port_state = 0;
 		port->partner_oper_port_state |= (lacpdu->actor_state & AD_STATE_LACP_ACTIVITY);
@@ -561,11 +547,11 @@ static void __update_selected(struct lacpdu *lacpdu, struct port *port)
 	// validate lacpdu and port
 	if (lacpdu && port) {
 		// check if any parameter is different
-		if ((lacpdu->actor_port != port->partner_oper_port_number) ||
-		    (lacpdu->actor_port_priority != port->partner_oper_port_priority) ||
+		if ((ntohs(lacpdu->actor_port) != port->partner_oper_port_number) ||
+		    (ntohs(lacpdu->actor_port_priority) != port->partner_oper_port_priority) ||
 		    MAC_ADDRESS_COMPARE(&(lacpdu->actor_system), &(port->partner_oper_system)) ||
-		    (lacpdu->actor_system_priority != port->partner_oper_system_priority) ||
-		    (lacpdu->actor_key != port->partner_oper_key) ||
+		    (ntohs(lacpdu->actor_system_priority) != port->partner_oper_system_priority) ||
+		    (ntohs(lacpdu->actor_key) != port->partner_oper_key) ||
 		    ((lacpdu->actor_state & AD_STATE_AGGREGATION) != (port->partner_oper_port_state & AD_STATE_AGGREGATION))
 		   ) {
 			// update the state machine Selected variable
@@ -628,11 +614,11 @@ static void __choose_matched(struct lacpdu *lacpdu, struct port *port)
 	// validate lacpdu and port
 	if (lacpdu && port) {
 		// check if all parameters are alike
-		if (((lacpdu->partner_port == port->actor_port_number) &&
-		     (lacpdu->partner_port_priority == port->actor_port_priority) &&
+		if (((ntohs(lacpdu->partner_port) == port->actor_port_number) &&
+		     (ntohs(lacpdu->partner_port_priority) == port->actor_port_priority) &&
 		     !MAC_ADDRESS_COMPARE(&(lacpdu->partner_system), &(port->actor_system)) &&
-		     (lacpdu->partner_system_priority == port->actor_system_priority) &&
-		     (lacpdu->partner_key == port->actor_oper_port_key) &&
+		     (ntohs(lacpdu->partner_system_priority) == port->actor_system_priority) &&
+		     (ntohs(lacpdu->partner_key) == port->actor_oper_port_key) &&
 		     ((lacpdu->partner_state & AD_STATE_AGGREGATION) == (port->actor_oper_port_state & AD_STATE_AGGREGATION))) ||
 		    // or this is individual link(aggregation == FALSE)
 		    ((lacpdu->actor_state & AD_STATE_AGGREGATION) == 0)
@@ -662,11 +648,11 @@ static void __update_ntt(struct lacpdu *lacpdu, struct port *port)
 	// validate lacpdu and port
 	if (lacpdu && port) {
 		// check if any parameter is different
-		if ((lacpdu->partner_port != port->actor_port_number) ||
-		    (lacpdu->partner_port_priority != port->actor_port_priority) ||
+		if ((ntohs(lacpdu->partner_port) != port->actor_port_number) ||
+		    (ntohs(lacpdu->partner_port_priority) != port->actor_port_priority) ||
 		    MAC_ADDRESS_COMPARE(&(lacpdu->partner_system), &(port->actor_system)) ||
-		    (lacpdu->partner_system_priority != port->actor_system_priority) ||
-		    (lacpdu->partner_key != port->actor_oper_port_key) ||
+		    (ntohs(lacpdu->partner_system_priority) != port->actor_system_priority) ||
+		    (ntohs(lacpdu->partner_key) != port->actor_oper_port_key) ||
 		    ((lacpdu->partner_state & AD_STATE_LACP_ACTIVITY) != (port->actor_oper_port_state & AD_STATE_LACP_ACTIVITY)) ||
 		    ((lacpdu->partner_state & AD_STATE_LACP_TIMEOUT) != (port->actor_oper_port_state & AD_STATE_LACP_TIMEOUT)) ||
 		    ((lacpdu->partner_state & AD_STATE_SYNCHRONIZATION) != (port->actor_oper_port_state & AD_STATE_SYNCHRONIZATION)) ||
@@ -775,6 +761,9 @@ static u32 __get_agg_bandwidth(struct aggregator *aggregator)
 		case AD_LINK_SPEED_BITMASK_1000MBPS:
 			bandwidth = aggregator->num_of_ports * 1000;
 			break;
+		case AD_LINK_SPEED_BITMASK_10000MBPS:
+			bandwidth = aggregator->num_of_ports * 10000;
+			break;
 		default:
 			bandwidth=0; // to silent the compilor ....
 		}
@@ -817,11 +806,11 @@ static inline void __update_lacpdu_from_port(struct port *port)
 	 * lacpdu->actor_information_length  initialized
 	 */
 
-	lacpdu->actor_system_priority = port->actor_system_priority;
+	lacpdu->actor_system_priority = htons(port->actor_system_priority);
 	lacpdu->actor_system = port->actor_system;
-	lacpdu->actor_key = port->actor_oper_port_key;
-	lacpdu->actor_port_priority = port->actor_port_priority;
-	lacpdu->actor_port = port->actor_port_number;
+	lacpdu->actor_key = htons(port->actor_oper_port_key);
+	lacpdu->actor_port_priority = htons(port->actor_port_priority);
+	lacpdu->actor_port = htons(port->actor_port_number);
 	lacpdu->actor_state = port->actor_oper_port_state;
 
 	/* lacpdu->reserved_3_1              initialized
@@ -829,11 +818,11 @@ static inline void __update_lacpdu_from_port(struct port *port)
 	 * lacpdu->partner_information_length initialized
 	 */
 
-	lacpdu->partner_system_priority = port->partner_oper_system_priority;
+	lacpdu->partner_system_priority = htons(port->partner_oper_system_priority);
 	lacpdu->partner_system = port->partner_oper_system;
-	lacpdu->partner_key = port->partner_oper_key;
-	lacpdu->partner_port_priority = port->partner_oper_port_priority;
-	lacpdu->partner_port = port->partner_oper_port_number;
+	lacpdu->partner_key = htons(port->partner_oper_key);
+	lacpdu->partner_port_priority = htons(port->partner_oper_port_priority);
+	lacpdu->partner_port = htons(port->partner_oper_port_number);
 	lacpdu->partner_state = port->partner_oper_port_state;
 
 	/* lacpdu->reserved_3_2              initialized
@@ -845,9 +834,6 @@ static inline void __update_lacpdu_from_port(struct port *port)
 	 * terminator_length                 initialized
 	 * reserved_50[50]                   initialized
 	 */
-
-	/* Convert all non u8 parameters to Big Endian for transmit */
-	__ntohs_lacpdu(lacpdu);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -875,8 +861,8 @@ static int ad_lacpdu_send(struct port *port)
 	}
 
 	skb->dev = slave->dev;
-	skb->mac.raw = skb->data;
-	skb->nh.raw = skb->data + ETH_HLEN;
+	skb_reset_mac_header(skb);
+	skb->network_header = skb->mac_header + ETH_HLEN;
 	skb->protocol = PKT_TYPE_LACPDU;
 	skb->priority = TC_PRIO_CONTROL;
 
@@ -903,12 +889,12 @@ static int ad_lacpdu_send(struct port *port)
  * Returns:   0 on success
  *          < 0 on error
  */
-static int ad_marker_send(struct port *port, struct marker *marker)
+static int ad_marker_send(struct port *port, struct bond_marker *marker)
 {
 	struct slave *slave = port->slave;
 	struct sk_buff *skb;
-	struct marker_header *marker_header;
-	int length = sizeof(struct marker_header);
+	struct bond_marker_header *marker_header;
+	int length = sizeof(struct bond_marker_header);
 	struct mac_addr lacpdu_multicast_address = AD_MULTICAST_LACPDU_ADDR;
 
 	skb = dev_alloc_skb(length + 16);
@@ -919,11 +905,11 @@ static int ad_marker_send(struct port *port, struct marker *marker)
 	skb_reserve(skb, 16);
 
 	skb->dev = slave->dev;
-	skb->mac.raw = skb->data;
-	skb->nh.raw = skb->data + ETH_HLEN;
+	skb_reset_mac_header(skb);
+	skb->network_header = skb->mac_header + ETH_HLEN;
 	skb->protocol = PKT_TYPE_LACPDU;
 
-	marker_header = (struct marker_header *)skb_put(skb, length);
+	marker_header = (struct bond_marker_header *)skb_put(skb, length);
 
 	marker_header->ad_header.destination_address = lacpdu_multicast_address;
 	/* Note: source addres is set to be the member's PERMANENT address, because we use it
@@ -1723,7 +1709,7 @@ static void ad_disable_collecting_distributing(struct port *port)
  */
 static void ad_marker_info_send(struct port *port)
 {
-	struct marker marker;
+	struct bond_marker marker;
 	u16 index;
 
 	// fill the marker PDU with the appropriate values
@@ -1756,13 +1742,14 @@ static void ad_marker_info_send(struct port *port)
  * @port: the port we're looking at
  *
  */
-static void ad_marker_info_received(struct marker *marker_info,struct port *port)
+static void ad_marker_info_received(struct bond_marker *marker_info,
+	struct port *port)
 {
-	struct marker marker;
+	struct bond_marker marker;
 
 	// copy the received marker data to the response marker
 	//marker = *marker_info;
-	memcpy(&marker, marker_info, sizeof(struct marker));
+	memcpy(&marker, marker_info, sizeof(struct bond_marker));
 	// change the marker subtype to marker response
 	marker.tlv_type=AD_MARKER_RESPONSE_SUBTYPE;
 	// send the marker response
@@ -1781,7 +1768,8 @@ static void ad_marker_info_received(struct marker *marker_info,struct port *port
  * response for marker PDU's, in this stage, but only to respond to marker
  * information.
  */
-static void ad_marker_response_received(struct marker *marker, struct port *port)
+static void ad_marker_response_received(struct bond_marker *marker,
+	struct port *port)
 {
 	marker=NULL; // just to satisfy the compiler
 	port=NULL;  // just to satisfy the compiler
@@ -1824,7 +1812,7 @@ static void ad_initialize_lacpdu(struct lacpdu *lacpdu)
 	}
 	lacpdu->tlv_type_collector_info = 0x03;
 	lacpdu->collector_information_length= 0x10;
-	lacpdu->collector_max_delay = AD_COLLECTOR_MAX_DELAY;
+	lacpdu->collector_max_delay = htons(AD_COLLECTOR_MAX_DELAY);
 	for (index=0; index<=11; index++) {
 		lacpdu->reserved_12[index]=0;
 	}
@@ -2088,8 +2076,10 @@ void bond_3ad_unbind_slave(struct slave *slave)
  * times out, and it selects an aggregator for the ports that are yet not
  * related to any aggregator, and selects the active aggregator for a bond.
  */
-void bond_3ad_state_machine_handler(struct bonding *bond)
+void bond_3ad_state_machine_handler(struct work_struct *work)
 {
+	struct bonding *bond = container_of(work, struct bonding,
+					    ad_work.work);
 	struct port *port;
 	struct aggregator *aggregator;
 
@@ -2140,7 +2130,7 @@ void bond_3ad_state_machine_handler(struct bonding *bond)
 	}
 
 re_arm:
-	mod_timer(&(BOND_AD_INFO(bond).ad_timer), jiffies + ad_delta_in_ticks);
+	queue_delayed_work(bond->wq, &bond->ad_work, ad_delta_in_ticks);
 out:
 	read_unlock(&bond->lock);
 }
@@ -2171,7 +2161,6 @@ static void bond_3ad_rx_indication(struct lacpdu *lacpdu, struct slave *slave, u
 
 		switch (lacpdu->subtype) {
 		case AD_TYPE_LACPDU:
-			__ntohs_lacpdu(lacpdu);
 			dprintk("Received LACPDU on port %d\n", port->actor_port_number);
 			ad_rx_machine(lacpdu, port);
 			break;
@@ -2179,15 +2168,15 @@ static void bond_3ad_rx_indication(struct lacpdu *lacpdu, struct slave *slave, u
 		case AD_TYPE_MARKER:
 			// No need to convert fields to Little Endian since we don't use the marker's fields.
 
-			switch (((struct marker *)lacpdu)->tlv_type) {
+			switch (((struct bond_marker *)lacpdu)->tlv_type) {
 			case AD_MARKER_INFORMATION_SUBTYPE:
 				dprintk("Received Marker Information on port %d\n", port->actor_port_number);
-				ad_marker_info_received((struct marker *)lacpdu, port);
+				ad_marker_info_received((struct bond_marker *)lacpdu, port);
 				break;
 
 			case AD_MARKER_RESPONSE_SUBTYPE:
 				dprintk("Received Marker Response on port %d\n", port->actor_port_number);
-				ad_marker_response_received((struct marker *)lacpdu, port);
+				ad_marker_response_received((struct bond_marker *)lacpdu, port);
 				break;
 
 			default:
@@ -2295,19 +2284,18 @@ void bond_3ad_handle_link_change(struct slave *slave, char link)
 }
 
 /*
- * set link state for bonding master: if we have an active partnered
+ * set link state for bonding master: if we have an active 
  * aggregator, we're up, if not, we're down.  Presumes that we cannot
  * have an active aggregator if there are no slaves with link up.
+ *
+ * This behavior complies with IEEE 802.3 section 43.3.9.
  *
  * Called by bond_set_carrier(). Return zero if carrier state does not
  * change, nonzero if it does.
  */
 int bond_3ad_set_carrier(struct bonding *bond)
 {
-	struct aggregator *agg;
-
-	agg = __get_active_agg(&(SLAVE_AD_INFO(bond->first_slave).aggregator));
-	if (agg && MAC_ADDRESS_COMPARE(&agg->partner_system, &null_mac_addr)) {
+	if (__get_active_agg(&(SLAVE_AD_INFO(bond->first_slave).aggregator))) {
 		if (!netif_carrier_ok(bond->dev)) {
 			netif_carrier_on(bond->dev);
 			return 1;
@@ -2440,6 +2428,9 @@ int bond_3ad_lacpdu_recv(struct sk_buff *skb, struct net_device *dev, struct pac
 	struct bonding *bond = dev->priv;
 	struct slave *slave = NULL;
 	int ret = NET_RX_DROP;
+
+	if (dev->nd_net != &init_net)
+		goto out;
 
 	if (!(dev->flags & IFF_MASTER))
 		goto out;
