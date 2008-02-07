@@ -107,8 +107,6 @@
 
 #define TICK_SIZE (tick_nsec / 1000)
 
-extern unsigned long wall_jiffies;
-
 static unsigned long tmu_base, rtc_base;
 unsigned long cprc_base;
 
@@ -125,7 +123,7 @@ static unsigned long long usecs_per_jiffy = 1000000/HZ; /* Approximation */
 static unsigned long long scaled_recip_ctc_ticks_per_jiffy;
 
 /* Estimate number of microseconds that have elapsed since the last timer tick,
-   by scaling the delta that has occured in the CTC register.
+   by scaling the delta that has occurred in the CTC register.
 
    WARNING WARNING WARNING : This algorithm relies on the CTC decrementing at
    the CPU clock rate.  If the CPU sleeps, the CTC stops counting.  Bear this
@@ -194,13 +192,6 @@ void do_gettimeofday(struct timeval *tv)
 	do {
 		seq = read_seqbegin_irqsave(&xtime_lock, flags);
 		usec = usecs_since_tick();
-		{
-			unsigned long lost = jiffies - wall_jiffies;
-
-			if (lost)
-				usec += lost * (1000000 / HZ);
-		}
-
 		sec = xtime.tv_sec;
 		usec += xtime.tv_nsec / 1000;
 	} while (read_seqretry_irqrestore(&xtime_lock, seq, flags));
@@ -229,8 +220,7 @@ int do_settimeofday(struct timespec *tv)
 	 * wall time.  Discover what correction gettimeofday() would have
 	 * made, and then undo it!
 	 */
-	nsec -= 1000 * (usecs_since_tick() +
-				(jiffies - wall_jiffies) * (1000000 / HZ));
+	nsec -= 1000 * usecs_since_tick();
 
 	wtm_sec  = wall_to_monotonic.tv_sec + (xtime.tv_sec - sec);
 	wtm_nsec = wall_to_monotonic.tv_nsec + (xtime.tv_nsec - nsec);
@@ -292,17 +282,18 @@ static long last_rtc_update = 0;
  * timer_interrupt() needs to keep up the real-time clock,
  * as well as call the "do_timer()" routine every clocktick
  */
-static inline void do_timer_interrupt(int irq, struct pt_regs *regs)
+static inline void do_timer_interrupt(void)
 {
 	unsigned long long current_ctc;
 	asm ("getcon cr62, %0" : "=r" (current_ctc));
 	ctc_last_interrupt = (unsigned long) current_ctc;
 
-	do_timer(regs);
+	do_timer(1);
 #ifndef CONFIG_SMP
-	update_process_times(user_mode(regs));
+	update_process_times(user_mode(get_irq_regs()));
 #endif
-	profile_tick(CPU_PROFILING, regs);
+	if (current->pid)
+		profile_tick(CPU_PROFILING);
 
 #ifdef CONFIG_HEARTBEAT
 	{
@@ -333,7 +324,7 @@ static inline void do_timer_interrupt(int irq, struct pt_regs *regs)
  * Time Stamp Counter value at the time of the timer interrupt, so that
  * we later on can estimate the time of day more exactly.
  */
-static irqreturn_t timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t timer_interrupt(int irq, void *dev_id)
 {
 	unsigned long timer_status;
 
@@ -350,7 +341,7 @@ static irqreturn_t timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	 * locally disabled. -arca
 	 */
 	write_lock(&xtime_lock);
-	do_timer_interrupt(irq, regs);
+	do_timer_interrupt();
 	write_unlock(&xtime_lock);
 
 	return IRQ_HANDLED;
@@ -475,17 +466,28 @@ static __init unsigned int get_cpu_hz(void)
 #endif
 }
 
-static irqreturn_t sh64_rtc_interrupt(int irq, void *dev_id,
-				      struct pt_regs *regs)
+static irqreturn_t sh64_rtc_interrupt(int irq, void *dev_id)
 {
+	struct pt_regs *regs = get_irq_regs();
+
 	ctrl_outb(0, RCR1);	/* Disable Carry Interrupts */
 	regs->regs[3] = 1;	/* Using r3 */
 
 	return IRQ_HANDLED;
 }
 
-static struct irqaction irq0  = { timer_interrupt, IRQF_DISABLED, CPU_MASK_NONE, "timer", NULL, NULL};
-static struct irqaction irq1  = { sh64_rtc_interrupt, IRQF_DISABLED, CPU_MASK_NONE, "rtc", NULL, NULL};
+static struct irqaction irq0  = {
+	.handler = timer_interrupt,
+	.flags = IRQF_DISABLED,
+	.mask = CPU_MASK_NONE,
+	.name = "timer",
+};
+static struct irqaction irq1  = {
+	.handler = sh64_rtc_interrupt,
+	.flags = IRQF_DISABLED,
+	.mask = CPU_MASK_NONE,
+	.name = "rtc",
+};
 
 void __init time_init(void)
 {
@@ -589,12 +591,3 @@ void enter_deep_standby(void)
 	asm __volatile__ ("nop");
 	panic("Unexpected wakeup!\n");
 }
-
-/*
- * Scheduler clock - returns current time in nanosec units.
- */
-unsigned long long sched_clock(void)
-{
-	return (unsigned long long)jiffies * (1000000000 / HZ);
-}
-

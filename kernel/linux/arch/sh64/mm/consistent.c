@@ -11,6 +11,8 @@
 #include <linux/mm.h>
 #include <linux/string.h>
 #include <linux/pci.h>
+#include <linux/dma-mapping.h>
+#include <linux/module.h>
 #include <asm/io.h>
 
 void *consistent_alloc(struct pci_dev *hwdev, size_t size,
@@ -30,21 +32,22 @@ void *consistent_alloc(struct pci_dev *hwdev, size_t size,
 
 	if (vp != NULL) {
 		memset(vp, 0, size);
-		*dma_handle = virt_to_bus(ret);
-		dma_cache_wback_inv((unsigned long)ret, size);
+		*dma_handle = virt_to_phys(ret);
+		dma_cache_sync(NULL, ret, size, DMA_BIDIRECTIONAL);
 	}
 
 	return vp;
 }
+EXPORT_SYMBOL(consistent_alloc);
 
 void consistent_free(struct pci_dev *hwdev, size_t size,
 			 void *vaddr, dma_addr_t dma_handle)
 {
 	void *alloc;
 
-	alloc = bus_to_virt((unsigned long)dma_handle);
+	alloc = phys_to_virt((unsigned long)dma_handle);
 	free_pages((unsigned long)alloc, get_order(size));
 
 	iounmap(vaddr);
 }
-
+EXPORT_SYMBOL(consistent_free);
