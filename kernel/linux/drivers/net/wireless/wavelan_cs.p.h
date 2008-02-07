@@ -120,7 +120,7 @@
  * the Wavelan itself (NCR -> AT&T -> Lucent).
  *
  * All started with Anders Klemets <klemets@paul.rutgers.edu>,
- * writting a Wavelan ISA driver for the MACH microkernel. Girish
+ * writing a Wavelan ISA driver for the MACH microkernel. Girish
  * Welling <welling@paul.rutgers.edu> had also worked on it.
  * Keith Moore modify this for the Pcmcia hardware.
  * 
@@ -738,8 +738,7 @@ static void
 /* ---------------------- INTERRUPT HANDLING ---------------------- */
 static irqreturn_t
 	wavelan_interrupt(int,	/* Interrupt handler */
-			  void *,
-			  struct pt_regs *);
+			  void *);
 static void
 	wavelan_watchdog(struct net_device *);	/* Transmission watchdog */
 /* ------------------- CONFIGURATION CALLBACKS ------------------- */

@@ -166,6 +166,7 @@ static void prism2_host_roaming(local_info_t *local)
 	struct hfa384x_hostscan_result *selected, *entry;
 	int i;
 	unsigned long flags;
+	DECLARE_MAC_BUF(mac);
 
 	if (local->last_join_time &&
 	    time_before(jiffies, local->last_join_time + 10 * HZ)) {
@@ -198,8 +199,9 @@ static void prism2_host_roaming(local_info_t *local)
 	    local->preferred_ap[2] || local->preferred_ap[3] ||
 	    local->preferred_ap[4] || local->preferred_ap[5]) {
 		/* Try to find preferred AP */
-		PDEBUG(DEBUG_EXTRA, "%s: Preferred AP BSSID " MACSTR "\n",
-		       dev->name, MAC2STR(local->preferred_ap));
+		PDEBUG(DEBUG_EXTRA, "%s: Preferred AP BSSID "
+		       "%s\n",
+		       dev->name, print_mac(mac, local->preferred_ap));
 		for (i = 0; i < local->last_scan_results_count; i++) {
 			entry = &local->last_scan_results[i];
 			if (memcmp(local->preferred_ap, entry->bssid, 6) == 0)
@@ -216,8 +218,9 @@ static void prism2_host_roaming(local_info_t *local)
 	req.channel = selected->chid;
 	spin_unlock_irqrestore(&local->lock, flags);
 
-	PDEBUG(DEBUG_EXTRA, "%s: JoinRequest: BSSID=" MACSTR " channel=%d\n",
-	       dev->name, MAC2STR(req.bssid), le16_to_cpu(req.channel));
+	PDEBUG(DEBUG_EXTRA, "%s: JoinRequest: BSSID=%s"
+	       " channel=%d\n",
+	       dev->name, print_mac(mac, req.bssid), le16_to_cpu(req.channel));
 	if (local->func->set_rid(dev, HFA384X_RID_JOINREQUEST, &req,
 				 sizeof(req))) {
 		printk(KERN_DEBUG "%s: JoinRequest failed\n", dev->name);
@@ -327,11 +330,10 @@ static void prism2_info_hostscanresults(local_info_t *local,
 	ptr = (u8 *) pos;
 
 	new_count = left / result_size;
-	results = kmalloc(new_count * sizeof(struct hfa384x_hostscan_result),
+	results = kcalloc(new_count, sizeof(struct hfa384x_hostscan_result),
 			  GFP_ATOMIC);
 	if (results == NULL)
 		return;
-	memset(results, 0, new_count * sizeof(struct hfa384x_hostscan_result));
 
 	for (i = 0; i < new_count; i++) {
 		memcpy(&results[i], ptr, copy_len);
@@ -410,6 +412,7 @@ static void handle_info_queue_linkstatus(local_info_t *local)
 	int val = local->prev_link_status;
 	int connected;
 	union iwreq_data wrqu;
+	DECLARE_MAC_BUF(mac);
 
 	connected =
 		val == HFA384X_LINKSTATUS_CONNECTED ||
@@ -421,9 +424,10 @@ static void handle_info_queue_linkstatus(local_info_t *local)
 		printk(KERN_DEBUG "%s: could not read CURRENTBSSID after "
 		       "LinkStatus event\n", local->dev->name);
 	} else {
-		PDEBUG(DEBUG_EXTRA, "%s: LinkStatus: BSSID=" MACSTR "\n",
+		PDEBUG(DEBUG_EXTRA, "%s: LinkStatus: BSSID="
+		       "%s\n",
 		       local->dev->name,
-		       MAC2STR((unsigned char *) local->bssid));
+		       print_mac(mac, (unsigned char *) local->bssid));
 		if (local->wds_type & HOSTAP_WDS_AP_CLIENT)
 			hostap_add_sta(local->ap, local->bssid);
 	}
@@ -474,9 +478,9 @@ static void handle_info_queue_scanresults(local_info_t *local)
 
 /* Called only as scheduled task after receiving info frames (used to avoid
  * pending too much time in HW IRQ handler). */
-static void handle_info_queue(void *data)
+static void handle_info_queue(struct work_struct *work)
 {
-	local_info_t *local = (local_info_t *) data;
+	local_info_t *local = container_of(work, local_info_t, info_queue);
 
 	if (test_and_clear_bit(PRISM2_INFO_PENDING_LINKSTATUS,
 			       &local->pending_info))
@@ -493,7 +497,7 @@ void hostap_info_init(local_info_t *local)
 {
 	skb_queue_head_init(&local->info_list);
 #ifndef PRISM2_NO_STATION_MODES
-	INIT_WORK(&local->info_queue, handle_info_queue, local);
+	INIT_WORK(&local->info_queue, handle_info_queue);
 #endif /* PRISM2_NO_STATION_MODES */
 }
 
