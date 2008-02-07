@@ -243,7 +243,7 @@ WriteHSCX(struct IsdnCardState *cs, int hscx, u_char offset, u_char value)
 #include "hscx_irq.c"
 
 static irqreturn_t
-gazel_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+gazel_interrupt(int intno, void *dev_id)
 {
 #define MAXCOUNT 5
 	struct IsdnCardState *cs = dev_id;
@@ -274,7 +274,7 @@ gazel_interrupt(int intno, void *dev_id, struct pt_regs *regs)
 
 
 static irqreturn_t
-gazel_interrupt_ipac(int intno, void *dev_id, struct pt_regs *regs)
+gazel_interrupt_ipac(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char ista, val;
@@ -532,6 +532,7 @@ setup_gazelisa(struct IsdnCard *card, struct IsdnCardState *cs)
 	return (0);
 }
 
+#ifdef CONFIG_PCI_LEGACY
 static struct pci_dev *dev_tel __devinitdata = NULL;
 
 static int __devinit
@@ -620,6 +621,7 @@ setup_gazelpci(struct IsdnCardState *cs)
 
 	return (0);
 }
+#endif /* CONFIG_PCI_LEGACY */
 
 int __devinit
 setup_gazel(struct IsdnCard *card)
@@ -639,7 +641,7 @@ setup_gazel(struct IsdnCard *card)
 			return (0);
 	} else {
 
-#ifdef CONFIG_PCI
+#ifdef CONFIG_PCI_LEGACY
 		if (setup_gazelpci(cs))
 			return (0);
 #else
