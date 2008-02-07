@@ -23,6 +23,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
+#include <linux/clk.h>
 
 #include <net/irda/irda.h>
 #include <net/irda/irmod.h>
@@ -87,7 +88,29 @@ struct pxa_irda {
 
 	struct device		*dev;
 	struct pxaficp_platform_data *pdata;
+	struct clk		*fir_clk;
+	struct clk		*sir_clk;
+	struct clk		*cur_clk;
 };
+
+static inline void pxa_irda_disable_clk(struct pxa_irda *si)
+{
+	if (si->cur_clk)
+		clk_disable(si->cur_clk);
+	si->cur_clk = NULL;
+}
+
+static inline void pxa_irda_enable_firclk(struct pxa_irda *si)
+{
+	si->cur_clk = si->fir_clk;
+	clk_enable(si->fir_clk);
+}
+
+static inline void pxa_irda_enable_sirclk(struct pxa_irda *si)
+{
+	si->cur_clk = si->sir_clk;
+	clk_enable(si->sir_clk);
+}
 
 
 #define IS_FIR(si)		((si)->speed >= 4000000)
@@ -134,7 +157,7 @@ static int pxa_irda_set_speed(struct pxa_irda *si, int speed)
 			DCSR(si->rxdma) &= ~DCSR_RUN;
 			/* disable FICP */
 			ICCR0 = 0;
-			pxa_set_cken(CKEN13_FICP, 0);
+			pxa_irda_disable_clk(si);
 
 			/* set board transceiver to SIR mode */
 			si->pdata->transceiver_mode(si->dev, IR_SIRMODE);
@@ -144,7 +167,7 @@ static int pxa_irda_set_speed(struct pxa_irda *si, int speed)
 			pxa_gpio_mode(GPIO47_STTXD_MD);
 
 			/* enable the STUART clock */
-			pxa_set_cken(CKEN5_STUART, 1);
+			pxa_irda_enable_sirclk(si);
 		}
 
 		/* disable STUART first */
@@ -169,7 +192,7 @@ static int pxa_irda_set_speed(struct pxa_irda *si, int speed)
 		/* disable STUART */
 		STIER = 0;
 		STISR = 0;
-		pxa_set_cken(CKEN5_STUART, 0);
+		pxa_irda_disable_clk(si);
 
 		/* disable FICP first */
 		ICCR0 = 0;
@@ -182,7 +205,7 @@ static int pxa_irda_set_speed(struct pxa_irda *si, int speed)
 		pxa_gpio_mode(GPIO47_ICPTXD_MD);
 
 		/* enable the FICP clock */
-		pxa_set_cken(CKEN13_FICP, 1);
+		pxa_irda_enable_firclk(si);
 
 		si->speed = speed;
 		pxa_irda_fir_dma_rx_start(si);
@@ -199,7 +222,7 @@ static int pxa_irda_set_speed(struct pxa_irda *si, int speed)
 }
 
 /* SIR interrupt service routine. */
-static irqreturn_t pxa_irda_sir_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pxa_irda_sir_irq(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct pxa_irda *si = netdev_priv(dev);
@@ -281,7 +304,7 @@ static irqreturn_t pxa_irda_sir_irq(int irq, void *dev_id, struct pt_regs *regs)
 }
 
 /* FIR Receive DMA interrupt handler */
-static void pxa_irda_fir_dma_rx_irq(int channel, void *data, struct pt_regs *regs)
+static void pxa_irda_fir_dma_rx_irq(int channel, void *data)
 {
 	int dcsr = DCSR(channel);
 
@@ -291,7 +314,7 @@ static void pxa_irda_fir_dma_rx_irq(int channel, void *data, struct pt_regs *reg
 }
 
 /* FIR Transmit DMA interrupt handler */
-static void pxa_irda_fir_dma_tx_irq(int channel, void *data, struct pt_regs *regs)
+static void pxa_irda_fir_dma_tx_irq(int channel, void *data)
 {
 	struct net_device *dev = data;
 	struct pxa_irda *si = netdev_priv(dev);
@@ -321,15 +344,22 @@ static void pxa_irda_fir_dma_tx_irq(int channel, void *data, struct pt_regs *reg
 		pxa_irda_set_speed(si, si->newspeed);
 		si->newspeed = 0;
 	} else {
+		int i = 64;
+
 		ICCR0 = 0;
 		pxa_irda_fir_dma_rx_start(si);
+		while ((ICSR1 & ICSR1_RNE) && i--)
+			(void)ICDR;
 		ICCR0 = ICCR0_ITR | ICCR0_RXE;
+
+		if (i < 0)
+			printk(KERN_ERR "pxa_ir: cannot clear Rx FIFO!\n");
 	}
 	netif_wake_queue(dev);
 }
 
 /* EIF(Error in FIFO/End in Frame) handler for FIR */
-static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
+static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev, int icsr0)
 {
 	unsigned int len, stat, data;
 
@@ -350,7 +380,7 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 			}
 			if (stat & ICSR1_ROR) {
 				printk(KERN_DEBUG "pxa_ir: fir receive overrun\n");
-				si->stats.rx_frame_errors++;
+				si->stats.rx_over_errors++;
 			}
 		} else	{
 			si->dma_rx_buff[len++] = data;
@@ -362,7 +392,15 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 
 	if (stat & ICSR1_EOF) {
 		/* end of frame. */
-		struct sk_buff *skb = alloc_skb(len+1,GFP_ATOMIC);
+		struct sk_buff *skb;
+
+		if (icsr0 & ICSR0_FRE) {
+			printk(KERN_ERR "pxa_ir: dropping erroneous frame\n");
+			si->stats.rx_dropped++;
+			return;
+		}
+
+		skb = alloc_skb(len+1,GFP_ATOMIC);
 		if (!skb)  {
 			printk(KERN_ERR "pxa_ir: fir out of memory for receive skb\n");
 			si->stats.rx_dropped++;
@@ -371,12 +409,12 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 
 		/* Align IP header to 20 bytes  */
 		skb_reserve(skb, 1);
-		memcpy(skb->data, si->dma_rx_buff, len);
+		skb_copy_to_linear_data(skb, si->dma_rx_buff, len);
 		skb_put(skb, len);
 
 		/* Feed it to IrLAP  */
 		skb->dev = dev;
-		skb->mac.raw  = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = htons(ETH_P_IRDA);
 		netif_rx(skb);
 
@@ -388,11 +426,11 @@ static void pxa_irda_fir_irq_eif(struct pxa_irda *si, struct net_device *dev)
 }
 
 /* FIR interrupt handler */
-static irqreturn_t pxa_irda_fir_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pxa_irda_fir_irq(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	struct pxa_irda *si = netdev_priv(dev);
-	int icsr0;
+	int icsr0, i = 64;
 
 	/* stop RX DMA */
 	DCSR(si->rxdma) &= ~DCSR_RUN;
@@ -412,12 +450,17 @@ static irqreturn_t pxa_irda_fir_irq(int irq, void *dev_id, struct pt_regs *regs)
 
 	if (icsr0 & ICSR0_EIF) {
 		/* An error in FIFO occured, or there is a end of frame */
-		pxa_irda_fir_irq_eif(si, dev);
+		pxa_irda_fir_irq_eif(si, dev, icsr0);
 	}
 
 	ICCR0 = 0;
 	pxa_irda_fir_dma_rx_start(si);
+	while ((ICSR1 & ICSR1_RNE) && i--)
+		(void)ICDR;
 	ICCR0 = ICCR0_ITR | ICCR0_RXE;
+
+	if (i < 0)
+		printk(KERN_ERR "pxa_ir: cannot clear Rx FIFO!\n");
 
 	return IRQ_HANDLED;
 }
@@ -464,7 +507,7 @@ static int pxa_irda_hard_xmit(struct sk_buff *skb, struct net_device *dev)
 		unsigned long mtt = irda_get_mtt(skb);
 
 		si->dma_tx_buff_len = skb->len;
-		memcpy(si->dma_tx_buff, skb->data, skb->len);
+		skb_copy_from_linear_data(skb, si->dma_tx_buff, skb->len);
 
 		if (mtt)
 			while ((unsigned)(OSCR - si->last_oscr)/4 < mtt)
@@ -572,16 +615,15 @@ static void pxa_irda_shutdown(struct pxa_irda *si)
 	STIER = 0;
 	/* disable STUART SIR mode */
 	STISR = 0;
-	/* disable the STUART clock */
-	pxa_set_cken(CKEN5_STUART, 0);
 
 	/* disable DMA */
 	DCSR(si->txdma) &= ~DCSR_RUN;
 	DCSR(si->rxdma) &= ~DCSR_RUN;
 	/* disable FICP */
 	ICCR0 = 0;
-	/* disable the FICP clock */
-	pxa_set_cken(CKEN13_FICP, 0);
+
+	/* disable the STUART or FICP clocks */
+	pxa_irda_disable_clk(si);
 
 	DRCMR17 = 0;
 	DRCMR18 = 0;
@@ -704,9 +746,9 @@ static int pxa_irda_stop(struct net_device *dev)
 	return 0;
 }
 
-static int pxa_irda_suspend(struct device *_dev, pm_message_t state)
+static int pxa_irda_suspend(struct platform_device *_dev, pm_message_t state)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 	struct pxa_irda *si;
 
 	if (dev && netif_running(dev)) {
@@ -718,9 +760,9 @@ static int pxa_irda_suspend(struct device *_dev, pm_message_t state)
 	return 0;
 }
 
-static int pxa_irda_resume(struct device *_dev)
+static int pxa_irda_resume(struct platform_device *_dev)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 	struct pxa_irda *si;
 
 	if (dev && netif_running(dev)) {
@@ -746,9 +788,8 @@ static int pxa_irda_init_iobuf(iobuff_t *io, int size)
 	return io->head ? 0 : -ENOMEM;
 }
 
-static int pxa_irda_probe(struct device *_dev)
+static int pxa_irda_probe(struct platform_device *pdev)
 {
-	struct platform_device *pdev = to_platform_device(_dev);
 	struct net_device *dev;
 	struct pxa_irda *si;
 	unsigned int baudrate_mask;
@@ -772,6 +813,13 @@ static int pxa_irda_probe(struct device *_dev)
 	si = netdev_priv(dev);
 	si->dev = &pdev->dev;
 	si->pdata = pdev->dev.platform_data;
+
+	si->sir_clk = clk_get(&pdev->dev, "UARTCLK");
+	si->fir_clk = clk_get(&pdev->dev, "FICPCLK");
+	if (IS_ERR(si->sir_clk) || IS_ERR(si->fir_clk)) {
+		err = PTR_ERR(IS_ERR(si->sir_clk) ? si->sir_clk : si->fir_clk);
+		goto err_mem_4;
+	}
 
 	/*
 	 * Initialise the SIR buffers
@@ -812,6 +860,10 @@ static int pxa_irda_probe(struct device *_dev)
 err_mem_5:
 		kfree(si->rx_buff.head);
 err_mem_4:
+		if (si->sir_clk && !IS_ERR(si->sir_clk))
+			clk_put(si->sir_clk);
+		if (si->fir_clk && !IS_ERR(si->fir_clk))
+			clk_put(si->fir_clk);
 		free_netdev(dev);
 err_mem_3:
 		release_mem_region(__PREG(FICP), 0x1c);
@@ -822,15 +874,17 @@ err_mem_1:
 	return err;
 }
 
-static int pxa_irda_remove(struct device *_dev)
+static int pxa_irda_remove(struct platform_device *_dev)
 {
-	struct net_device *dev = dev_get_drvdata(_dev);
+	struct net_device *dev = platform_get_drvdata(_dev);
 
 	if (dev) {
 		struct pxa_irda *si = netdev_priv(dev);
 		unregister_netdev(dev);
 		kfree(si->tx_buff.head);
 		kfree(si->rx_buff.head);
+		clk_put(si->fir_clk);
+		clk_put(si->sir_clk);
 		free_netdev(dev);
 	}
 
@@ -840,9 +894,10 @@ static int pxa_irda_remove(struct device *_dev)
 	return 0;
 }
 
-static struct device_driver pxa_ir_driver = {
-	.name		= "pxa2xx-ir",
-	.bus		= &platform_bus_type,
+static struct platform_driver pxa_ir_driver = {
+	.driver         = {
+		.name   = "pxa2xx-ir",
+	},
 	.probe		= pxa_irda_probe,
 	.remove		= pxa_irda_remove,
 	.suspend	= pxa_irda_suspend,
@@ -851,12 +906,12 @@ static struct device_driver pxa_ir_driver = {
 
 static int __init pxa_irda_init(void)
 {
-	return driver_register(&pxa_ir_driver);
+	return platform_driver_register(&pxa_ir_driver);
 }
 
 static void __exit pxa_irda_exit(void)
 {
-	driver_unregister(&pxa_ir_driver);
+	platform_driver_unregister(&pxa_ir_driver);
 }
 
 module_init(pxa_irda_init);

@@ -17,7 +17,7 @@
  *     published by the Free Software Foundation; either version 2 of 
  *     the License, or (at your option) any later version.
  *
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is 
  *     provided "AS-IS" and at no charge.
  *
@@ -74,7 +74,7 @@ struct irport_cb {
 	/* For piggyback drivers */
 	void *priv;                
 	void (*change_speed)(void *priv, __u32 speed);
-	int (*interrupt)(int irq, void *dev_id, struct pt_regs *regs);
+	irqreturn_t (*interrupt)(int irq, void *dev_id);
 };
 
 #endif /* IRPORT_H */

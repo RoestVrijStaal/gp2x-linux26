@@ -40,7 +40,6 @@
  ********************************************************************/
 
 #include <linux/module.h>
-#include <linux/config.h> 
 #include <linux/kernel.h>
 #include <linux/types.h>
 #include <linux/skbuff.h>
@@ -117,7 +116,7 @@ static int __init w83977af_init(void)
 
 	IRDA_DEBUG(0, "%s()\n", __FUNCTION__ );
 
-	for (i=0; (io[i] < 2000) && (i < 4); i++) { 
+	for (i=0; (io[i] < 2000) && (i < ARRAY_SIZE(dev_self)); i++) {
 		if (w83977af_open(i, io[i], irq[i], dma[i]) == 0)
 			return 0;
 	}
@@ -136,7 +135,7 @@ static void __exit w83977af_cleanup(void)
 
         IRDA_DEBUG(4, "%s()\n", __FUNCTION__ );
 
-	for (i=0; i < 4; i++) {
+	for (i=0; i < ARRAY_SIZE(dev_self); i++) {
 		if (dev_self[i])
 			w83977af_close(dev_self[i]);
 	}
@@ -232,9 +231,6 @@ int w83977af_open(int i, unsigned int iobase, unsigned int irq,
 	self->tx_buff.data = self->tx_buff.head;
 	self->rx_buff.data = self->rx_buff.head;
 	self->netdev = dev;
-
-	/* Keep track of module usage */
-	SET_MODULE_OWNER(dev);
 
 	/* Override the network functions we need to use */
 	dev->hard_start_xmit = w83977af_hard_xmit;
@@ -530,7 +526,7 @@ int w83977af_hard_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* Decide if we should use PIO or DMA transfer */
 	if (self->io.speed > PIO_MAX_SPEED) {
 		self->tx_buff.data = self->tx_buff.head;
-		memcpy(self->tx_buff.data, skb->data, skb->len);
+		skb_copy_from_linear_data(skb, self->tx_buff.data, skb->len);
 		self->tx_buff.len = skb->len;
 		
 		mtt = irda_get_mtt(skb);
@@ -909,10 +905,14 @@ int w83977af_dma_receive_complete(struct w83977af_ir *self)
 			/* Copy frame without CRC */
 			if (self->io.speed < 4000000) {
 				skb_put(skb, len-2);
-				memcpy(skb->data, self->rx_buff.data, len-2);
+				skb_copy_to_linear_data(skb,
+							self->rx_buff.data,
+							len - 2);
 			} else {
 				skb_put(skb, len-4);
-				memcpy(skb->data, self->rx_buff.data, len-4);
+				skb_copy_to_linear_data(skb,
+							self->rx_buff.data,
+							len - 4);
 			}
 
 			/* Move to next frame */
@@ -920,7 +920,7 @@ int w83977af_dma_receive_complete(struct w83977af_ir *self)
 			self->stats.rx_packets++;
 			
 			skb->dev = self->netdev;
-			skb->mac.raw  = skb->data;
+			skb_reset_mac_header(skb);
 			skb->protocol = htons(ETH_P_IRDA);
 			netif_rx(skb);
 			self->netdev->last_rx = jiffies;
@@ -1112,20 +1112,14 @@ static __u8 w83977af_fir_interrupt(struct w83977af_ir *self, int isr)
  *    An interrupt from the chip has arrived. Time to do some work
  *
  */
-static irqreturn_t w83977af_interrupt(int irq, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t w83977af_interrupt(int irq, void *dev_id)
 {
-	struct net_device *dev = (struct net_device *) dev_id;
+	struct net_device *dev = dev_id;
 	struct w83977af_ir *self;
 	__u8 set, icr, isr;
 	int iobase;
 
-	if (!dev) {
-		printk(KERN_WARNING "%s: irq %d for unknown device.\n", 
-			driver_name, irq);
-		return IRQ_NONE;
-	}
-	self = (struct w83977af_ir *) dev->priv;
+	self = dev->priv;
 
 	iobase = self->io.fir_base;
 

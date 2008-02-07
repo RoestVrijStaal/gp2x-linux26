@@ -15,8 +15,7 @@
 *
 *	This program is free software; you can redistribute it and/or modify
 *	it under the terms of the GNU General Public License as published by
-*	the Free Software Foundation; either version 2 of the License, or
-*	(at your option) any later version.
+*	the Free Software Foundation; either version 2 of the License.
 *
 *	This program is distributed in the hope that it will be useful,
 *	but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -51,15 +50,15 @@
 #include <linux/usb.h>
 #include <linux/crc32.h>
 #include <linux/kthread.h>
+#include <linux/freezer.h>
 #include <net/irda/irda.h>
-#include <net/irda/irlap.h>
 #include <net/irda/irda_device.h>
 #include <net/irda/wrapper.h>
 #include <net/irda/crc.h>
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
 
-MODULE_AUTHOR("Stephen Hemminger <shemminger@osdl.org>");
+MODULE_AUTHOR("Stephen Hemminger <shemminger@linux-foundation.org>");
 MODULE_DESCRIPTION("IrDA-USB Dongle Driver for SigmaTel STIr4200");
 MODULE_LICENSE("GPL");
 
@@ -143,14 +142,9 @@ enum StirCtrl2Mask {
 };
 
 enum StirFifoCtlMask {
-	FIFOCTL_EOF = 0x80,
-	FIFOCTL_UNDER = 0x40,
-	FIFOCTL_OVER = 0x20,
 	FIFOCTL_DIR = 0x10,
 	FIFOCTL_CLR = 0x08,
 	FIFOCTL_EMPTY = 0x04,
-	FIFOCTL_RXERR = 0x02,
-	FIFOCTL_TXERR = 0x01,
 };
 
 enum StirDiagMask {
@@ -335,7 +329,7 @@ static void fir_eof(struct stir_cb *stir)
 	}
 
 	fcs = ~(crc32_le(~0, rx_buff->data, len));
-	if (fcs != le32_to_cpu(get_unaligned((u32 *)(rx_buff->data+len)))) {
+	if (fcs != le32_to_cpu(get_unaligned((__le32 *)(rx_buff->data+len)))) {
 		pr_debug("crc error calc 0x%x len %d\n", fcs, len);
 		stir->stats.rx_errors++;
 		stir->stats.rx_crc_errors++;
@@ -351,7 +345,7 @@ static void fir_eof(struct stir_cb *stir)
 		}
 		skb_reserve(nskb, 1);
 		skb = nskb;
-		memcpy(nskb->data, rx_buff->data, len);
+		skb_copy_to_linear_data(nskb, rx_buff->data, len);
 	} else {
 		nskb = dev_alloc_skb(rx_buff->truesize);
 		if (unlikely(!nskb)) {
@@ -366,7 +360,7 @@ static void fir_eof(struct stir_cb *stir)
 
 	skb_put(skb, len);
 
-	skb->mac.raw  = skb->data;
+	skb_reset_mac_header(skb);
 	skb->protocol = htons(ETH_P_IRDA);
 	skb->dev = stir->netdev;
 
@@ -597,9 +591,10 @@ static int fifo_txwait(struct stir_cb *stir, int space)
 {
 	int err;
 	unsigned long count, status;
+	unsigned long prev_count = 0x1fff;
 
 	/* Read FIFO status and count */
-	for(;;) {
+	for (;; prev_count = count) {
 		err = read_reg(stir, REG_FIFOCTL, stir->fifo_status, 
 				   FIFO_REGS_SIZE);
 		if (unlikely(err != FIFO_REGS_SIZE)) {
@@ -614,19 +609,6 @@ static int fifo_txwait(struct stir_cb *stir, int space)
 			| stir->fifo_status[1];
 
 		pr_debug("fifo status 0x%lx count %lu\n", status, count);
-
-		/* error when receive/transmit fifo gets confused */
-		if (status & FIFOCTL_RXERR) {
-			stir->stats.rx_fifo_errors++;
-			stir->stats.rx_errors++;
-			break;
-		}
-
-		if (status & FIFOCTL_TXERR) {
-			stir->stats.tx_fifo_errors++;
-			stir->stats.tx_errors++;
-			break;
-		}
 
 		/* is fifo receiving already, or empty */
 		if (!(status & FIFOCTL_DIR)
@@ -644,6 +626,10 @@ static int fifo_txwait(struct stir_cb *stir, int space)
 		/* only waiting for some space */
 		if (space >= 0 && STIR_FIFO_SIZE - 4 > space + count)
 			return 0;
+
+		/* queue confused */
+		if (prev_count < count)
+			break;
 
 		/* estimate transfer time for remaining chars */
 		msleep((count * 8000) / stir->speed);
@@ -819,7 +805,7 @@ static int stir_transmit_thread(void *arg)
  * Wakes up every ms (usb round trip) with wrapped 
  * data.
  */
-static void stir_rcv_irq(struct urb *urb, struct pt_regs *regs)
+static void stir_rcv_irq(struct urb *urb)
 {
 	struct stir_cb *stir = urb->context;
 	int err;
@@ -1050,7 +1036,6 @@ static int stir_probe(struct usb_interface *intf,
 	if(!net)
 		goto err_out1;
 
-	SET_MODULE_OWNER(net);
 	SET_NETDEV_DEV(net, &intf->dev);
 	stir = netdev_priv(net);
 	stir->netdev = net;
