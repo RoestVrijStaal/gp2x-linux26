@@ -391,11 +391,10 @@ $work_resched:
 	bne	$2, $work_resched
 
 $work_notifysig:
-	mov	$sp, $17
+	mov	$sp, $16
 	br	$1, do_switch_stack
-	mov	$5, $21
-	mov	$sp, $18
-	mov	$31, $16
+	mov	$sp, $17
+	mov	$5, $18
 	jsr	$26, do_notify_resume
 	bsr	$1, undo_switch_stack
 	br	restore_all
@@ -655,12 +654,12 @@ kernel_thread:
 .end kernel_thread
 
 /*
- * execve(path, argv, envp)
+ * kernel_execve(path, argv, envp)
  */
 	.align	4
-	.globl	execve
-	.ent	execve
-execve:
+	.globl	kernel_execve
+	.ent	kernel_execve
+kernel_execve:
 	/* We can be called from a module.  */
 	ldgp	$gp, 0($27)
 	lda	$sp, -(32+SIZEOF_PT_REGS+8)($sp)
@@ -704,7 +703,7 @@ execve:
 
 1:	lda	$sp, 32+SIZEOF_PT_REGS+8($sp)
 	ret
-.end execve
+.end kernel_execve
 
 
 /*
@@ -916,15 +915,6 @@ sys_pipe:
 1:	lda	$sp, 16($sp)
 	ret
 .end sys_pipe
-
-	.align	4
-	.globl	sys_ptrace
-	.ent	sys_ptrace
-sys_ptrace:
-	.prologue 0
-	mov	$sp, $20
-	jmp	$31, do_sys_ptrace
-.end sys_ptrace
 
 	.align	4
 	.globl	sys_execve

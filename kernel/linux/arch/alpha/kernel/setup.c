@@ -21,7 +21,6 @@
 #include <linux/a.out.h>
 #include <linux/screen_info.h>
 #include <linux/delay.h>
-#include <linux/config.h>	/* CONFIG_ALPHA_LCA etc */
 #include <linux/mc146818rtc.h>
 #include <linux/console.h>
 #include <linux/cpu.h>
@@ -44,6 +43,7 @@
 #include <linux/notifier.h>
 #include <asm/setup.h>
 #include <asm/io.h>
+#include <linux/log2.h>
 
 extern struct atomic_notifier_head panic_notifier_list;
 static int alpha_panic_event(struct notifier_block *, unsigned long, void *);
@@ -67,6 +67,7 @@ static struct notifier_block alpha_panic_block = {
 
 
 struct hwrpb_struct *hwrpb;
+EXPORT_SYMBOL(hwrpb);
 unsigned long srm_hae;
 
 int alpha_l1i_cacheshape;
@@ -112,6 +113,7 @@ unsigned long alpha_agpgart_size = DEFAULT_AGP_APER_SIZE;
 #ifdef CONFIG_ALPHA_GENERIC
 struct alpha_machine_vector alpha_mv;
 int alpha_using_srm;
+EXPORT_SYMBOL(alpha_using_srm);
 #endif
 
 static struct alpha_machine_vector *get_sysvec(unsigned long, unsigned long,
@@ -121,7 +123,7 @@ static void get_sysnames(unsigned long, unsigned long, unsigned long,
 			 char **, char **);
 static void determine_cpu_caches (unsigned int);
 
-static char command_line[COMMAND_LINE_SIZE];
+static char __initdata command_line[COMMAND_LINE_SIZE];
 
 /*
  * The format of "screen_info" is strange, and due to early
@@ -138,6 +140,8 @@ struct screen_info screen_info = {
 	.orig_video_points = 16
 };
 
+EXPORT_SYMBOL(screen_info);
+
 /*
  * The direct map I/O window, if any.  This should be the same
  * for all busses, since it's used by virt_to_bus.
@@ -145,6 +149,8 @@ struct screen_info screen_info = {
 
 unsigned long __direct_map_base;
 unsigned long __direct_map_size;
+EXPORT_SYMBOL(__direct_map_base);
+EXPORT_SYMBOL(__direct_map_size);
 
 /*
  * Declare all of the machine vectors.
@@ -542,7 +548,7 @@ setup_arch(char **cmdline_p)
 	} else {
 		strlcpy(command_line, COMMAND_LINE, sizeof command_line);
 	}
-	strcpy(saved_command_line, command_line);
+	strcpy(boot_command_line, command_line);
 	*cmdline_p = command_line;
 
 	/* 
@@ -584,7 +590,7 @@ setup_arch(char **cmdline_p)
 	}
 
 	/* Replace the command line, now that we've killed it with strsep.  */
-	strcpy(command_line, saved_command_line);
+	strcpy(command_line, boot_command_line);
 
 	/* If we want SRM console printk echoing early, do it now. */
 	if (alpha_using_srm && srmcons_output) {
@@ -737,15 +743,6 @@ setup_arch(char **cmdline_p)
 	setup_smp();
 #endif
 	paging_init();
-}
-
-void __init
-disable_early_printk(void)
-{
-	if (alpha_using_srm && srmcons_output) {
-		unregister_srm_console();
-		srmcons_output = 0;
-	}
 }
 
 static char sys_unknown[] = "Unknown";
@@ -1307,7 +1304,7 @@ external_cache_probe(int minsize, int width)
 	long size = minsize, maxsize = MAX_BCACHE_SIZE * 2;
 
 	if (maxsize > (max_low_pfn + 1) << PAGE_SHIFT)
-		maxsize = 1 << (floor_log2(max_low_pfn + 1) + PAGE_SHIFT);
+		maxsize = 1 << (ilog2(max_low_pfn + 1) + PAGE_SHIFT);
 
 	/* Get the first block cached. */
 	read_mem_block(__va(0), stride, size);
