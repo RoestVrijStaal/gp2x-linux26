@@ -40,7 +40,7 @@
 #define VIA_NR_XVMC_LOCKS               5
 #define VIA_MAX_CACHELINE_SIZE          64
 #define XVMCLOCKPTR(saPriv,lockNo)					\
-	((volatile drm_hw_lock_t *)(((((unsigned long) (saPriv)->XvMCLockArea) + \
+	((volatile struct drm_hw_lock *)(((((unsigned long) (saPriv)->XvMCLockArea) + \
 				      (VIA_MAX_CACHELINE_SIZE - 1)) &	\
 				     ~(VIA_MAX_CACHELINE_SIZE - 1)) +	\
 				    VIA_MAX_CACHELINE_SIZE*(lockNo)))
@@ -182,7 +182,7 @@ typedef struct _drm_via_tex_region {
 typedef struct _drm_via_sarea {
 	unsigned int dirty;
 	unsigned int nbox;
-	drm_clip_rect_t boxes[VIA_NR_SAREA_CLIPRECTS];
+	struct drm_clip_rect boxes[VIA_NR_SAREA_CLIPRECTS];
 	drm_via_tex_region_t texList[VIA_NR_TEX_REGIONS + 1];
 	int texAge;		/* last time texture was uploaded */
 	int ctxOwner;		/* last context to upload state */
@@ -250,6 +250,12 @@ typedef struct drm_via_blitsync {
 	unsigned engine;
 } drm_via_blitsync_t;
 
+/* - * Below,"flags" is currently unused but will be used for possible future
+ * extensions like kernel space bounce buffers for bad alignments and
+ * blit engine busy-wait polling for better latency in the absence of
+ * interrupts.
+ */
+
 typedef struct drm_via_dmablit {
 	uint32_t num_lines;
 	uint32_t line_length;
@@ -260,7 +266,7 @@ typedef struct drm_via_dmablit {
 	unsigned char *mem_addr;
 	uint32_t mem_stride;
 
-	int bounce_buffer;
+	uint32_t flags;
 	int to_fb;
 
 	drm_via_blitsync_t sync;
