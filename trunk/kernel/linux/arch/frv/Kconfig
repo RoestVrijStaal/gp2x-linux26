@@ -6,6 +6,10 @@ config FRV
 	bool
 	default y
 
+config ZONE_DMA
+	bool
+	default y
+
 config RWSEM_GENERIC_SPINLOCK
 	bool
 	default y
@@ -27,13 +31,29 @@ config GENERIC_CALIBRATE_DELAY
 
 config GENERIC_HARDIRQS
 	bool
-	default n
+	default y
+
+config GENERIC_HARDIRQS_NO__DO_IRQ
+	bool
+	default y
 
 config GENERIC_TIME
 	bool
 	default y
 
 config TIME_LOW_RES
+	bool
+	default y
+
+config QUICKLIST
+	bool
+	default y
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default y
+
+config ARCH_HAS_ILOG2_U64
 	bool
 	default y
 
@@ -251,6 +271,12 @@ config MB93091_NO_MB
 endchoice
 endif
 
+config FUJITSU_MB93493
+	bool "MB93493 Multimedia chip"
+	help
+	  Select this option if the MB93493 multimedia chip is going to be
+	  used.
+
 choice
 	prompt "GP-Relative data support"
 	default GPREL_DATA_8
@@ -348,6 +374,8 @@ source "net/Kconfig"
 source "drivers/Kconfig"
 
 source "fs/Kconfig"
+
+source "kernel/Kconfig.instrumentation"
 
 source "arch/frv/Kconfig.debug"
 
