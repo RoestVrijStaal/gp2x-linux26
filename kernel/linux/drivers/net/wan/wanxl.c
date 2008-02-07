@@ -244,7 +244,7 @@ static inline void wanxl_rx_intr(card_t *card)
 
 
 
-static irqreturn_t wanxl_intr(int irq, void* dev_id, struct pt_regs *regs)
+static irqreturn_t wanxl_intr(int irq, void* dev_id)
 {
         card_t *card = dev_id;
         int i;
@@ -599,7 +599,7 @@ static int __devinit wanxl_pci_init_one(struct pci_dev *pdev,
 	}
 
 	alloc_size = sizeof(card_t) + ports * sizeof(port_t);
-	card = kmalloc(alloc_size, GFP_KERNEL);
+	card = kzalloc(alloc_size, GFP_KERNEL);
 	if (card == NULL) {
 		printk(KERN_ERR "wanXL %s: unable to allocate memory\n",
 		       pci_name(pdev));
@@ -607,7 +607,6 @@ static int __devinit wanxl_pci_init_one(struct pci_dev *pdev,
 		pci_disable_device(pdev);
 		return -ENOBUFS;
 	}
-	memset(card, 0, alloc_size);
 
 	pci_set_drvdata(pdev, card);
 	card->pdev = pdev;
@@ -780,7 +779,6 @@ static int __devinit wanxl_pci_init_one(struct pci_dev *pdev,
 		port->dev = dev;
 		hdlc = dev_to_hdlc(dev);
 		spin_lock_init(&port->lock);
-		SET_MODULE_OWNER(dev);
 		dev->tx_queue_len = 50;
 		dev->do_ioctl = wanxl_ioctl;
 		dev->open = wanxl_open;
@@ -837,7 +835,7 @@ static int __init wanxl_init_module(void)
 #ifdef MODULE
 	printk(KERN_INFO "%s\n", version);
 #endif
-	return pci_module_init(&wanxl_pci_driver);
+	return pci_register_driver(&wanxl_pci_driver);
 }
 
 static void __exit wanxl_cleanup_module(void)

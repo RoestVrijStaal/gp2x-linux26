@@ -32,7 +32,6 @@
  *		2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h> /* for CONFIG_DLCI_MAX */
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -868,7 +867,7 @@ static void sdla_receive(struct net_device *dev)
 	spin_unlock_irqrestore(&sdla_lock, flags);
 }
 
-static irqreturn_t sdla_isr(int irq, void *dev_id, struct pt_regs * regs)
+static irqreturn_t sdla_isr(int irq, void *dev_id)
 {
 	struct net_device     *dev;
 	struct frad_local *flp;
@@ -876,13 +875,7 @@ static irqreturn_t sdla_isr(int irq, void *dev_id, struct pt_regs * regs)
 
 	dev = dev_id;
 
-	if (dev == NULL)
-	{
-		printk(KERN_WARNING "sdla_isr(): irq %d for unknown device.\n", irq);
-		return IRQ_NONE;
-	}
-
-	flp = dev->priv;
+	flp = netdev_priv(dev);
 
 	if (!flp->initialized)
 	{
@@ -1203,10 +1196,9 @@ static int sdla_xfer(struct net_device *dev, struct sdla_mem __user *info, int r
 		
 	if (read)
 	{	
-		temp = kmalloc(mem.len, GFP_KERNEL);
+		temp = kzalloc(mem.len, GFP_KERNEL);
 		if (!temp)
 			return(-ENOMEM);
-		memset(temp, 0, mem.len);
 		sdla_read(dev, mem.addr, temp, mem.len);
 		if(copy_to_user(mem.data, temp, mem.len))
 		{
@@ -1350,11 +1342,11 @@ static int sdla_set_config(struct net_device *dev, struct ifmap *map)
 	if (flp->initialized)
 		return(-EINVAL);
 
-	for(i=0;i < sizeof(valid_port) / sizeof (int) ; i++)
+	for(i=0; i < ARRAY_SIZE(valid_port); i++)
 		if (valid_port[i] == map->base_addr)
 			break;   
 
-	if (i == sizeof(valid_port) / sizeof(int))
+	if (i == ARRAY_SIZE(valid_port))
 		return(-EINVAL);
 
 	if (!request_region(map->base_addr, SDLA_IO_EXTENTS, dev->name)){
@@ -1495,12 +1487,12 @@ got_type:
 		}
 	}
 
-	for(i=0;i < sizeof(valid_mem) / sizeof (int) ; i++)
+	for(i=0; i < ARRAY_SIZE(valid_mem); i++)
 		if (valid_mem[i] == map->mem_start)
 			break;   
 
 	err = -EINVAL;
-	if (i == sizeof(valid_mem) / sizeof(int))
+	if (i == ARRAY_SIZE(valid_mem))
 		goto fail2;
 
 	if (flp->type == SDLA_S502A && (map->mem_start & 0xF000) >> 12 == 0x0E)
@@ -1611,7 +1603,6 @@ static void setup_sdla(struct net_device *dev)
 
 	netdev_boot_setup_check(dev);
 
-	SET_MODULE_OWNER(dev);
 	dev->flags		= 0;
 	dev->type		= 0xFFFF;
 	dev->hard_header_len	= 0;

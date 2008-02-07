@@ -284,7 +284,7 @@ static void rx_dma_buf_pt_init(pc300_t *, int);
 static void rx_dma_buf_init(pc300_t *, int);
 static void tx_dma_buf_check(pc300_t *, int);
 static void rx_dma_buf_check(pc300_t *, int);
-static irqreturn_t cpc_intr(int, void *, struct pt_regs *);
+static irqreturn_t cpc_intr(int, void *);
 static struct net_device_stats *cpc_get_stats(struct net_device *);
 static int clock_rate_calc(uclong, uclong, int *);
 static uclong detect_ram(pc300_t *);
@@ -1755,17 +1755,17 @@ cpc_trace(struct net_device *dev, struct sk_buff *skb_main, char rx_tx)
 
 	skb->dev = dev;
 	skb->protocol = htons(ETH_P_CUST);
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	skb->pkt_type = PACKET_HOST;
 	skb->len = 10 + skb_main->len;
 
-	memcpy(skb->data, dev->name, 5);
+	skb_copy_to_linear_data(skb, dev->name, 5);
 	skb->data[5] = '[';
 	skb->data[6] = rx_tx;
 	skb->data[7] = ']';
 	skb->data[8] = ':';
 	skb->data[9] = ' ';
-	memcpy(&skb->data[10], skb_main->data, skb_main->len);
+	skb_copy_from_linear_data(skb_main, &skb->data[10], skb_main->len);
 
 	netif_rx(skb);
 }
@@ -2016,7 +2016,6 @@ static void sca_intr(pc300_t * card)
 			pc300ch_t *chan = &card->chan[ch];
 			pc300dev_t *d = &chan->d;
 			struct net_device *dev = d->dev;
-			hdlc_device *hdlc = dev_to_hdlc(dev);
 
 			spin_lock(&card->card_lock);
 
@@ -2049,8 +2048,8 @@ static void sca_intr(pc300_t * card)
 							}
 							cpc_net_rx(dev);
 							/* Discard invalid frames */
-							hdlc->stats.rx_errors++;
-							hdlc->stats.rx_over_errors++;
+							hdlc_stats(dev)->rx_errors++;
+							hdlc_stats(dev)->rx_over_errors++;
 							chan->rx_first_bd = 0;
 							chan->rx_last_bd = N_DMA_RX_BUF - 1;
 							rx_dma_start(card, ch);
@@ -2116,8 +2115,8 @@ static void sca_intr(pc300_t * card)
 										   card->hw.cpld_reg2) &
 								   ~ (CPLD_REG2_FALC_LED1 << (2 * ch)));
 						}
-						hdlc->stats.tx_errors++;
-						hdlc->stats.tx_fifo_errors++;
+						hdlc_stats(dev)->tx_errors++;
+						hdlc_stats(dev)->tx_fifo_errors++;
 						sca_tx_intr(d);
 					}
 				}
@@ -2364,7 +2363,7 @@ static void falc_intr(pc300_t * card)
 	}
 }
 
-static irqreturn_t cpc_intr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t cpc_intr(int irq, void *dev_id)
 {
 	pc300_t *card;
 	volatile ucchar plx_status;
@@ -2534,7 +2533,6 @@ static int cpc_change_mtu(struct net_device *dev, int new_mtu)
 
 static int cpc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 {
-	hdlc_device *hdlc = dev_to_hdlc(dev);
 	pc300dev_t *d = (pc300dev_t *) dev->priv;
 	pc300ch_t *chan = (pc300ch_t *) d->chan;
 	pc300_t *card = (pc300_t *) chan->card;
@@ -2552,10 +2550,10 @@ static int cpc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		case SIOCGPC300CONF:
 #ifdef CONFIG_PC300_MLPPP
 			if (conf->proto != PC300_PROTO_MLPPP) {
-				conf->proto = hdlc->proto.id;
+				conf->proto = /* FIXME hdlc->proto.id */ 0;
 			}
 #else
-			conf->proto = hdlc->proto.id;
+			conf->proto = /* FIXME hdlc->proto.id */ 0;
 #endif
 			memcpy(&conf_aux.conf, conf, sizeof(pc300chconf_t));
 			memcpy(&conf_aux.hw, &card->hw, sizeof(pc300hw_t));
@@ -2588,12 +2586,12 @@ static int cpc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 					}
 				} else {
 					memcpy(conf, &conf_aux.conf, sizeof(pc300chconf_t));
-					hdlc->proto.id = conf->proto;
+					/* FIXME hdlc->proto.id = conf->proto; */
 				}
 			}
 #else
 			memcpy(conf, &conf_aux.conf, sizeof(pc300chconf_t));
-			hdlc->proto.id = conf->proto;
+			/* FIXME hdlc->proto.id = conf->proto; */
 #endif
 			return 0;
 		case SIOCGPC300STATUS:
@@ -2606,7 +2604,7 @@ static int cpc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		case SIOCGPC300UTILSTATS:
 			{
 				if (!arg) {	/* clear statistics */
-					memset(&hdlc->stats, 0, sizeof(struct net_device_stats));
+					memset(hdlc_stats(dev), 0, sizeof(struct net_device_stats));
 					if (card->hw.type == PC300_TE) {
 						memset(&chan->falc, 0, sizeof(falc_t));
 					}
@@ -2617,7 +2615,7 @@ static int cpc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 					pc300stats.hw_type = card->hw.type;
 					pc300stats.line_on = card->chan[ch].d.line_on;
 					pc300stats.line_off = card->chan[ch].d.line_off;
-					memcpy(&pc300stats.gen_stats, &hdlc->stats,
+					memcpy(&pc300stats.gen_stats, hdlc_stats(dev),
 					       sizeof(struct net_device_stats));
 					if (card->hw.type == PC300_TE)
 						memcpy(&pc300stats.te_stats,&chan->falc,sizeof(falc_t));
@@ -2835,6 +2833,8 @@ static int clock_rate_calc(uclong rate, uclong clock, int *br_io)
 	int br, tc;
 	int br_pwr, error;
 
+	*br_io = 0;
+
 	if (rate == 0)
 		return (0);
 
@@ -2869,7 +2869,6 @@ static int ch_config(pc300dev_t * d)
 	uclong clktype = chan->conf.phys_settings.clock_type;
 	ucshort encoding = chan->conf.proto_settings.encoding;
 	ucshort parity = chan->conf.proto_settings.parity;   
-	int tmc, br;
 	ucchar md0, md2;
     
 	/* Reset the channel */
@@ -2942,8 +2941,12 @@ static int ch_config(pc300dev_t * d)
 		case PC300_RSV:
 		case PC300_X21:
 			if (clktype == CLOCK_INT || clktype == CLOCK_TXINT) {
+				int tmc, br;
+
 				/* Calculate the clkrate parameters */
 				tmc = clock_rate_calc(clkrate, card->hw.clock, &br);
+				if (tmc < 0)
+					return -EIO;
 				cpc_writeb(scabase + M_REG(TMCT, ch), tmc);
 				cpc_writeb(scabase + M_REG(TXS, ch),
 					   (TXS_DTRXC | TXS_IBRG | br));
@@ -3099,14 +3102,16 @@ static int cpc_attach(struct net_device *dev, unsigned short encoding,
 	return 0;
 }
 
-static void cpc_opench(pc300dev_t * d)
+static int cpc_opench(pc300dev_t * d)
 {
 	pc300ch_t *chan = (pc300ch_t *) d->chan;
 	pc300_t *card = (pc300_t *) chan->card;
-	int ch = chan->channel;
+	int ch = chan->channel, rc;
 	void __iomem *scabase = card->hw.scabase;
 
-	ch_config(d);
+	rc = ch_config(d);
+	if (rc)
+		return rc;
 
 	rx_config(d);
 
@@ -3115,6 +3120,8 @@ static void cpc_opench(pc300dev_t * d)
 	/* Assert RTS and DTR */
 	cpc_writeb(scabase + M_REG(CTL, ch),
 		   cpc_readb(scabase + M_REG(CTL, ch)) & ~(CTL_RTS | CTL_DTR));
+
+	return 0;
 }
 
 static void cpc_closech(pc300dev_t * d)
@@ -3147,7 +3154,6 @@ static void cpc_closech(pc300dev_t * d)
 
 int cpc_open(struct net_device *dev)
 {
-	hdlc_device *hdlc = dev_to_hdlc(dev);
 	pc300dev_t *d = (pc300dev_t *) dev->priv;
 	struct ifreq ifr;
 	int result;
@@ -3156,12 +3162,14 @@ int cpc_open(struct net_device *dev)
 	printk("pc300: cpc_open");
 #endif
 
+#ifdef FIXME
 	if (hdlc->proto.id == IF_PROTO_PPP) {
 		d->if_ptr = &hdlc->state.ppp.pppdev;
 	}
+#endif
 
 	result = hdlc_open(dev);
-	if (hdlc->proto.id == IF_PROTO_PPP) {
+	if (/* FIXME hdlc->proto.id == IF_PROTO_PPP*/ 0) {
 		dev->priv = d;
 	}
 	if (result) {
@@ -3169,14 +3177,20 @@ int cpc_open(struct net_device *dev)
 	}
 
 	sprintf(ifr.ifr_name, "%s", dev->name);
-	cpc_opench(d);
+	result = cpc_opench(d);
+	if (result)
+		goto err_out;
+
 	netif_start_queue(dev);
 	return 0;
+
+err_out:
+	hdlc_close(dev);
+	return result;
 }
 
 static int cpc_close(struct net_device *dev)
 {
-	hdlc_device *hdlc = dev_to_hdlc(dev);
 	pc300dev_t *d = (pc300dev_t *) dev->priv;
 	pc300ch_t *chan = (pc300ch_t *) d->chan;
 	pc300_t *card = (pc300_t *) chan->card;
@@ -3193,7 +3207,7 @@ static int cpc_close(struct net_device *dev)
 	CPC_UNLOCK(card, flags);
 
 	hdlc_close(dev);
-	if (hdlc->proto.id == IF_PROTO_PPP) {
+	if (/* FIXME hdlc->proto.id == IF_PROTO_PPP*/ 0) {
 		d->if_ptr = NULL;
 	}
 #ifdef CONFIG_PC300_MLPPP
@@ -3427,7 +3441,6 @@ static int __devinit
 cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
 	static int first_time = 1;
-	ucchar cpc_rev_id;
 	int err, eeprom_outdated = 0;
 	ucshort device_id;
 	pc300_t *card;
@@ -3443,7 +3456,7 @@ cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if ((err = pci_enable_device(pdev)) < 0)
 		return err;
 
-	card = (pc300_t *) kmalloc(sizeof(pc300_t), GFP_KERNEL);
+	card = kzalloc(sizeof(pc300_t), GFP_KERNEL);
 	if (card == NULL) {
 		printk("PC300 found at RAM 0x%016llx, "
 		       "but could not allocate card structure.\n",
@@ -3451,7 +3464,6 @@ cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 		err = -ENOMEM;
 		goto err_disable_dev;
 	}
-	memset(card, 0, sizeof(pc300_t));
 
 	err = -ENODEV;
 
@@ -3468,7 +3480,6 @@ cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	card->hw.falcsize = pci_resource_len(pdev, 4);
 	card->hw.plxphys = pci_resource_start(pdev, 5);
 	card->hw.plxsize = pci_resource_len(pdev, 5);
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &cpc_rev_id);
 
 	switch (device_id) {
 		case PCI_DEVICE_ID_PC300_RX_1:
@@ -3486,7 +3497,7 @@ cpc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 #ifdef PC300_DEBUG_PCI
 	printk("cpc (bus=0x0%x,pci_id=0x%x,", pdev->bus->number, pdev->devfn);
-	printk("rev_id=%d) IRQ%d\n", cpc_rev_id, card->hw.irq);
+	printk("rev_id=%d) IRQ%d\n", pdev->revision, card->hw.irq);
 	printk("cpc:found  ramaddr=0x%08lx plxaddr=0x%08lx "
 	       "ctladdr=0x%08lx falcaddr=0x%08lx\n",
 	       card->hw.ramphys, card->hw.plxphys, card->hw.scaphys,
@@ -3677,7 +3688,7 @@ static struct pci_driver cpc_driver = {
 
 static int __init cpc_init(void)
 {
-	return pci_module_init(&cpc_driver);
+	return pci_register_driver(&cpc_driver);
 }
 
 static void __exit cpc_cleanup_module(void)

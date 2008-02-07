@@ -864,7 +864,7 @@ fst_tx_dma_complete(struct fst_card_info *card, struct fst_port_info *port,
 static __be16 farsync_type_trans(struct sk_buff *skb, struct net_device *dev)
 {
 	skb->dev = dev;
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	skb->pkt_type = PACKET_HOST;
 	return htons(ETH_P_CUST);
 }
@@ -1498,7 +1498,7 @@ do_bottom_half_rx(struct fst_card_info *card)
  *      Dev_id is our fst_card_info pointer
  */
 static irqreturn_t
-fst_intr(int irq, void *dev_id, struct pt_regs *regs)
+fst_intr(int irq, void *dev_id)
 {
 	struct fst_card_info *card;
 	struct fst_port_info *port;
@@ -2476,13 +2476,12 @@ fst_add_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 
 	/* Allocate driver private data */
-	card = kmalloc(sizeof (struct fst_card_info), GFP_KERNEL);
+	card = kzalloc(sizeof (struct fst_card_info), GFP_KERNEL);
 	if (card == NULL) {
 		printk_err("FarSync card found but insufficient memory for"
 			   " driver storage\n");
 		return -ENOMEM;
 	}
-	memset(card, 0, sizeof (struct fst_card_info));
 
 	/* Try to enable the device */
 	if ((err = pci_enable_device(pdev)) != 0) {
@@ -2697,7 +2696,7 @@ fst_init(void)
 	for (i = 0; i < FST_MAX_CARDS; i++)
 		fst_card_array[i] = NULL;
 	spin_lock_init(&fst_work_q_lock);
-	return pci_module_init(&fst_driver);
+	return pci_register_driver(&fst_driver);
 }
 
 static void __exit
