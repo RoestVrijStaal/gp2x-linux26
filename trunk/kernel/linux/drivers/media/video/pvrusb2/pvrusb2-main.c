@@ -20,13 +20,10 @@
  *
  */
 
-#include <linux/config.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
-#include <linux/smp_lock.h>
 #include <linux/usb.h>
 #include <linux/videodev2.h>
 
@@ -44,6 +41,7 @@
 
 #define DEFAULT_DEBUG_MASK (PVR2_TRACE_ERROR_LEGS| \
 			    PVR2_TRACE_INFO| \
+			    PVR2_TRACE_STD| \
 			    PVR2_TRACE_TOLERANCE| \
 			    PVR2_TRACE_TRAP| \
 			    0)
@@ -138,14 +136,13 @@ static int __init pvr_init(void)
 
 static void __exit pvr_exit(void)
 {
-
 	pvr2_trace(PVR2_TRACE_INIT,"pvr_exit");
+
+	usb_deregister(&pvr_driver);
 
 #ifdef CONFIG_VIDEO_PVRUSB2_SYSFS
 	pvr2_sysfs_class_destroy(class_ptr);
 #endif /* CONFIG_VIDEO_PVRUSB2_SYSFS */
-
-	usb_deregister(&pvr_driver);
 }
 
 module_init(pvr_init);

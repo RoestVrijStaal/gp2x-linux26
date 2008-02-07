@@ -23,7 +23,6 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
-#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
@@ -442,7 +441,7 @@ static int ar_do_ioctl(struct inode *inode, struct file *file,
 	{
 		struct video_window *w = arg;
 		DEBUG(1, "VIDIOCGWIN:\n");
-		memset(w, 0, sizeof(w));
+		memset(w, 0, sizeof(*w));
 		w->width = ar->width;
 		w->height = ar->height;
 		return 0;
@@ -549,7 +548,7 @@ static int ar_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
 /*
  * Interrupt handler
  */
-static void ar_interrupt(int irq, void *dev, struct pt_regs *regs)
+static void ar_interrupt(int irq, void *dev)
 {
 	struct ar_device *ar = dev;
 	unsigned int line_count;
@@ -742,7 +741,7 @@ void ar_release(struct video_device *vfd)
  * Video4Linux Module functions
  *
  ****************************************************************************/
-static struct file_operations ar_fops = {
+static const struct file_operations ar_fops = {
 	.owner		= THIS_MODULE,
 	.open		= video_exclusive_open,
 	.release	= video_exclusive_release,
@@ -756,7 +755,6 @@ static struct video_device ar_template = {
 	.owner		= THIS_MODULE,
 	.name		= "Colour AR VGA",
 	.type		= VID_TYPE_CAPTURE,
-	.hardware	= VID_HARDWARE_ARV,
 	.fops		= &ar_fops,
 	.release	= ar_release,
 	.minor		= -1,

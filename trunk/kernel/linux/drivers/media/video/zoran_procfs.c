@@ -48,14 +48,7 @@
 #include "videocodec.h"
 #include "zoran.h"
 #include "zoran_procfs.h"
-
-extern int *zr_debug;
-
-#define dprintk(num, format, args...) \
-	do { \
-		if (*zr_debug >= num) \
-			printk(format, ##args); \
-	} while (0)
+#include "zoran_card.h"
 
 #ifdef CONFIG_PROC_FS
 struct procfs_params_zr36067 {
@@ -144,7 +137,7 @@ static int zoran_open(struct inode *inode, struct file *file)
 static ssize_t zoran_write(struct file *file, const char __user *buffer,
 			size_t count, loff_t *ppos)
 {
-	struct zoran *zr = PDE(file->f_dentry->d_inode)->data;
+	struct zoran *zr = PDE(file->f_path.dentry->d_inode)->data;
 	char *string, *sp;
 	char *line, *ldelim, *varname, *svar, *tdelim;
 
@@ -165,7 +158,7 @@ static ssize_t zoran_write(struct file *file, const char __user *buffer,
 	}
 	string[count] = 0;
 	dprintk(4, KERN_INFO "%s: write_proc: name=%s count=%zu zr=%p\n",
-		ZR_DEVNAME(zr), file->f_dentry->d_name.name, count, zr);
+		ZR_DEVNAME(zr), file->f_path.dentry->d_name.name, count, zr);
 	ldelim = " \t\n";
 	tdelim = "=";
 	line = strpbrk(sp, ldelim);
@@ -186,7 +179,7 @@ static ssize_t zoran_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-static struct file_operations zoran_operations = {
+static const struct file_operations zoran_operations = {
 	.open		= zoran_open,
 	.read		= seq_read,
 	.write		= zoran_write,

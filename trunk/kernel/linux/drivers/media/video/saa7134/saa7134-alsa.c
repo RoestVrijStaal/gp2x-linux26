@@ -1,10 +1,6 @@
 /*
  *   SAA713x ALSA support for V4L
  *
- *
- *   Caveats:
- *        - Volume doesn't work (it's always at max)
- *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
  *   the Free Software Foundation, version 2
@@ -24,7 +20,6 @@
 #include <linux/slab.h>
 #include <linux/time.h>
 #include <linux/wait.h>
-#include <linux/moduleparam.h>
 #include <linux/module.h>
 #include <sound/driver.h>
 #include <sound/core.h>
@@ -79,7 +74,8 @@ typedef struct snd_card_saa7134 {
 	struct saa7134_dev *dev;
 
 	unsigned long iobase;
-	int irq;
+	s16 irq;
+	u16 mute_was_on;
 
 	spinlock_t lock;
 } snd_card_saa7134_t;
@@ -212,7 +208,7 @@ static void saa7134_irq_alsa_done(struct saa7134_dev *dev,
  *
  */
 
-static irqreturn_t saa7134_alsa_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t saa7134_alsa_irq(int irq, void *dev_id)
 {
 	struct saa7134_dmasound *dmasound = dev_id;
 	struct saa7134_dev *dev = dmasound->priv_data;
@@ -226,7 +222,8 @@ static irqreturn_t saa7134_alsa_irq(int irq, void *dev_id, struct pt_regs *regs)
 
 		if (report & SAA7134_IRQ_REPORT_DONE_RA3) {
 			handled = 1;
-			saa_writel(SAA7134_IRQ_REPORT,report);
+			saa_writel(SAA7134_IRQ_REPORT,
+				   SAA7134_IRQ_REPORT_DONE_RA3);
 			saa7134_irq_alsa_done(dev, status);
 		} else {
 			goto out;
@@ -316,7 +313,7 @@ static int dsp_buffer_free(struct saa7134_dev *dev)
 	dev->dmasound.blksize = 0;
 	dev->dmasound.bufsize = 0;
 
-       return 0;
+	return 0;
 }
 
 
@@ -461,7 +458,7 @@ static struct snd_pcm_hardware snd_card_saa7134_capture =
 	.buffer_bytes_max =	(256*1024),
 	.period_bytes_min =	64,
 	.period_bytes_max =	(256*1024),
-	.periods_min =		2,
+	.periods_min =		4,
 	.periods_max =		1024,
 };
 
@@ -495,7 +492,7 @@ static int snd_card_saa7134_hw_params(struct snd_pcm_substream * substream,
 
 	snd_assert(period_size >= 0x100 && period_size <= 0x10000,
 		   return -EINVAL);
-	snd_assert(periods >= 2, return -EINVAL);
+	snd_assert(periods >= 4, return -EINVAL);
 	snd_assert(period_size * periods <= 1024 * 1024, return -EINVAL);
 
 	dev = saa7134->dev;
@@ -547,8 +544,10 @@ static int snd_card_saa7134_hw_params(struct snd_pcm_substream * substream,
 	   V4L functions, and force ALSA to use that as the DMA area */
 
 	substream->runtime->dma_area = dev->dmasound.dma.vmalloc;
+	substream->runtime->dma_bytes = dev->dmasound.bufsize;
+	substream->runtime->dma_addr = 0;
 
-	return 1;
+	return 0;
 
 }
 
@@ -590,6 +589,13 @@ static int snd_card_saa7134_hw_free(struct snd_pcm_substream * substream)
 
 static int snd_card_saa7134_capture_close(struct snd_pcm_substream * substream)
 {
+	snd_card_saa7134_t *saa7134 = snd_pcm_substream_chip(substream);
+	struct saa7134_dev *dev = saa7134->dev;
+
+	if (saa7134->mute_was_on) {
+		dev->ctl_mute = 1;
+		saa7134_tvaudio_setmute(dev);
+	}
 	return 0;
 }
 
@@ -609,12 +615,17 @@ static int snd_card_saa7134_capture_open(struct snd_pcm_substream * substream)
 	snd_card_saa7134_pcm_t *pcm;
 	snd_card_saa7134_t *saa7134 = snd_pcm_substream_chip(substream);
 	struct saa7134_dev *dev = saa7134->dev;
-	int err;
+	int amux, err;
 
 	mutex_lock(&dev->dmasound.lock);
 
 	dev->dmasound.read_count  = 0;
 	dev->dmasound.read_offset = 0;
+
+	amux = dev->input->amux;
+	if ((amux < 1) || (amux > 3))
+		amux = 1;
+	dev->dmasound.input  =  amux - 1;
 
 	mutex_unlock(&dev->dmasound.lock);
 
@@ -631,10 +642,34 @@ static int snd_card_saa7134_capture_open(struct snd_pcm_substream * substream)
 	runtime->private_free = snd_card_saa7134_runtime_free;
 	runtime->hw = snd_card_saa7134_capture;
 
-	if ((err = snd_pcm_hw_constraint_integer(runtime, SNDRV_PCM_HW_PARAM_PERIODS)) < 0)
+	if (dev->ctl_mute != 0) {
+		saa7134->mute_was_on = 1;
+		dev->ctl_mute = 0;
+		saa7134_tvaudio_setmute(dev);
+	}
+
+	err = snd_pcm_hw_constraint_integer(runtime,
+						SNDRV_PCM_HW_PARAM_PERIODS);
+	if (err < 0)
+		return err;
+
+	err = snd_pcm_hw_constraint_step(runtime, 0,
+						SNDRV_PCM_HW_PARAM_PERIODS, 2);
+	if (err < 0)
 		return err;
 
 	return 0;
+}
+
+/*
+ * page callback (needed for mmap)
+ */
+
+static struct page *snd_card_saa7134_page(struct snd_pcm_substream *substream,
+					unsigned long offset)
+{
+	void *pageptr = substream->runtime->dma_area + offset;
+	return vmalloc_to_page(pageptr);
 }
 
 /*
@@ -650,6 +685,7 @@ static struct snd_pcm_ops snd_card_saa7134_capture_ops = {
 	.prepare =		snd_card_saa7134_capture_prepare,
 	.trigger =		snd_card_saa7134_capture_trigger,
 	.pointer =		snd_card_saa7134_capture_pointer,
+	.page =			snd_card_saa7134_page,
 };
 
 /*
@@ -705,6 +741,8 @@ static int snd_saa7134_volume_put(struct snd_kcontrol * kcontrol,
 				  struct snd_ctl_elem_value * ucontrol)
 {
 	snd_card_saa7134_t *chip = snd_kcontrol_chip(kcontrol);
+	struct saa7134_dev *dev = chip->dev;
+
 	int change, addr = kcontrol->private_value;
 	int left, right;
 
@@ -719,10 +757,52 @@ static int snd_saa7134_volume_put(struct snd_kcontrol * kcontrol,
 	if (right > 20)
 		right = 20;
 	spin_lock_irq(&chip->mixer_lock);
-	change = chip->mixer_volume[addr][0] != left ||
-		 chip->mixer_volume[addr][1] != right;
-	chip->mixer_volume[addr][0] = left;
-	chip->mixer_volume[addr][1] = right;
+	change = 0;
+	if (chip->mixer_volume[addr][0] != left) {
+		change = 1;
+		right = left;
+	}
+	if (chip->mixer_volume[addr][1] != right) {
+		change = 1;
+		left = right;
+	}
+	if (change) {
+		switch (dev->pci->device) {
+			case PCI_DEVICE_ID_PHILIPS_SAA7134:
+				switch (addr) {
+					case MIXER_ADDR_TVTUNER:
+						left = 20;
+						break;
+					case MIXER_ADDR_LINE1:
+						saa_andorb(SAA7134_ANALOG_IO_SELECT,  0x10,
+							   (left > 10) ? 0x00 : 0x10);
+						break;
+					case MIXER_ADDR_LINE2:
+						saa_andorb(SAA7134_ANALOG_IO_SELECT,  0x20,
+							   (left > 10) ? 0x00 : 0x20);
+						break;
+				}
+				break;
+			case PCI_DEVICE_ID_PHILIPS_SAA7133:
+			case PCI_DEVICE_ID_PHILIPS_SAA7135:
+				switch (addr) {
+					case MIXER_ADDR_TVTUNER:
+						left = 20;
+						break;
+					case MIXER_ADDR_LINE1:
+						saa_andorb(0x0594,  0x10,
+							   (left > 10) ? 0x00 : 0x10);
+						break;
+					case MIXER_ADDR_LINE2:
+						saa_andorb(0x0594,  0x20,
+							   (left > 10) ? 0x00 : 0x20);
+						break;
+				}
+				break;
+		}
+		chip->mixer_volume[addr][0] = left;
+		chip->mixer_volume[addr][1] = right;
+	}
 	spin_unlock_irq(&chip->mixer_lock);
 	return change;
 }

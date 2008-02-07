@@ -33,39 +33,12 @@
 
 */
 
-#include <linux/config.h>
 #include <linux/videodev2.h>
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include "pvrusb2-hdw.h"
 #include "pvrusb2-io.h"
 #include <media/cx2341x.h>
-
-/* Legal values for the SRATE state variable */
-#define PVR2_CVAL_SRATE_48 0
-#define PVR2_CVAL_SRATE_44_1 1
-
-/* Legal values for the AUDIOBITRATE state variable */
-#define PVR2_CVAL_AUDIOBITRATE_384 0
-#define PVR2_CVAL_AUDIOBITRATE_320 1
-#define PVR2_CVAL_AUDIOBITRATE_256 2
-#define PVR2_CVAL_AUDIOBITRATE_224 3
-#define PVR2_CVAL_AUDIOBITRATE_192 4
-#define PVR2_CVAL_AUDIOBITRATE_160 5
-#define PVR2_CVAL_AUDIOBITRATE_128 6
-#define PVR2_CVAL_AUDIOBITRATE_112 7
-#define PVR2_CVAL_AUDIOBITRATE_96 8
-#define PVR2_CVAL_AUDIOBITRATE_80 9
-#define PVR2_CVAL_AUDIOBITRATE_64 10
-#define PVR2_CVAL_AUDIOBITRATE_56 11
-#define PVR2_CVAL_AUDIOBITRATE_48 12
-#define PVR2_CVAL_AUDIOBITRATE_32 13
-#define PVR2_CVAL_AUDIOBITRATE_VBR 14
-
-/* Legal values for the AUDIOEMPHASIS state variable */
-#define PVR2_CVAL_AUDIOEMPHASIS_NONE 0
-#define PVR2_CVAL_AUDIOEMPHASIS_50_15 1
-#define PVR2_CVAL_AUDIOEMPHASIS_CCITT 2
 
 /* Legal values for PVR2_CID_HSM */
 #define PVR2_CVAL_HSM_FAIL 0
@@ -87,6 +60,7 @@ struct pvr2_decoder;
 
 typedef int (*pvr2_ctlf_is_dirty)(struct pvr2_ctrl *);
 typedef void (*pvr2_ctlf_clear_dirty)(struct pvr2_ctrl *);
+typedef int (*pvr2_ctlf_check_value)(struct pvr2_ctrl *,int);
 typedef int (*pvr2_ctlf_get_value)(struct pvr2_ctrl *,int *);
 typedef int (*pvr2_ctlf_set_value)(struct pvr2_ctrl *,int msk,int val);
 typedef int (*pvr2_ctlf_val_to_sym)(struct pvr2_ctrl *,int msk,int val,
@@ -107,7 +81,10 @@ struct pvr2_ctl_info {
 
 	/* Control's implementation */
 	pvr2_ctlf_get_value get_value;      /* Get its value */
+	pvr2_ctlf_get_value get_min_value;  /* Get minimum allowed value */
+	pvr2_ctlf_get_value get_max_value;  /* Get maximum allowed value */
 	pvr2_ctlf_set_value set_value;      /* Set its value */
+	pvr2_ctlf_check_value check_value;  /* Check that value is valid */
 	pvr2_ctlf_val_to_sym val_to_sym;    /* Custom convert value->symbol */
 	pvr2_ctlf_sym_to_val sym_to_val;    /* Custom convert symbol->value */
 	pvr2_ctlf_is_dirty is_dirty;        /* Return true if dirty */
@@ -160,17 +137,10 @@ struct pvr2_ctrl {
 };
 
 
-struct pvr2_audio_stat {
-	void *ctxt;
-	void (*detach)(void *);
-	int (*status)(void *);
-};
-
 struct pvr2_decoder_ctrl {
 	void *ctxt;
 	void (*detach)(void *);
 	void (*enable)(void *,int);
-	int (*tuned)(void *);
 	void (*force_reset)(void *);
 };
 
@@ -193,9 +163,7 @@ struct pvr2_decoder_ctrl {
 
 /* Known major hardware variants, keyed from device ID */
 #define PVR2_HDW_TYPE_29XXX 0
-#ifdef CONFIG_VIDEO_PVRUSB2_24XXX
 #define PVR2_HDW_TYPE_24XXX 1
-#endif
 
 typedef int (*pvr2_i2c_func)(struct pvr2_hdw *,u8,u8 *,u16,u8 *, u16);
 #define PVR2_I2C_FUNC_CNT 128
@@ -239,7 +207,6 @@ struct pvr2_hdw {
 	/* Frequency table */
 	unsigned int freqTable[FREQTABLE_SIZE];
 	unsigned int freqProgSlot;
-	unsigned int freqSlot;
 
 	/* Stuff for handling low level control interaction with device */
 	struct mutex ctl_lock_mutex;
@@ -258,11 +225,12 @@ struct pvr2_hdw {
 	unsigned int cmd_debug_write_len;  //
 	unsigned int cmd_debug_read_len;   //
 
-	int flag_ok;            // device in known good state
-	int flag_disconnected;  // flag_ok == 0 due to disconnect
-	int flag_init_ok;       // true if structure is fully initialized
-	int flag_streaming_enabled; // true if streaming should be on
-	int fw1_state;          // current situation with fw1
+	int flag_ok;            /* device in known good state */
+	int flag_disconnected;  /* flag_ok == 0 due to disconnect */
+	int flag_init_ok;       /* true if structure is fully initialized */
+	int flag_streaming_enabled; /* true if streaming should be on */
+	int fw1_state;          /* current situation with fw1 */
+	int flag_encoder_ok;    /* True if encoder is healthy */
 
 	int flag_decoder_is_tuned;
 
@@ -271,6 +239,7 @@ struct pvr2_hdw {
 	// CPU firmware info (used to help find / save firmware data)
 	char *fw_buffer;
 	unsigned int fw_size;
+	int fw_cpu_flag; /* True if we are dealing with the CPU */
 
 	// Which subsystem pieces have been enabled / configured
 	unsigned long subsys_enabled_mask;
@@ -285,8 +254,16 @@ struct pvr2_hdw {
 	/* Tuner / frequency control stuff */
 	unsigned int tuner_type;
 	int tuner_updated;
-	unsigned int freqVal;
+	unsigned int freqValTelevision;  /* Current freq for tv mode */
+	unsigned int freqValRadio;       /* Current freq for radio mode */
+	unsigned int freqSlotTelevision; /* Current slot for tv mode */
+	unsigned int freqSlotRadio;      /* Current slot for radio mode */
+	unsigned int freqSelector;       /* 0=radio 1=television */
 	int freqDirty;
+
+	/* Current tuner info - this information is polled from the I2C bus */
+	struct v4l2_tuner tuner_signal_info;
+	int tuner_signal_stale;
 
 	/* Video standard handling */
 	v4l2_std_id std_mask_eeprom; // Hardware supported selections
@@ -308,19 +285,18 @@ struct pvr2_hdw {
 	int unit_number;             /* ID for driver instance */
 	unsigned long serial_number; /* ID for hardware itself */
 
-	/* Minor number used by v4l logic (yes, this is a hack, as there should
-	   be no v4l junk here).  Probably a better way to do this. */
-	int v4l_minor_number;
+	char bus_info[32]; /* Bus location info */
+
+	/* Minor numbers used by v4l logic (yes, this is a hack, as there
+	   should be no v4l junk here).  Probably a better way to do this. */
+	int v4l_minor_number_video;
+	int v4l_minor_number_vbi;
+	int v4l_minor_number_radio;
 
 	/* Location of eeprom or a negative number if none */
 	int eeprom_addr;
 
 	enum pvr2_config config;
-
-	/* Information about what audio signal we're hearing */
-	int flag_stereo;
-	int flag_bilingual;
-	struct pvr2_audio_stat *audio_stat;
 
 	/* Control state needed for cx2341x module */
 	struct cx2341x_mpeg_params enc_cur_state;
@@ -353,6 +329,9 @@ struct pvr2_hdw {
 	struct pvr2_ctrl *controls;
 	unsigned int control_cnt;
 };
+
+/* This function gets the current frequency */
+unsigned long pvr2_hdw_get_cur_freq(struct pvr2_hdw *);
 
 #endif /* __PVRUSB2_HDW_INTERNAL_H */
 

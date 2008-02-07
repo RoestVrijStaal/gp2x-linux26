@@ -7,6 +7,7 @@
  *                    Monroe Williams (monroe@pobox.com)
  *
  * Supports 3COM HomeConnect PC Digital WebCam
+ * Supports Compro PS39U WebCam
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +28,7 @@
  *
  * Portions of this code were also copied from usbvideo.c
  *
- * Special thanks to the the whole team at Sourceforge for help making
+ * Special thanks to the whole team at Sourceforge for help making
  * this driver become a reality.  Notably:
  * Andy Armstrong who reverse engineered the color encoding and
  * Pavel Machek and Chris Cheney who worked on reverse engineering the
@@ -41,7 +42,6 @@
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
 #include <linux/slab.h>
-#include <linux/proc_fs.h>
 #include <linux/mutex.h>
 #include "usbvideo.h"
 
@@ -60,6 +60,8 @@
 /* Define these values to match your device */
 #define USB_VICAM_VENDOR_ID	0x04c1
 #define USB_VICAM_PRODUCT_ID	0x009d
+#define USB_COMPRO_VENDOR_ID	0x0602
+#define USB_COMPRO_PRODUCT_ID	0x1001
 
 #define VICAM_BYTES_PER_PIXEL   3
 #define VICAM_MAX_READ_SIZE     (512*242+128)
@@ -414,11 +416,6 @@ struct vicam_camera {
 	u8 open_count;
 	u8 bulkEndpoint;
 	int needsDummyRead;
-
-#if defined(CONFIG_VIDEO_PROC_FS)
-	struct proc_dir_entry *proc_dir;
-#endif
-
 };
 
 static int vicam_probe( struct usb_interface *intf, const struct usb_device_id *id);
@@ -958,7 +955,7 @@ read_frame(struct vicam_camera *cam, int framenum)
 		request[7] = realShutter >> 8;
 	}
 
-	// Per John Markus Bjørndalen, byte at index 8 causes problems if it isn't 0
+	// Per John Markus BjÃ¸rndalen, byte at index 8 causes problems if it isn't 0
 	request[8] = 0;
 	// bytes 9-15 do not seem to affect exposure or image quality
 
@@ -1062,176 +1059,7 @@ vicam_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
-#if defined(CONFIG_VIDEO_PROC_FS)
-
-static struct proc_dir_entry *vicam_proc_root = NULL;
-
-static int vicam_read_helper(char *page, char **start, off_t off,
-				int count, int *eof, int value)
-{
-	char *out = page;
-	int len;
-
-	out += sprintf(out, "%d",value);
-
-	len = out - page;
-	len -= off;
-	if (len < count) {
-		*eof = 1;
-		if (len <= 0)
-			return 0;
-	} else
-		len = count;
-
-	*start = page + off;
-	return len;
-}
-
-static int vicam_read_proc_shutter(char *page, char **start, off_t off,
-				int count, int *eof, void *data)
-{
-	return vicam_read_helper(page,start,off,count,eof,
-				((struct vicam_camera *)data)->shutter_speed);
-}
-
-static int vicam_read_proc_gain(char *page, char **start, off_t off,
-				int count, int *eof, void *data)
-{
-	return vicam_read_helper(page,start,off,count,eof,
-				((struct vicam_camera *)data)->gain);
-}
-
-static int
-vicam_write_proc_shutter(struct file *file, const char *buffer,
-			 unsigned long count, void *data)
-{
-	u16 stmp;
-	char kbuf[8];
-	struct vicam_camera *cam = (struct vicam_camera *) data;
-
-	if (count > 6)
-		return -EINVAL;
-
-	if (copy_from_user(kbuf, buffer, count))
-		return -EFAULT;
-
-	stmp = (u16) simple_strtoul(kbuf, NULL, 10);
-	if (stmp < 4 || stmp > 32000)
-		return -EINVAL;
-
-	cam->shutter_speed = stmp;
-
-	return count;
-}
-
-static int
-vicam_write_proc_gain(struct file *file, const char *buffer,
-		      unsigned long count, void *data)
-{
-	u16 gtmp;
-	char kbuf[8];
-
-	struct vicam_camera *cam = (struct vicam_camera *) data;
-
-	if (count > 4)
-		return -EINVAL;
-
-	if (copy_from_user(kbuf, buffer, count))
-		return -EFAULT;
-
-	gtmp = (u16) simple_strtoul(kbuf, NULL, 10);
-	if (gtmp > 255)
-		return -EINVAL;
-	cam->gain = gtmp;
-
-	return count;
-}
-
-static void
-vicam_create_proc_root(void)
-{
-	vicam_proc_root = proc_mkdir("video/vicam", NULL);
-
-	if (vicam_proc_root)
-		vicam_proc_root->owner = THIS_MODULE;
-	else
-		printk(KERN_ERR
-		       "could not create /proc entry for vicam!");
-}
-
-static void
-vicam_destroy_proc_root(void)
-{
-	if (vicam_proc_root)
-		remove_proc_entry("video/vicam", 0);
-}
-
-static void
-vicam_create_proc_entry(struct vicam_camera *cam)
-{
-	char name[64];
-	struct proc_dir_entry *ent;
-
-	DBG(KERN_INFO "vicam: creating proc entry\n");
-
-	if (!vicam_proc_root || !cam) {
-		printk(KERN_INFO
-		       "vicam: could not create proc entry, %s pointer is null.\n",
-		       (!cam ? "camera" : "root"));
-		return;
-	}
-
-	sprintf(name, "video%d", cam->vdev.minor);
-
-	cam->proc_dir = proc_mkdir(name, vicam_proc_root);
-
-	if ( !cam->proc_dir )
-		return; // FIXME: We should probably return an error here
-
-	ent = create_proc_entry("shutter", S_IFREG | S_IRUGO | S_IWUSR,
-				cam->proc_dir);
-	if (ent) {
-		ent->data = cam;
-		ent->read_proc = vicam_read_proc_shutter;
-		ent->write_proc = vicam_write_proc_shutter;
-		ent->size = 64;
-	}
-
-	ent = create_proc_entry("gain", S_IFREG | S_IRUGO | S_IWUSR,
-				cam->proc_dir);
-	if (ent) {
-		ent->data = cam;
-		ent->read_proc = vicam_read_proc_gain;
-		ent->write_proc = vicam_write_proc_gain;
-		ent->size = 64;
-	}
-}
-
-static void
-vicam_destroy_proc_entry(void *ptr)
-{
-	struct vicam_camera *cam = (struct vicam_camera *) ptr;
-	char name[16];
-
-	if ( !cam->proc_dir )
-		return;
-
-	sprintf(name, "video%d", cam->vdev.minor);
-	remove_proc_entry("shutter", cam->proc_dir);
-	remove_proc_entry("gain", cam->proc_dir);
-	remove_proc_entry(name,vicam_proc_root);
-	cam->proc_dir = NULL;
-
-}
-
-#else
-static inline void vicam_create_proc_root(void) { }
-static inline void vicam_destroy_proc_root(void) { }
-static inline void vicam_create_proc_entry(struct vicam_camera *cam) { }
-static inline void vicam_destroy_proc_entry(void *ptr) { }
-#endif
-
-static struct file_operations vicam_fops = {
+static const struct file_operations vicam_fops = {
 	.owner		= THIS_MODULE,
 	.open		= vicam_open,
 	.release	= vicam_close,
@@ -1246,7 +1074,6 @@ static struct video_device vicam_template = {
 	.owner 		= THIS_MODULE,
 	.name 		= "ViCam-based USB Camera",
 	.type 		= VID_TYPE_CAPTURE,
-	.hardware 	= VID_HARDWARE_VICAM,
 	.fops 		= &vicam_fops,
 	.minor 		= -1,
 };
@@ -1254,6 +1081,7 @@ static struct video_device vicam_template = {
 /* table of devices that work with this driver */
 static struct usb_device_id vicam_table[] = {
 	{USB_DEVICE(USB_VICAM_VENDOR_ID, USB_VICAM_PRODUCT_ID)},
+	{USB_DEVICE(USB_COMPRO_VENDOR_ID, USB_COMPRO_PRODUCT_ID)},
 	{}			/* Terminating entry */
 };
 
@@ -1301,13 +1129,12 @@ vicam_probe( struct usb_interface *intf, const struct usb_device_id *id)
 	}
 
 	if ((cam =
-	     kmalloc(sizeof (struct vicam_camera), GFP_KERNEL)) == NULL) {
+	     kzalloc(sizeof (struct vicam_camera), GFP_KERNEL)) == NULL) {
 		printk(KERN_WARNING
 		       "could not allocate kernel memory for vicam_camera struct\n");
 		return -ENOMEM;
 	}
 
-	memset(cam, 0, sizeof (struct vicam_camera));
 
 	cam->shutter_speed = 15;
 
@@ -1325,8 +1152,6 @@ vicam_probe( struct usb_interface *intf, const struct usb_device_id *id)
 		printk(KERN_WARNING "video_register_device failed\n");
 		return -EIO;
 	}
-
-	vicam_create_proc_entry(cam);
 
 	printk(KERN_INFO "ViCam webcam driver now controlling video device %d\n",cam->vdev.minor);
 
@@ -1359,8 +1184,6 @@ vicam_disconnect(struct usb_interface *intf)
 
 	cam->udev = NULL;
 
-	vicam_destroy_proc_entry(cam);
-
 	/* the only thing left to do is synchronize with
 	 * our close/release function on who should release
 	 * the camera memory. if there are any users using the
@@ -1386,7 +1209,6 @@ usb_vicam_init(void)
 {
 	int retval;
 	DBG(KERN_INFO "ViCam-based WebCam driver startup\n");
-	vicam_create_proc_root();
 	retval = usb_register(&vicam_driver);
 	if (retval)
 		printk(KERN_WARNING "usb_register failed!\n");
@@ -1400,7 +1222,6 @@ usb_vicam_exit(void)
 	       "ViCam-based WebCam driver shutdown\n");
 
 	usb_deregister(&vicam_driver);
-	vicam_destroy_proc_root();
 }
 
 module_init(usb_vicam_init);

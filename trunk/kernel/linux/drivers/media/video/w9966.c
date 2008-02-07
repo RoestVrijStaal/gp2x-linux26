@@ -183,7 +183,7 @@ static int w9966_v4l_ioctl(struct inode *inode, struct file *file,
 static ssize_t w9966_v4l_read(struct file *file, char __user *buf,
 			      size_t count, loff_t *ppos);
 
-static struct file_operations w9966_fops = {
+static const struct file_operations w9966_fops = {
 	.owner		= THIS_MODULE,
 	.open           = video_exclusive_open,
 	.release        = video_exclusive_release,
@@ -196,7 +196,6 @@ static struct video_device w9966_template = {
 	.owner		= THIS_MODULE,
 	.name           = W9966_DRIVERNAME,
 	.type           = VID_TYPE_CAPTURE | VID_TYPE_SCALES,
-	.hardware       = VID_HARDWARE_W9966,
 	.fops           = &w9966_fops,
 };
 
@@ -789,7 +788,7 @@ static int w9966_v4l_do_ioctl(struct inode *inode, struct file *file,
 	case VIDIOCSPICT:
 	{
 		struct video_picture *vpic = arg;
-		if (vpic->depth != 16 || vpic->palette != VIDEO_PALETTE_YUV422)
+		if (vpic->depth != 16 || (vpic->palette != VIDEO_PALETTE_YUV422 && vpic->palette != VIDEO_PALETTE_YUYV))
 			return -EINVAL;
 
 		cam->brightness = vpic->brightness >> 8;

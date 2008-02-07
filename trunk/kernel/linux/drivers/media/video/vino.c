@@ -28,7 +28,6 @@
 #include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
-#include <linux/moduleparam.h>
 #include <linux/time.h>
 #include <linux/version.h>
 
@@ -782,7 +781,7 @@ static int vino_i2c_add_bus(void)
 
 static int vino_i2c_del_bus(void)
 {
-	return i2c_sgi_del_bus(&vino_i2c_adapter);
+	return i2c_del_adapter(&vino_i2c_adapter);
 }
 
 static int i2c_camera_command(unsigned int cmd, void *arg)
@@ -2077,12 +2076,10 @@ static int vino_wait_for_frame(struct vino_channel_settings *vcs)
 	init_waitqueue_entry(&wait, current);
 	/* add ourselves into wait queue */
 	add_wait_queue(&vcs->fb_queue.frame_wait_queue, &wait);
-	/* and set current state */
-	set_current_state(TASK_INTERRUPTIBLE);
 
 	/* to ensure that schedule_timeout will return immediately
-	 * if VINO interrupt was triggred meanwhile */
-	schedule_timeout(HZ / 10);
+	 * if VINO interrupt was triggered meanwhile */
+	schedule_timeout_interruptible(msecs_to_jiffies(100));
 
 	if (signal_pending(current))
 		err = -EINTR;
@@ -2325,7 +2322,7 @@ static void vino_capture_tasklet(unsigned long channel) {
 	}
 }
 
-static irqreturn_t vino_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t vino_interrupt(int irq, void *dev_id)
 {
 	u32 ctrl, intr;
 	unsigned int fc_a, fc_b;
@@ -4390,7 +4387,7 @@ static int vino_ioctl(struct inode *inode, struct file *file,
 // __initdata
 static int vino_init_stage = 0;
 
-static struct file_operations vino_fops = {
+static const struct file_operations vino_fops = {
 	.owner		= THIS_MODULE,
 	.open		= vino_open,
 	.release	= vino_close,
@@ -4404,7 +4401,6 @@ static struct video_device v4l_device_template = {
 	.name		= "NOT SET",
 	//.type		= VID_TYPE_CAPTURE | VID_TYPE_SUBCAPTURE |
 	//	VID_TYPE_CLIPPING | VID_TYPE_SCALES, VID_TYPE_OVERLAY
-	.hardware	= VID_HARDWARE_VINO,
 	.fops		= &vino_fops,
 	.minor		= -1,
 };
