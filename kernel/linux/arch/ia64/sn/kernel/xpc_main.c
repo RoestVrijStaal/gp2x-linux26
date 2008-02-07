@@ -3,7 +3,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (c) 2004-2006 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2004-2007 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 
@@ -55,9 +55,9 @@
 #include <linux/delay.h>
 #include <linux/reboot.h>
 #include <linux/completion.h>
+#include <linux/kdebug.h>
 #include <asm/sn/intr.h>
 #include <asm/sn/sn_sal.h>
-#include <asm/kdebug.h>
 #include <asm/uaccess.h>
 #include <asm/sn/xpc.h>
 
@@ -101,67 +101,57 @@ static int xpc_disengage_request_max_timelimit = 120;
 
 static ctl_table xpc_sys_xpc_hb_dir[] = {
 	{
-		1,
-		"hb_interval",
-		&xpc_hb_interval,
-		sizeof(int),
-		0644,
-		NULL,
-		&proc_dointvec_minmax,
-		&sysctl_intvec,
-		NULL,
-		&xpc_hb_min_interval,
-		&xpc_hb_max_interval
+		.ctl_name 	= CTL_UNNUMBERED,
+		.procname	= "hb_interval",
+		.data		= &xpc_hb_interval,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_minmax,
+		.strategy	= &sysctl_intvec,
+		.extra1		= &xpc_hb_min_interval,
+		.extra2		= &xpc_hb_max_interval
 	},
 	{
-		2,
-		"hb_check_interval",
-		&xpc_hb_check_interval,
-		sizeof(int),
-		0644,
-		NULL,
-		&proc_dointvec_minmax,
-		&sysctl_intvec,
-		NULL,
-		&xpc_hb_check_min_interval,
-		&xpc_hb_check_max_interval
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "hb_check_interval",
+		.data		= &xpc_hb_check_interval,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_minmax,
+		.strategy	= &sysctl_intvec,
+		.extra1		= &xpc_hb_check_min_interval,
+		.extra2		= &xpc_hb_check_max_interval
 	},
-	{0}
+	{}
 };
 static ctl_table xpc_sys_xpc_dir[] = {
 	{
-		1,
-		"hb",
-		NULL,
-		0,
-		0555,
-		xpc_sys_xpc_hb_dir
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "hb",
+		.mode		= 0555,
+		.child		= xpc_sys_xpc_hb_dir
 	},
 	{
-		2,
-		"disengage_request_timelimit",
-		&xpc_disengage_request_timelimit,
-		sizeof(int),
-		0644,
-		NULL,
-		&proc_dointvec_minmax,
-		&sysctl_intvec,
-		NULL,
-		&xpc_disengage_request_min_timelimit,
-		&xpc_disengage_request_max_timelimit
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "disengage_request_timelimit",
+		.data		= &xpc_disengage_request_timelimit,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_minmax,
+		.strategy	= &sysctl_intvec,
+		.extra1		= &xpc_disengage_request_min_timelimit,
+		.extra2		= &xpc_disengage_request_max_timelimit
 	},
-	{0}
+	{}
 };
 static ctl_table xpc_sys_dir[] = {
 	{
-		1,
-		"xpc",
-		NULL,
-		0,
-		0555,
-		xpc_sys_xpc_dir
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "xpc",
+		.mode		= 0555,
+		.child		= xpc_sys_xpc_dir
 	},
-	{0}
+	{}
 };
 static struct ctl_table_header *xpc_sysctl;
 
@@ -222,7 +212,7 @@ xpc_timeout_partition_disengage_request(unsigned long data)
  * Notify the heartbeat check thread that an IRQ has been received.
  */
 static irqreturn_t
-xpc_act_IRQ_handler(int irq, void *dev_id, struct pt_regs *regs)
+xpc_act_IRQ_handler(int irq, void *dev_id)
 {
 	atomic_inc(&xpc_act_IRQ_rcvd);
 	wake_up_interruptible(&xpc_act_IRQ_wq);
@@ -267,7 +257,9 @@ xpc_hb_checker(void *ignore)
 
 	set_cpus_allowed(current, cpumask_of_cpu(XPC_HB_CHECK_CPU));
 
+	/* set our heartbeating to other partitions into motion */
 	xpc_hb_check_timeout = jiffies + (xpc_hb_check_interval * HZ);
+	xpc_hb_beater(0);
 
 	while (!(volatile int) xpc_exiting) {
 
@@ -607,12 +599,9 @@ xpc_activate_partition(struct xpc_partition *part)
  *	irq - Interrupt ReQuest number. NOT USED.
  *
  *	dev_id - partid of IPI's potential sender.
- *
- *	regs - processor's context before the processor entered
- *	       interrupt code. NOT USED.
  */
 irqreturn_t
-xpc_notify_IRQ_handler(int irq, void *dev_id, struct pt_regs *regs)
+xpc_notify_IRQ_handler(int irq, void *dev_id)
 {
 	partid_t partid = (partid_t) (u64) dev_id;
 	struct xpc_partition *part = &xpc_partitions[partid];
@@ -684,7 +673,7 @@ xpc_activate_kthreads(struct xpc_channel *ch, int needed)
 	dev_dbg(xpc_chan, "create %d new kthreads, partid=%d, channel=%d\n",
 		needed, ch->partid, ch->number);
 
-	xpc_create_kthreads(ch, needed);
+	xpc_create_kthreads(ch, needed, 0);
 }
 
 
@@ -778,25 +767,27 @@ xpc_daemonize_kthread(void *args)
 		xpc_kthread_waitmsgs(part, ch);
 	}
 
-	if (atomic_dec_return(&ch->kthreads_assigned) == 0) {
-		spin_lock_irqsave(&ch->lock, irq_flags);
-		if ((ch->flags & XPC_C_CONNECTEDCALLOUT_MADE) &&
-				!(ch->flags & XPC_C_DISCONNECTINGCALLOUT)) {
-			ch->flags |= XPC_C_DISCONNECTINGCALLOUT;
-			spin_unlock_irqrestore(&ch->lock, irq_flags);
+	/* let registerer know that connection is disconnecting */
 
-			xpc_disconnect_callout(ch, xpcDisconnecting);
-
-			spin_lock_irqsave(&ch->lock, irq_flags);
-			ch->flags |= XPC_C_DISCONNECTINGCALLOUT_MADE;
-		}
+	spin_lock_irqsave(&ch->lock, irq_flags);
+	if ((ch->flags & XPC_C_CONNECTEDCALLOUT_MADE) &&
+			!(ch->flags & XPC_C_DISCONNECTINGCALLOUT)) {
+		ch->flags |= XPC_C_DISCONNECTINGCALLOUT;
 		spin_unlock_irqrestore(&ch->lock, irq_flags);
+
+		xpc_disconnect_callout(ch, xpcDisconnecting);
+
+		spin_lock_irqsave(&ch->lock, irq_flags);
+		ch->flags |= XPC_C_DISCONNECTINGCALLOUT_MADE;
+	}
+	spin_unlock_irqrestore(&ch->lock, irq_flags);
+
+	if (atomic_dec_return(&ch->kthreads_assigned) == 0) {
 		if (atomic_dec_return(&part->nchannels_engaged) == 0) {
 			xpc_mark_partition_disengaged(part);
 			xpc_IPI_send_disengage(part);
 		}
 	}
-
 
 	xpc_msgqueue_deref(ch);
 
@@ -821,7 +812,8 @@ xpc_daemonize_kthread(void *args)
  * partition.
  */
 void
-xpc_create_kthreads(struct xpc_channel *ch, int needed)
+xpc_create_kthreads(struct xpc_channel *ch, int needed,
+			int ignore_disconnecting)
 {
 	unsigned long irq_flags;
 	pid_t pid;
@@ -836,16 +828,38 @@ xpc_create_kthreads(struct xpc_channel *ch, int needed)
 		 * kthread. That kthread is responsible for doing the
 		 * counterpart to the following before it exits.
 		 */
+		if (ignore_disconnecting) {
+			if (!atomic_inc_not_zero(&ch->kthreads_assigned)) {
+				/* kthreads assigned had gone to zero */
+				BUG_ON(!(ch->flags &
+					XPC_C_DISCONNECTINGCALLOUT_MADE));
+				break;
+			}
+
+		} else if (ch->flags & XPC_C_DISCONNECTING) {
+			break;
+
+		} else if (atomic_inc_return(&ch->kthreads_assigned) == 1) {
+			if (atomic_inc_return(&part->nchannels_engaged) == 1)
+				xpc_mark_partition_engaged(part);
+		}
 		(void) xpc_part_ref(part);
 		xpc_msgqueue_ref(ch);
-		if (atomic_inc_return(&ch->kthreads_assigned) == 1 &&
-		    atomic_inc_return(&part->nchannels_engaged) == 1) {
-			xpc_mark_partition_engaged(part);
-		}
 
 		pid = kernel_thread(xpc_daemonize_kthread, (void *) args, 0);
 		if (pid < 0) {
 			/* the fork failed */
+
+			/*
+			 * NOTE: if (ignore_disconnecting &&
+			 * !(ch->flags & XPC_C_DISCONNECTINGCALLOUT)) is true,
+			 * then we'll deadlock if all other kthreads assigned
+			 * to this channel are blocked in the channel's
+			 * registerer, because the only thing that will unblock
+			 * them is the xpcDisconnecting callout that this
+			 * failed kernel_thread would have made.
+			 */
+
 			if (atomic_dec_return(&ch->kthreads_assigned) == 0 &&
 			    atomic_dec_return(&part->nchannels_engaged) == 0) {
 				xpc_mark_partition_disengaged(part);
@@ -860,9 +874,6 @@ xpc_create_kthreads(struct xpc_channel *ch, int needed)
 				 * Flag this as an error only if we have an
 				 * insufficient #of kthreads for the channel
 				 * to function.
-				 *
-				 * No xpc_msgqueue_ref() is needed here since
-				 * the channel mgr is doing this.
 				 */
 				spin_lock_irqsave(&ch->lock, irq_flags);
 				XPC_DISCONNECT_CHANNEL(ch, xpcLackOfResources,
@@ -1232,7 +1243,7 @@ xpc_init(void)
 	snprintf(xpc_part->bus_id, BUS_ID_SIZE, "part");
 	snprintf(xpc_chan->bus_id, BUS_ID_SIZE, "chan");
 
-	xpc_sysctl = register_sysctl_table(xpc_sys_dir, 1);
+	xpc_sysctl = register_sysctl_table(xpc_sys_dir);
 
 	/*
 	 * The first few fields of each entry of xpc_partitions[] need to
@@ -1323,22 +1334,14 @@ xpc_init(void)
 		dev_warn(xpc_part, "can't register reboot notifier\n");
 	}
 
-	/* add ourselves to the die_notifier list (i.e., ia64die_chain) */
+	/* add ourselves to the die_notifier list */
 	ret = register_die_notifier(&xpc_die_notifier);
 	if (ret != 0) {
 		dev_warn(xpc_part, "can't register die notifier\n");
 	}
 
-
-	/*
-	 * Set the beating to other partitions into motion.  This is
-	 * the last requirement for other partitions' discovery to
-	 * initiate communications with us.
-	 */
 	init_timer(&xpc_hb_timer);
 	xpc_hb_timer.function = xpc_hb_beater;
-	xpc_hb_beater(0);
-
 
 	/*
 	 * The real work-horse behind xpc.  This processes incoming

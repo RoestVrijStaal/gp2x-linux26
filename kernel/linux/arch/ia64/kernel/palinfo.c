@@ -16,6 +16,7 @@
  * 02/05/2001   S.Eranian	fixed module support
  * 10/23/2001	S.Eranian	updated pal_perf_mon_info bug fixes
  * 03/24/2004	Ashok Raj	updated to work with CPU Hotplug
+ * 10/26/2006   Russ Anderson	updated processor features to rev 2.2 spec
  */
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -314,13 +315,20 @@ vm_info(char *page)
 		     "Protection Key Registers(PKR)  : %d\n"
 		     "Implemented bits in PKR.key    : %d\n"
 		     "Hash Tag ID                    : 0x%x\n"
-		     "Size of RR.rid                 : %d\n",
+		     "Size of RR.rid                 : %d\n"
+		     "Max Purges                     : ",
 		     vm_info_1.pal_vm_info_1_s.phys_add_size,
 		     vm_info_2.pal_vm_info_2_s.impl_va_msb+1,
 		     vm_info_1.pal_vm_info_1_s.max_pkr+1,
 		     vm_info_1.pal_vm_info_1_s.key_size,
 		     vm_info_1.pal_vm_info_1_s.hash_tag_id,
 		     vm_info_2.pal_vm_info_2_s.rid_size);
+		if (vm_info_2.pal_vm_info_2_s.max_purges == PAL_MAX_PURGES)
+			p += sprintf(p, "unlimited\n");
+		else
+			p += sprintf(p, "%d\n",
+		     		vm_info_2.pal_vm_info_2_s.max_purges ?
+				vm_info_2.pal_vm_info_2_s.max_purges : 1);
 	}
 
 	if (ia64_pal_mem_attrib(&attrib) == 0) {
@@ -462,12 +470,16 @@ register_info(char *page)
 	return p - page;
 }
 
-static const char *proc_features[]={
+static char *proc_features_0[]={		/* Feature set 0 */
 	NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,
 	NULL,NULL,NULL,NULL,NULL,NULL,NULL, NULL,NULL,
 	NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,
 	NULL,NULL,NULL,NULL,NULL, NULL,NULL,NULL,NULL,
-	NULL,NULL,NULL,NULL,NULL,
+	"Unimplemented instruction address fault",
+	"INIT, PMI, and LINT pins",
+	"Simple unimplemented instr addresses",
+	"Variable P-state performance",
+	"Virtual machine features implemented",
 	"XIP,XPSR,XFS implemented",
 	"XR1-XR3 implemented",
 	"Disable dynamic predicate prediction",
@@ -475,7 +487,11 @@ static const char *proc_features[]={
 	"Disable dynamic data cache prefetch",
 	"Disable dynamic inst cache prefetch",
 	"Disable dynamic branch prediction",
-	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL,
+	"Disable P-states",
+	"Enable MCA on Data Poisoning",
+	"Enable vmsw instruction",
+	"Enable extern environmental notification",
 	"Disable BINIT on processor time-out",
 	"Disable dynamic power management (DPM)",
 	"Disable coherency",
@@ -486,25 +502,92 @@ static const char *proc_features[]={
 	"Enable BERR promotion"
 };
 
+static char *proc_features_16[]={		/* Feature set 16 */
+	"Disable ETM",
+	"Enable ETM",
+	"Enable MCA on half-way timer",
+	"Enable snoop WC",
+	NULL,
+	"Enable Fast Deferral",
+	"Disable MCA on memory aliasing",
+	"Enable RSB",
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	"DP system processor",
+	"Low Voltage",
+	"HT supported",
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL, NULL
+};
+
+static char **proc_features[]={
+	proc_features_0,
+	NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+	NULL, NULL, NULL, NULL,
+	proc_features_16,
+	NULL, NULL, NULL, NULL,
+};
+
+static char *
+feature_set_info(char *page, u64 avail, u64 status, u64 control, u64 set)
+{
+	char *p = page;
+	char **vf, **v;
+	int i;
+
+	vf = v = proc_features[set];
+	for(i=0; i < 64; i++, avail >>=1, status >>=1, control >>=1) {
+
+		if (!(control))		/* No remaining bits set */
+			break;
+		if (!(avail & 0x1))	/* Print only bits that are available */
+			continue;
+		if (vf)
+			v = vf + i;
+		if ( v && *v ) {
+			p += sprintf(p, "%-40s : %s %s\n", *v,
+				avail & 0x1 ? (status & 0x1 ?
+						"On " : "Off"): "",
+				avail & 0x1 ? (control & 0x1 ?
+						"Ctrl" : "NoCtrl"): "");
+		} else {
+			p += sprintf(p, "Feature set %2ld bit %2d\t\t\t"
+					" : %s %s\n",
+				set, i,
+				avail & 0x1 ? (status & 0x1 ?
+						"On " : "Off"): "",
+				avail & 0x1 ? (control & 0x1 ?
+						"Ctrl" : "NoCtrl"): "");
+		}
+	}
+	return p;
+}
 
 static int
 processor_info(char *page)
 {
 	char *p = page;
-	const char **v = proc_features;
-	u64 avail=1, status=1, control=1;
-	int i;
+	u64 avail=1, status=1, control=1, feature_set=0;
 	s64 ret;
 
-	if ((ret=ia64_pal_proc_get_features(&avail, &status, &control)) != 0) return 0;
+	do {
+		ret = ia64_pal_proc_get_features(&avail, &status, &control,
+						feature_set);
+		if (ret < 0) {
+			return p - page;
+		}
+		if (ret == 1) {
+			feature_set++;
+			continue;
+		}
 
-	for(i=0; i < 64; i++, v++,avail >>=1, status >>=1, control >>=1) {
-		if ( ! *v ) continue;
-		p += sprintf(p, "%-40s : %s%s %s\n", *v,
-				avail & 0x1 ? "" : "NotImpl",
-				avail & 0x1 ? (status & 0x1 ? "On" : "Off"): "",
-				avail & 0x1 ? (control & 0x1 ? "Ctrl" : "NoCtrl"): "");
-	}
+		p = feature_set_info(p, avail, status, control, feature_set);
+
+		feature_set++;
+	} while(1);
+
 	return p - page;
 }
 
@@ -891,7 +974,7 @@ palinfo_read_entry(char *page, char **start, off_t off, int count, int *eof, voi
 	return len;
 }
 
-static void
+static void __cpuinit
 create_palinfo_proc_entries(unsigned int cpu)
 {
 #	define CPUSTR	"cpu%d"
@@ -952,29 +1035,29 @@ remove_palinfo_proc_entries(unsigned int hcpu)
 	}
 }
 
-#ifdef CONFIG_HOTPLUG_CPU
-static int palinfo_cpu_callback(struct notifier_block *nfb,
+static int __cpuinit palinfo_cpu_callback(struct notifier_block *nfb,
 					unsigned long action, void *hcpu)
 {
 	unsigned int hotcpu = (unsigned long)hcpu;
 
 	switch (action) {
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		create_palinfo_proc_entries(hotcpu);
 		break;
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		remove_palinfo_proc_entries(hotcpu);
 		break;
 	}
 	return NOTIFY_OK;
 }
 
-static struct notifier_block palinfo_cpu_notifier =
+static struct notifier_block palinfo_cpu_notifier __cpuinitdata =
 {
 	.notifier_call = palinfo_cpu_callback,
 	.priority = 0,
 };
-#endif
 
 static int __init
 palinfo_init(void)

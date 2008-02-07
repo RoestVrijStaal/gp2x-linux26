@@ -31,11 +31,12 @@ int arch_register_cpu(int num)
 {
 #if defined (CONFIG_ACPI) && defined (CONFIG_HOTPLUG_CPU)
 	/*
-	 * If CPEI cannot be re-targetted, and this is
-	 * CPEI target, then dont create the control file
+	 * If CPEI can be re-targetted or if this is not
+	 * CPEI target, then it is hotpluggable
 	 */
-	if (!can_cpei_retarget() && is_cpu_cpei_target(num))
-		sysfs_cpus[num].cpu.no_control = 1;
+	if (can_cpei_retarget() || !is_cpu_cpei_target(num))
+		sysfs_cpus[num].cpu.hotpluggable = 1;
+	map_cpu_to_node(num, node_cpuid[num].nid);
 #endif
 
 	return register_cpu(&sysfs_cpus[num].cpu, num);
@@ -45,7 +46,8 @@ int arch_register_cpu(int num)
 
 void arch_unregister_cpu(int num)
 {
-	return unregister_cpu(&sysfs_cpus[num].cpu);
+	unregister_cpu(&sysfs_cpus[num].cpu);
+	unmap_cpu_from_node(num, cpu_to_node(num));
 }
 EXPORT_SYMBOL(arch_register_cpu);
 EXPORT_SYMBOL(arch_unregister_cpu);
@@ -116,11 +118,11 @@ struct cpu_cache_info {
 	struct kobject kobj;
 };
 
-static struct cpu_cache_info	all_cpu_cache_info[NR_CPUS];
+static struct cpu_cache_info	all_cpu_cache_info[NR_CPUS] __cpuinitdata;
 #define LEAF_KOBJECT_PTR(x,y)    (&all_cpu_cache_info[x].cache_leaves[y])
 
 #ifdef CONFIG_SMP
-static void cache_shared_cpu_map_setup( unsigned int cpu,
+static void __cpuinit cache_shared_cpu_map_setup( unsigned int cpu,
 		struct cache_info * this_leaf)
 {
 	pal_cache_shared_info_t	csi;
@@ -155,7 +157,7 @@ static void cache_shared_cpu_map_setup( unsigned int cpu,
 				&csi) == PAL_STATUS_SUCCESS);
 }
 #else
-static void cache_shared_cpu_map_setup(unsigned int cpu,
+static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu,
 		struct cache_info * this_leaf)
 {
 	cpu_set(cpu, this_leaf->shared_cpu_map);
@@ -410,9 +412,11 @@ static int __cpuinit cache_cpu_callback(struct notifier_block *nfb,
 	sys_dev = get_cpu_sysdev(cpu);
 	switch (action) {
 	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
 		cache_add_dev(sys_dev);
 		break;
 	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		cache_remove_dev(sys_dev);
 		break;
 	}
@@ -424,13 +428,13 @@ static struct notifier_block __cpuinitdata cache_cpu_notifier =
 	.notifier_call = cache_cpu_callback
 };
 
-static int __cpuinit cache_sysfs_init(void)
+static int __init cache_sysfs_init(void)
 {
 	int i;
 
 	for_each_online_cpu(i) {
-		cache_cpu_callback(&cache_cpu_notifier, CPU_ONLINE,
-				(void *)(long)i);
+		struct sys_device *sys_dev = get_cpu_sysdev((unsigned int)i);
+		cache_add_dev(sys_dev);
 	}
 
 	register_hotcpu_notifier(&cache_cpu_notifier);
