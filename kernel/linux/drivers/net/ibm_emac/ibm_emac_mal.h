@@ -24,6 +24,7 @@
 #include <linux/netdevice.h>
 
 #include <asm/io.h>
+#include <asm/dcr.h>
 
 /*
  * These MAL "versions" probably aren't the real versions IBM uses for these 
@@ -190,10 +191,10 @@ struct mal_commac {
 };
 
 struct ibm_ocp_mal {
-	int			dcrbase;
+	dcr_host_t		dcrhost;
 
 	struct list_head	poll_list;
-	struct net_device	poll_dev;
+	struct napi_struct	napi;
 
 	struct list_head	list;
 	u32			tx_chan_mask;
@@ -207,12 +208,12 @@ struct ibm_ocp_mal {
 
 static inline u32 get_mal_dcrn(struct ibm_ocp_mal *mal, int reg)
 {
-	return mfdcr(mal->dcrbase + reg);
+	return dcr_read(mal->dcrhost, reg);
 }
 
 static inline void set_mal_dcrn(struct ibm_ocp_mal *mal, int reg, u32 val)
 {
-	mtdcr(mal->dcrbase + reg, val);
+	dcr_write(mal->dcrhost, reg, val);
 }
 
 /* Register MAL devices */
@@ -221,8 +222,7 @@ void mal_exit(void) __exit;
 
 int mal_register_commac(struct ibm_ocp_mal *mal,
 			struct mal_commac *commac) __init;
-void mal_unregister_commac(struct ibm_ocp_mal *mal,
-			   struct mal_commac *commac) __exit;
+void mal_unregister_commac(struct ibm_ocp_mal *mal, struct mal_commac *commac);
 int mal_set_rcbs(struct ibm_ocp_mal *mal, int channel, unsigned long size);
 
 /* Returns BD ring offset for a particular channel
