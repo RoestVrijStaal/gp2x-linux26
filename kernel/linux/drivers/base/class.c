@@ -20,7 +20,7 @@
 #include "base.h"
 
 #define to_class_attr(_attr) container_of(_attr, struct class_attribute, attr)
-#define to_class(obj) container_of(obj, struct class, subsys.kset.kobj)
+#define to_class(obj) container_of(obj, struct class, subsys.kobj)
 
 static ssize_t
 class_attr_show(struct kobject * kobj, struct attribute * attr, char * buf)
@@ -65,20 +65,20 @@ static struct sysfs_ops class_sysfs_ops = {
 	.store	= class_attr_store,
 };
 
-static struct kobj_type ktype_class = {
+static struct kobj_type class_ktype = {
 	.sysfs_ops	= &class_sysfs_ops,
 	.release	= class_release,
 };
 
 /* Hotplug events for classes go to the class_obj subsys */
-static decl_subsys(class, &ktype_class, NULL);
+static decl_subsys(class, &class_ktype, NULL);
 
 
 int class_create_file(struct class * cls, const struct class_attribute * attr)
 {
 	int error;
 	if (cls) {
-		error = sysfs_create_file(&cls->subsys.kset.kobj, &attr->attr);
+		error = sysfs_create_file(&cls->subsys.kobj, &attr->attr);
 	} else
 		error = -EINVAL;
 	return error;
@@ -87,20 +87,20 @@ int class_create_file(struct class * cls, const struct class_attribute * attr)
 void class_remove_file(struct class * cls, const struct class_attribute * attr)
 {
 	if (cls)
-		sysfs_remove_file(&cls->subsys.kset.kobj, &attr->attr);
+		sysfs_remove_file(&cls->subsys.kobj, &attr->attr);
 }
 
 static struct class *class_get(struct class *cls)
 {
 	if (cls)
-		return container_of(subsys_get(&cls->subsys), struct class, subsys);
+		return container_of(kset_get(&cls->subsys), struct class, subsys);
 	return NULL;
 }
 
 static void class_put(struct class * cls)
 {
 	if (cls)
-		subsys_put(&cls->subsys);
+		kset_put(&cls->subsys);
 }
 
 
@@ -143,12 +143,13 @@ int class_register(struct class * cls)
 	INIT_LIST_HEAD(&cls->children);
 	INIT_LIST_HEAD(&cls->devices);
 	INIT_LIST_HEAD(&cls->interfaces);
+	kset_init(&cls->class_dirs);
 	init_MUTEX(&cls->sem);
-	error = kobject_set_name(&cls->subsys.kset.kobj, "%s", cls->name);
+	error = kobject_set_name(&cls->subsys.kobj, "%s", cls->name);
 	if (error)
 		return error;
 
-	subsys_set_kset(cls, class_subsys);
+	cls->subsys.kobj.kset = &class_subsys;
 
 	error = subsystem_register(&cls->subsys);
 	if (!error) {
@@ -179,8 +180,7 @@ static void class_device_create_release(struct class_device *class_dev)
 
 /* needed to allow these devices to have parent class devices */
 static int class_device_create_uevent(struct class_device *class_dev,
-				       char **envp, int num_envp,
-				       char *buffer, int buffer_size)
+				      struct kobj_uevent_env *env)
 {
 	pr_debug("%s called for %s\n", __FUNCTION__, class_dev->class_id);
 	return 0;
@@ -197,7 +197,7 @@ static int class_device_create_uevent(struct class_device *class_dev,
  * Note, the pointer created here is to be destroyed when finished by
  * making a call to class_destroy().
  */
-struct class *class_create(struct module *owner, char *name)
+struct class *class_create(struct module *owner, const char *name)
 {
 	struct class *cls;
 	int retval;
@@ -226,7 +226,7 @@ error:
 
 /**
  * class_destroy - destroys a struct class structure
- * @cs: pointer to the struct class that is to be destroyed
+ * @cls: pointer to the struct class that is to be destroyed
  *
  * Note, the pointer to be destroyed must have been created with a call
  * to class_create().
@@ -311,9 +311,6 @@ static void class_dev_release(struct kobject * kobj)
 
 	pr_debug("device class '%s': release.\n", cd->class_id);
 
-	kfree(cd->devt_attr);
-	cd->devt_attr = NULL;
-
 	if (cd->release)
 		cd->release(cd);
 	else if (cls->release)
@@ -326,7 +323,7 @@ static void class_dev_release(struct kobject * kobj)
 	}
 }
 
-static struct kobj_type ktype_class_device = {
+static struct kobj_type class_device_ktype = {
 	.sysfs_ops	= &class_dev_sysfs_ops,
 	.release	= class_dev_release,
 };
@@ -335,7 +332,7 @@ static int class_uevent_filter(struct kset *kset, struct kobject *kobj)
 {
 	struct kobj_type *ktype = get_ktype(kobj);
 
-	if (ktype == &ktype_class_device) {
+	if (ktype == &class_device_ktype) {
 		struct class_device *class_dev = to_class_dev(kobj);
 		if (class_dev->class)
 			return 1;
@@ -350,63 +347,98 @@ static const char *class_uevent_name(struct kset *kset, struct kobject *kobj)
 	return class_dev->class->name;
 }
 
-static int class_uevent(struct kset *kset, struct kobject *kobj, char **envp,
-			 int num_envp, char *buffer, int buffer_size)
+#ifdef CONFIG_SYSFS_DEPRECATED
+char *make_class_name(const char *name, struct kobject *kobj)
+{
+	char *class_name;
+	int size;
+
+	size = strlen(name) + strlen(kobject_name(kobj)) + 2;
+
+	class_name = kmalloc(size, GFP_KERNEL);
+	if (!class_name)
+		return NULL;
+
+	strcpy(class_name, name);
+	strcat(class_name, ":");
+	strcat(class_name, kobject_name(kobj));
+	return class_name;
+}
+
+static int make_deprecated_class_device_links(struct class_device *class_dev)
+{
+	char *class_name;
+	int error;
+
+	if (!class_dev->dev)
+		return 0;
+
+	class_name = make_class_name(class_dev->class->name, &class_dev->kobj);
+	if (class_name)
+		error = sysfs_create_link(&class_dev->dev->kobj,
+					  &class_dev->kobj, class_name);
+	else
+		error = -ENOMEM;
+	kfree(class_name);
+	return error;
+}
+
+static void remove_deprecated_class_device_links(struct class_device *class_dev)
+{
+	char *class_name;
+
+	if (!class_dev->dev)
+		return;
+
+	class_name = make_class_name(class_dev->class->name, &class_dev->kobj);
+	if (class_name)
+		sysfs_remove_link(&class_dev->dev->kobj, class_name);
+	kfree(class_name);
+}
+#else
+static inline int make_deprecated_class_device_links(struct class_device *cd)
+{ return 0; }
+static void remove_deprecated_class_device_links(struct class_device *cd)
+{ }
+#endif
+
+static int class_uevent(struct kset *kset, struct kobject *kobj,
+			struct kobj_uevent_env *env)
 {
 	struct class_device *class_dev = to_class_dev(kobj);
-	int i = 0;
-	int length = 0;
+	struct device *dev = class_dev->dev;
 	int retval = 0;
 
 	pr_debug("%s - name = %s\n", __FUNCTION__, class_dev->class_id);
 
-	if (class_dev->dev) {
-		/* add physical device, backing this device  */
-		struct device *dev = class_dev->dev;
-		char *path = kobject_get_path(&dev->kobj, GFP_KERNEL);
+	if (MAJOR(class_dev->devt)) {
+		add_uevent_var(env, "MAJOR=%u", MAJOR(class_dev->devt));
 
-		add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
-			       &length, "PHYSDEVPATH=%s", path);
-		kfree(path);
+		add_uevent_var(env, "MINOR=%u", MINOR(class_dev->devt));
+	}
+
+	if (dev) {
+		const char *path = kobject_get_path(&dev->kobj, GFP_KERNEL);
+		if (path) {
+			add_uevent_var(env, "PHYSDEVPATH=%s", path);
+			kfree(path);
+		}
 
 		if (dev->bus)
-			add_uevent_var(envp, num_envp, &i,
-				       buffer, buffer_size, &length,
-				       "PHYSDEVBUS=%s", dev->bus->name);
+			add_uevent_var(env, "PHYSDEVBUS=%s", dev->bus->name);
 
 		if (dev->driver)
-			add_uevent_var(envp, num_envp, &i,
-				       buffer, buffer_size, &length,
-				       "PHYSDEVDRIVER=%s", dev->driver->name);
+			add_uevent_var(env, "PHYSDEVDRIVER=%s", dev->driver->name);
 	}
-
-	if (MAJOR(class_dev->devt)) {
-		add_uevent_var(envp, num_envp, &i,
-			       buffer, buffer_size, &length,
-			       "MAJOR=%u", MAJOR(class_dev->devt));
-
-		add_uevent_var(envp, num_envp, &i,
-			       buffer, buffer_size, &length,
-			       "MINOR=%u", MINOR(class_dev->devt));
-	}
-
-	/* terminate, set to next free slot, shrink available space */
-	envp[i] = NULL;
-	envp = &envp[i];
-	num_envp -= i;
-	buffer = &buffer[length];
-	buffer_size -= length;
 
 	if (class_dev->uevent) {
 		/* have the class device specific function add its stuff */
-		retval = class_dev->uevent(class_dev, envp, num_envp,
-					    buffer, buffer_size);
+		retval = class_dev->uevent(class_dev, env);
 		if (retval)
 			pr_debug("class_dev->uevent() returned %d\n", retval);
 	} else if (class_dev->class->uevent) {
 		/* have the class specific function add its stuff */
-		retval = class_dev->class->uevent(class_dev, envp, num_envp,
-						   buffer, buffer_size);
+		retval = class_dev->class->uevent(class_dev, env);
 		if (retval)
 			pr_debug("class->uevent() returned %d\n", retval);
 	}
@@ -420,7 +452,7 @@ static struct kset_uevent_ops class_uevent_ops = {
 	.uevent =	class_uevent,
 };
 
-static decl_subsys(class_obj, &ktype_class_device, &class_uevent_ops);
+static decl_subsys(class_obj, &class_device_ktype, &class_uevent_ops);
 
 
 static int class_device_add_attrs(struct class_device * cd)
@@ -490,12 +522,18 @@ static ssize_t show_dev(struct class_device *class_dev, char *buf)
 	return print_dev_t(buf, class_dev->devt);
 }
 
+static struct class_device_attribute class_devt_attr =
+	__ATTR(dev, S_IRUGO, show_dev, NULL);
+
 static ssize_t store_uevent(struct class_device *class_dev,
 			    const char *buf, size_t count)
 {
 	kobject_uevent(&class_dev->kobj, KOBJ_ADD);
 	return count;
 }
+
+static struct class_device_attribute class_uevent_attr =
+	__ATTR(uevent, S_IWUSR, NULL, store_uevent);
 
 void class_device_initialize(struct class_device *class_dev)
 {
@@ -504,29 +542,11 @@ void class_device_initialize(struct class_device *class_dev)
 	INIT_LIST_HEAD(&class_dev->node);
 }
 
-char *make_class_name(const char *name, struct kobject *kobj)
-{
-	char *class_name;
-	int size;
-
-	size = strlen(name) + strlen(kobject_name(kobj)) + 2;
-
-	class_name = kmalloc(size, GFP_KERNEL);
-	if (!class_name)
-		return ERR_PTR(-ENOMEM);
-
-	strcpy(class_name, name);
-	strcat(class_name, ":");
-	strcat(class_name, kobject_name(kobj));
-	return class_name;
-}
-
 int class_device_add(struct class_device *class_dev)
 {
 	struct class *parent_class = NULL;
 	struct class_device *parent_class_dev = NULL;
 	struct class_interface *class_intf;
-	char *class_name = NULL;
 	int error = -EINVAL;
 
 	class_dev = class_device_get(class_dev);
@@ -553,40 +573,26 @@ int class_device_add(struct class_device *class_dev)
 	if (parent_class_dev)
 		class_dev->kobj.parent = &parent_class_dev->kobj;
 	else
-		class_dev->kobj.parent = &parent_class->subsys.kset.kobj;
+		class_dev->kobj.parent = &parent_class->subsys.kobj;
 
 	error = kobject_add(&class_dev->kobj);
 	if (error)
 		goto out2;
 
 	/* add the needed attributes to this device */
-	sysfs_create_link(&class_dev->kobj, &parent_class->subsys.kset.kobj, "subsystem");
-	class_dev->uevent_attr.attr.name = "uevent";
-	class_dev->uevent_attr.attr.mode = S_IWUSR;
-	class_dev->uevent_attr.attr.owner = parent_class->owner;
-	class_dev->uevent_attr.store = store_uevent;
-	error = class_device_create_file(class_dev, &class_dev->uevent_attr);
+	error = sysfs_create_link(&class_dev->kobj,
+				  &parent_class->subsys.kobj, "subsystem");
+	if (error)
+		goto out3;
+
+	error = class_device_create_file(class_dev, &class_uevent_attr);
 	if (error)
 		goto out3;
 
 	if (MAJOR(class_dev->devt)) {
-		struct class_device_attribute *attr;
-		attr = kzalloc(sizeof(*attr), GFP_KERNEL);
-		if (!attr) {
-			error = -ENOMEM;
+		error = class_device_create_file(class_dev, &class_devt_attr);
+		if (error)
 			goto out4;
-		}
-		attr->attr.name = "dev";
-		attr->attr.mode = S_IRUGO;
-		attr->attr.owner = parent_class->owner;
-		attr->show = show_dev;
-		error = class_device_create_file(class_dev, attr);
-		if (error) {
-			kfree(attr);
-			goto out4;
-		}
-
-		class_dev->devt_attr = attr;
 	}
 
 	error = class_device_add_attrs(class_dev);
@@ -594,19 +600,17 @@ int class_device_add(struct class_device *class_dev)
 		goto out5;
 
 	if (class_dev->dev) {
-		class_name = make_class_name(class_dev->class->name,
-					     &class_dev->kobj);
 		error = sysfs_create_link(&class_dev->kobj,
 					  &class_dev->dev->kobj, "device");
 		if (error)
 			goto out6;
-		error = sysfs_create_link(&class_dev->dev->kobj, &class_dev->kobj,
-					  class_name);
-		if (error)
-			goto out7;
 	}
 
 	error = class_device_add_groups(class_dev);
+	if (error)
+		goto out7;
+
+	error = make_deprecated_class_device_links(class_dev);
 	if (error)
 		goto out8;
 
@@ -624,18 +628,17 @@ int class_device_add(struct class_device *class_dev)
 	goto out1;
 
  out8:
-	if (class_dev->dev)
-		sysfs_remove_link(&class_dev->kobj, class_name);
+	class_device_remove_groups(class_dev);
  out7:
 	if (class_dev->dev)
 		sysfs_remove_link(&class_dev->kobj, "device");
  out6:
 	class_device_remove_attrs(class_dev);
  out5:
-	if (class_dev->devt_attr)
-		class_device_remove_file(class_dev, class_dev->devt_attr);
+	if (MAJOR(class_dev->devt))
+		class_device_remove_file(class_dev, &class_devt_attr);
  out4:
-	class_device_remove_file(class_dev, &class_dev->uevent_attr);
+	class_device_remove_file(class_dev, &class_uevent_attr);
  out3:
 	kobject_del(&class_dev->kobj);
  out2:
@@ -644,7 +647,6 @@ int class_device_add(struct class_device *class_dev)
 	class_put(parent_class);
  out1:
 	class_device_put(class_dev);
-	kfree(class_name);
 	return error;
 }
 
@@ -656,9 +658,9 @@ int class_device_register(struct class_device *class_dev)
 
 /**
  * class_device_create - creates a class device and registers it with sysfs
- * @cs: pointer to the struct class that this device should be registered to.
+ * @cls: pointer to the struct class that this device should be registered to.
  * @parent: pointer to the parent struct class_device of this new device, if any.
- * @dev: the dev_t for the char device to be added.
+ * @devt: the dev_t for the char device to be added.
  * @device: a pointer to a struct device that is assiociated with this class device.
  * @fmt: string for the class device's name
  *
@@ -679,7 +681,8 @@ int class_device_register(struct class_device *class_dev)
 struct class_device *class_device_create(struct class *cls,
 					 struct class_device *parent,
 					 dev_t devt,
-					 struct device *device, char *fmt, ...)
+					 struct device *device,
+					 const char *fmt, ...)
 {
 	va_list args;
 	struct class_device *class_dev = NULL;
@@ -720,7 +723,6 @@ void class_device_del(struct class_device *class_dev)
 	struct class *parent_class = class_dev->class;
 	struct class_device *parent_device = class_dev->parent;
 	struct class_interface *class_intf;
-	char *class_name = NULL;
 
 	if (parent_class) {
 		down(&parent_class->sem);
@@ -732,15 +734,13 @@ void class_device_del(struct class_device *class_dev)
 	}
 
 	if (class_dev->dev) {
-		class_name = make_class_name(class_dev->class->name,
-					     &class_dev->kobj);
+		remove_deprecated_class_device_links(class_dev);
 		sysfs_remove_link(&class_dev->kobj, "device");
-		sysfs_remove_link(&class_dev->dev->kobj, class_name);
 	}
 	sysfs_remove_link(&class_dev->kobj, "subsystem");
-	class_device_remove_file(class_dev, &class_dev->uevent_attr);
-	if (class_dev->devt_attr)
-		class_device_remove_file(class_dev, class_dev->devt_attr);
+	class_device_remove_file(class_dev, &class_uevent_attr);
+	if (MAJOR(class_dev->devt))
+		class_device_remove_file(class_dev, &class_devt_attr);
 	class_device_remove_attrs(class_dev);
 	class_device_remove_groups(class_dev);
 
@@ -749,7 +749,6 @@ void class_device_del(struct class_device *class_dev)
 
 	class_device_put(parent_device);
 	class_put(parent_class);
-	kfree(class_name);
 }
 
 void class_device_unregister(struct class_device *class_dev)
@@ -763,7 +762,7 @@ void class_device_unregister(struct class_device *class_dev)
 /**
  * class_device_destroy - removes a class device that was created with class_device_create()
  * @cls: the pointer to the struct class that this device was registered * with.
- * @dev: the dev_t of the device that was previously registered.
+ * @devt: the dev_t of the device that was previously registered.
  *
  * This call unregisters and cleans up a class device that was created with a
  * call to class_device_create()
@@ -786,41 +785,6 @@ void class_device_destroy(struct class *cls, dev_t devt)
 		class_device_unregister(class_dev);
 }
 
-int class_device_rename(struct class_device *class_dev, char *new_name)
-{
-	int error = 0;
-	char *old_class_name = NULL, *new_class_name = NULL;
-
-	class_dev = class_device_get(class_dev);
-	if (!class_dev)
-		return -EINVAL;
-
-	pr_debug("CLASS: renaming '%s' to '%s'\n", class_dev->class_id,
-		 new_name);
-
-	if (class_dev->dev)
-		old_class_name = make_class_name(class_dev->class->name,
-						 &class_dev->kobj);
-
-	strlcpy(class_dev->class_id, new_name, KOBJ_NAME_LEN);
-
-	error = kobject_rename(&class_dev->kobj, new_name);
-
-	if (class_dev->dev) {
-		new_class_name = make_class_name(class_dev->class->name,
-						 &class_dev->kobj);
-		sysfs_create_link(&class_dev->dev->kobj, &class_dev->kobj,
-				  new_class_name);
-		sysfs_remove_link(&class_dev->dev->kobj, old_class_name);
-	}
-	class_device_put(class_dev);
-
-	kfree(old_class_name);
-	kfree(new_class_name);
-
-	return error;
-}
-
 struct class_device * class_device_get(struct class_device *class_dev)
 {
 	if (class_dev)
@@ -839,6 +803,7 @@ int class_interface_register(struct class_interface *class_intf)
 {
 	struct class *parent;
 	struct class_device *class_dev;
+	struct device *dev;
 
 	if (!class_intf || !class_intf->class)
 		return -ENODEV;
@@ -853,6 +818,10 @@ int class_interface_register(struct class_interface *class_intf)
 		list_for_each_entry(class_dev, &parent->children, node)
 			class_intf->add(class_dev, class_intf);
 	}
+	if (class_intf->add_dev) {
+		list_for_each_entry(dev, &parent->devices, node)
+			class_intf->add_dev(dev, class_intf);
+	}
 	up(&parent->sem);
 
 	return 0;
@@ -862,6 +831,7 @@ void class_interface_unregister(struct class_interface *class_intf)
 {
 	struct class * parent = class_intf->class;
 	struct class_device *class_dev;
+	struct device *dev;
 
 	if (!parent)
 		return;
@@ -872,12 +842,14 @@ void class_interface_unregister(struct class_interface *class_intf)
 		list_for_each_entry(class_dev, &parent->children, node)
 			class_intf->remove(class_dev, class_intf);
 	}
+	if (class_intf->remove_dev) {
+		list_for_each_entry(dev, &parent->devices, node)
+			class_intf->remove_dev(dev, class_intf);
+	}
 	up(&parent->sem);
 
 	class_put(parent);
 }
-
-
 
 int __init classes_init(void)
 {
@@ -889,9 +861,9 @@ int __init classes_init(void)
 
 	/* ick, this is ugly, the things we go through to keep from showing up
 	 * in sysfs... */
-	subsystem_init(&class_obj_subsys);
-	if (!class_obj_subsys.kset.subsys)
-			class_obj_subsys.kset.subsys = &class_obj_subsys;
+	kset_init(&class_obj_subsys);
+	if (!class_obj_subsys.kobj.parent)
+		class_obj_subsys.kobj.parent = &class_obj_subsys.kobj;
 	return 0;
 }
 

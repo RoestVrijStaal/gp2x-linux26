@@ -34,8 +34,7 @@ static const char *memory_uevent_name(struct kset *kset, struct kobject *kobj)
 	return MEMORY_CLASS_NAME;
 }
 
-static int memory_uevent(struct kset *kset, struct kobject *kobj, char **envp,
-			int num_envp, char *buffer, int buffer_size)
+static int memory_uevent(struct kset *kset, struct kobject *obj, struct kobj_uevent_env *env)
 {
 	int retval = 0;
 
@@ -138,7 +137,7 @@ static ssize_t show_mem_state(struct sys_device *dev, char *buf)
 	return len;
 }
 
-static inline int memory_notify(unsigned long val, void *v)
+int memory_notify(unsigned long val, void *v)
 {
 	return blocking_notifier_call_chain(&memory_chain, val, v);
 }
@@ -184,7 +183,6 @@ memory_block_action(struct memory_block *mem, unsigned long action)
 			break;
 		case MEM_OFFLINE:
 			mem->state = MEM_GOING_OFFLINE;
-			memory_notify(MEM_GOING_OFFLINE, NULL);
 			start_paddr = page_to_pfn(first_page) << PAGE_SHIFT;
 			ret = remove_memory(start_paddr,
 					    PAGES_PER_SECTION << PAGE_SHIFT);
@@ -192,7 +190,6 @@ memory_block_action(struct memory_block *mem, unsigned long action)
 				mem->state = old_state;
 				break;
 			}
-			memory_notify(MEM_MAPPING_INVALID, NULL);
 			break;
 		default:
 			printk(KERN_WARNING "%s(%p, %ld) unknown action: %ld\n",
@@ -200,11 +197,6 @@ memory_block_action(struct memory_block *mem, unsigned long action)
 			WARN_ON(1);
 			ret = -EINVAL;
 	}
-	/*
-	 * For now, only notify on successful memory operations
-	 */
-	if (!ret)
-		memory_notify(action, NULL);
 
 	return ret;
 }
@@ -239,7 +231,7 @@ store_mem_state(struct sys_device *dev, const char *buf, size_t count)
 	mem = container_of(dev, struct memory_block, sysdev);
 	phys_section_nr = mem->phys_index;
 
-	if (!valid_section_nr(phys_section_nr))
+	if (!present_section_nr(phys_section_nr))
 		goto out;
 
 	if (!strncmp(buf, "online", min((int)count, 6)))
@@ -290,9 +282,8 @@ static CLASS_ATTR(block_size_bytes, 0444, print_block_size, NULL);
 
 static int block_size_init(void)
 {
-	sysfs_create_file(&memory_sysdev_class.kset.kobj,
-		&class_attr_block_size_bytes.attr);
-	return 0;
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_block_size_bytes.attr);
 }
 
 /*
@@ -323,12 +314,14 @@ static CLASS_ATTR(probe, 0700, NULL, memory_probe_store);
 
 static int memory_probe_init(void)
 {
-	sysfs_create_file(&memory_sysdev_class.kset.kobj,
-		&class_attr_probe.attr);
-	return 0;
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_probe.attr);
 }
 #else
-#define memory_probe_init(...)	do {} while (0)
+static inline int memory_probe_init(void)
+{
+	return 0;
+}
 #endif
 
 /*
@@ -418,7 +411,7 @@ int register_new_memory(struct mem_section *section)
 
 int unregister_memory_section(struct mem_section *section)
 {
-	if (!valid_section(section))
+	if (!present_section(section))
 		return -EINVAL;
 
 	return remove_memory_block(0, section, 0);
@@ -431,22 +424,33 @@ int __init memory_dev_init(void)
 {
 	unsigned int i;
 	int ret;
+	int err;
 
 	memory_sysdev_class.kset.uevent_ops = &memory_uevent_ops;
 	ret = sysdev_class_register(&memory_sysdev_class);
+	if (ret)
+		goto out;
 
 	/*
 	 * Create entries for memory sections that were found
 	 * during boot and have been initialized
 	 */
 	for (i = 0; i < NR_MEM_SECTIONS; i++) {
-		if (!valid_section_nr(i))
+		if (!present_section_nr(i))
 			continue;
-		add_memory_block(0, __nr_to_section(i), MEM_ONLINE, 0);
+		err = add_memory_block(0, __nr_to_section(i), MEM_ONLINE, 0);
+		if (!ret)
+			ret = err;
 	}
 
-	memory_probe_init();
-	block_size_init();
-
+	err = memory_probe_init();
+	if (!ret)
+		ret = err;
+	err = block_size_init();
+	if (!ret)
+		ret = err;
+out:
+	if (ret)
+		printk(KERN_ERR "%s() failed: %d\n", __FUNCTION__, ret);
 	return ret;
 }
