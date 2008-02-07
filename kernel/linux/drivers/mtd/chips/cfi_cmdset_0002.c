@@ -48,6 +48,7 @@
 #define MANUFACTURER_ATMEL	0x001F
 #define MANUFACTURER_SST	0x00BF
 #define SST49LF004B	        0x0060
+#define SST49LF040B	        0x0050
 #define SST49LF008A		0x005a
 #define AT49BV6416		0x00d6
 
@@ -212,6 +213,7 @@ static void fixup_use_atmel_lock(struct mtd_info *mtd, void *param)
 {
 	mtd->lock = cfi_atmel_lock;
 	mtd->unlock = cfi_atmel_unlock;
+	mtd->flags |= MTD_STUPID_LOCK;
 }
 
 static struct cfi_fixup cfi_fixup_table[] = {
@@ -232,6 +234,7 @@ static struct cfi_fixup cfi_fixup_table[] = {
 };
 static struct cfi_fixup jedec_fixup_table[] = {
 	{ MANUFACTURER_SST, SST49LF004B, fixup_use_fwh_lock, NULL, },
+	{ MANUFACTURER_SST, SST49LF040B, fixup_use_fwh_lock, NULL, },
 	{ MANUFACTURER_SST, SST49LF008A, fixup_use_fwh_lock, NULL, },
 	{ 0, 0, NULL, NULL }
 };
@@ -254,12 +257,11 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 	struct mtd_info *mtd;
 	int i;
 
-	mtd = kmalloc(sizeof(*mtd), GFP_KERNEL);
+	mtd = kzalloc(sizeof(*mtd), GFP_KERNEL);
 	if (!mtd) {
 		printk(KERN_WARNING "Failed to allocate memory for MTD device\n");
 		return NULL;
 	}
-	memset(mtd, 0, sizeof(*mtd));
 	mtd->priv = map;
 	mtd->type = MTD_NORFLASH;
 
@@ -357,6 +359,8 @@ struct mtd_info *cfi_cmdset_0002(struct map_info *map, int primary)
 		cfi->chips[i].word_write_time = 1<<cfi->cfiq->WordWriteTimeoutTyp;
 		cfi->chips[i].buffer_write_time = 1<<cfi->cfiq->BufWriteTimeoutTyp;
 		cfi->chips[i].erase_time = 1<<cfi->cfiq->BlockEraseTimeoutTyp;
+		cfi->chips[i].ref_point_counter = 0;
+		init_waitqueue_head(&(cfi->chips[i].wq));
 	}
 
 	map->fldrv = &cfi_amdstd_chipdrv;
@@ -518,10 +522,12 @@ static int get_chip(struct map_info *map, struct flchip *chip, unsigned long adr
 		if (mode == FL_WRITING) /* FIXME: Erase-suspend-program appears broken. */
 			goto sleep;
 
-		if (!(mode == FL_READY || mode == FL_POINT
+		if (!(   mode == FL_READY
+		      || mode == FL_POINT
 		      || !cfip
 		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x2))
-		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x1))))
+		      || (mode == FL_WRITING && (cfip->EraseSuspend & 0x1)
+		    )))
 			goto sleep;
 
 		/* We could check to see if we're trying to access the sector
@@ -1603,7 +1609,7 @@ static int __xipram do_erase_oneblock(struct map_info *map, struct flchip *chip,
 }
 
 
-int cfi_amdstd_erase_varsize(struct mtd_info *mtd, struct erase_info *instr)
+static int cfi_amdstd_erase_varsize(struct mtd_info *mtd, struct erase_info *instr)
 {
 	unsigned long ofs, len;
 	int ret;
