@@ -27,7 +27,6 @@
 
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/interrupt.h>
@@ -241,15 +240,11 @@ static int hci_uart_send_frame(struct sk_buff *skb)
 
 static void hci_uart_destruct(struct hci_dev *hdev)
 {
-	struct hci_uart *hu;
-
 	if (!hdev)
 		return;
 
 	BT_DBG("%s", hdev->name);
-
-	hu = (struct hci_uart *) hdev->driver_data;
-	kfree(hu);
+	kfree(hdev->driver_data);
 }
 
 /* ------ LDISC part ------ */
@@ -272,7 +267,7 @@ static int hci_uart_tty_open(struct tty_struct *tty)
 		return -EEXIST;
 
 	if (!(hu = kzalloc(sizeof(struct hci_uart), GFP_KERNEL))) {
-		BT_ERR("Can't allocate controll structure");
+		BT_ERR("Can't allocate control structure");
 		return -ENFILE;
 	}
 
@@ -312,7 +307,9 @@ static void hci_uart_tty_close(struct tty_struct *tty)
 
 	if (hu) {
 		struct hci_dev *hdev = hu->hdev;
-		hci_uart_close(hdev);
+
+		if (hdev)
+			hci_uart_close(hdev);
 
 		if (test_and_clear_bit(HCI_UART_PROTO_SET, &hu->flags)) {
 			hu->proto->close(hu);
@@ -360,7 +357,7 @@ static void hci_uart_tty_wakeup(struct tty_struct *tty)
  *     
  * Return Value:    None
  */
-static void hci_uart_tty_receive(struct tty_struct *tty, const __u8 *data, char *flags, int count)
+static void hci_uart_tty_receive(struct tty_struct *tty, const u8 *data, char *flags, int count)
 {
 	struct hci_uart *hu = (void *)tty->disc_data;
 
@@ -375,7 +372,8 @@ static void hci_uart_tty_receive(struct tty_struct *tty, const __u8 *data, char 
 	hu->hdev->stat.byte_rx += count;
 	spin_unlock(&hu->rx_lock);
 
-	if (test_and_clear_bit(TTY_THROTTLED,&tty->flags) && tty->driver->unthrottle)
+	if (test_and_clear_bit(TTY_THROTTLED, &tty->flags) &&
+					tty->driver->unthrottle)
 		tty->driver->unthrottle(tty);
 }
 
@@ -477,10 +475,16 @@ static int hci_uart_tty_ioctl(struct tty_struct *tty, struct file * file,
 			tty->low_latency = 1;
 		} else
 			return -EBUSY;
+		break;
 
 	case HCIUARTGETPROTO:
 		if (test_bit(HCI_UART_PROTO_SET, &hu->flags))
 			return hu->proto->id;
+		return -EUNATCH;
+
+	case HCIUARTGETDEVICE:
+		if (test_bit(HCI_UART_PROTO_SET, &hu->flags))
+			return hu->hdev->id;
 		return -EUNATCH;
 
 	default:
@@ -545,7 +549,10 @@ static int __init hci_uart_init(void)
 #ifdef CONFIG_BT_HCIUART_BCSP
 	bcsp_init();
 #endif
-	
+#ifdef CONFIG_BT_HCIUART_LL
+	ll_init();
+#endif
+
 	return 0;
 }
 
@@ -558,6 +565,9 @@ static void __exit hci_uart_exit(void)
 #endif
 #ifdef CONFIG_BT_HCIUART_BCSP
 	bcsp_deinit();
+#endif
+#ifdef CONFIG_BT_HCIUART_LL
+	ll_deinit();
 #endif
 
 	/* Release tty registration of line discipline */
