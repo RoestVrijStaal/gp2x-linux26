@@ -80,17 +80,13 @@ static void klsi_105_close	         (struct usb_serial_port *port,
 static int  klsi_105_write	         (struct usb_serial_port *port,
 					  const unsigned char *buf,
 					  int count);
-static void klsi_105_write_bulk_callback (struct urb *urb, struct pt_regs *regs);
+static void klsi_105_write_bulk_callback (struct urb *urb);
 static int  klsi_105_chars_in_buffer     (struct usb_serial_port *port);
 static int  klsi_105_write_room          (struct usb_serial_port *port);
 
-static void klsi_105_read_bulk_callback  (struct urb *urb, struct pt_regs *regs);
+static void klsi_105_read_bulk_callback  (struct urb *urb);
 static void klsi_105_set_termios         (struct usb_serial_port *port,
-					  struct termios * old);
-static int  klsi_105_ioctl	         (struct usb_serial_port *port,
-					  struct file * file,
-					  unsigned int cmd,
-					  unsigned long arg);
+					  struct ktermios *old);
 static void klsi_105_throttle		 (struct usb_serial_port *port);
 static void klsi_105_unthrottle		 (struct usb_serial_port *port);
 /*
@@ -128,6 +124,7 @@ static struct usb_serial_driver kl5kusb105d_device = {
 		.name =		"kl5kusb105d",
 	},
 	.description =	     "KL5KUSB105D / PalmConnect",
+	.usb_driver =	     &kl5kusb105d_driver,
 	.id_table =	     id_table,
 	.num_interrupt_in =  1,
 	.num_bulk_in =	     1,
@@ -140,7 +137,6 @@ static struct usb_serial_driver kl5kusb105d_device = {
 	.chars_in_buffer =   klsi_105_chars_in_buffer,
 	.write_room =        klsi_105_write_room,
 	.read_bulk_callback =klsi_105_read_bulk_callback,
-	.ioctl =	     klsi_105_ioctl,
 	.set_termios =	     klsi_105_set_termios,
 	/*.break_ctl =	     klsi_105_break_ctl,*/
 	.tiocmget =          klsi_105_tiocmget,
@@ -164,7 +160,7 @@ struct klsi_105_port_settings {
 #define URB_TRANSFER_BUFFER_SIZE	64
 struct klsi_105_private {
 	struct klsi_105_port_settings	cfg;
-	struct termios			termios;
+	struct ktermios			termios;
 	unsigned long			line_state; /* modem line settings */
 	/* write pool */
 	struct urb *			write_urb_pool[NUM_URBS];
@@ -242,7 +238,7 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,
 	if (rc < 0)
 		err("Reading line status failed (error = %d)", rc);
 	else {
-		status = status_buf[0] + (status_buf[1]<<8);
+		status = le16_to_cpu(*(u16 *)status_buf);
 
 		info("%s - read status %x %x", __FUNCTION__,
 		     status_buf[0], status_buf[1]);
@@ -261,7 +257,7 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,
 static int klsi_105_startup (struct usb_serial *serial)
 {
 	struct klsi_105_private *priv;
-	int i;
+	int i, j;
 
 	/* check if we support the product id (see keyspan.c)
 	 * FIXME
@@ -269,12 +265,12 @@ static int klsi_105_startup (struct usb_serial *serial)
 
 	/* allocate the private data structure */
 	for (i=0; i<serial->num_ports; i++) {
-		int j;
 		priv = kmalloc(sizeof(struct klsi_105_private),
 						   GFP_KERNEL);
 		if (!priv) {
 			dbg("%skmalloc for klsi_105_private failed.", __FUNCTION__);
-			return -ENOMEM;
+			i--;
+			goto err_cleanup;
 		}
 		/* set initial values for control structures */
 		priv->cfg.pktlen    = 5;
@@ -296,15 +292,14 @@ static int klsi_105_startup (struct usb_serial *serial)
 			priv->write_urb_pool[j] = urb;
 			if (urb == NULL) {
 				err("No more urbs???");
-				continue;
+				goto err_cleanup;
 			}
 
-			urb->transfer_buffer = NULL;
 			urb->transfer_buffer = kmalloc (URB_TRANSFER_BUFFER_SIZE,
 							GFP_KERNEL);
 			if (!urb->transfer_buffer) {
 				err("%s - out of memory for urb buffers.", __FUNCTION__);
-				continue;
+				goto err_cleanup;
 			}
 		}
 
@@ -312,7 +307,20 @@ static int klsi_105_startup (struct usb_serial *serial)
 		init_waitqueue_head(&serial->port[i]->write_wait);
 	}
 	
-	return (0);
+	return 0;
+
+err_cleanup:
+	for (; i >= 0; i--) {
+		priv = usb_get_serial_port_data(serial->port[i]);
+		for (j=0; j < NUM_URBS; j++) {
+			if (priv->write_urb_pool[j]) {
+				kfree(priv->write_urb_pool[j]->transfer_buffer);
+				usb_free_urb(priv->write_urb_pool[j]);
+			}
+		}
+		usb_set_serial_port_data(serial->port[i], NULL);
+	}
+	return -ENOMEM;
 } /* klsi_105_startup */
 
 
@@ -556,15 +564,16 @@ exit:
 	return bytes_sent;	/* that's how much we wrote */
 } /* klsi_105_write */
 
-static void klsi_105_write_bulk_callback ( struct urb *urb, struct pt_regs *regs)
+static void klsi_105_write_bulk_callback ( struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
-	if (urb->status) {
+
+	if (status) {
 		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__,
-		    urb->status);
+		    status);
 		return;
 	}
 
@@ -616,23 +625,24 @@ static int klsi_105_write_room (struct usb_serial_port *port)
 
 
 
-static void klsi_105_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void klsi_105_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct klsi_105_private *priv = usb_get_serial_port_data(port);
 	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	int rc;
+	int status = urb->status;
 
-        dbg("%s - port %d", __FUNCTION__, port->number);
+	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	/* The urb might have been killed. */
-        if (urb->status) {
-                dbg("%s - nonzero read bulk status received: %d", __FUNCTION__,
-		    urb->status);
-                return;
-        }
-	
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__,
+		    status);
+		return;
+	}
+
 	/* The data received is again preceded by a length double-byte in LSB-
 	 * first order (see klsi_105_write() )
 	 */
@@ -688,7 +698,7 @@ static void klsi_105_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
 
 
 static void klsi_105_set_termios (struct usb_serial_port *port,
-				  struct termios *old_termios)
+				  struct ktermios *old_termios)
 {
 	struct klsi_105_private *priv = usb_get_serial_port_data(port);
 	unsigned int iflag = port->tty->termios->c_iflag;
@@ -718,24 +728,32 @@ static void klsi_105_set_termios (struct usb_serial_port *port,
 #endif
 		}
 		
-		switch(cflag & CBAUD) {
-		case B0: /* handled below */
+		switch(tty_get_baud_rate(port->tty)) {
+		case 0: /* handled below */
 			break;
-		case B1200: priv->cfg.baudrate = kl5kusb105a_sio_b1200;
+		case 1200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b1200;
 			break;
-		case B2400: priv->cfg.baudrate = kl5kusb105a_sio_b2400;
+		case 2400:
+			priv->cfg.baudrate = kl5kusb105a_sio_b2400;
 			break;
-		case B4800: priv->cfg.baudrate = kl5kusb105a_sio_b4800;
+		case 4800:
+			priv->cfg.baudrate = kl5kusb105a_sio_b4800;
 			break;
-		case B9600: priv->cfg.baudrate = kl5kusb105a_sio_b9600;
+		case 9600:
+			priv->cfg.baudrate = kl5kusb105a_sio_b9600;
 			break;
-		case B19200: priv->cfg.baudrate = kl5kusb105a_sio_b19200;
+		case 19200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b19200;
 			break;
-		case B38400: priv->cfg.baudrate = kl5kusb105a_sio_b38400;
+		case 38400:
+			priv->cfg.baudrate = kl5kusb105a_sio_b38400;
 			break;
-		case B57600: priv->cfg.baudrate = kl5kusb105a_sio_b57600;
+		case 57600:
+			priv->cfg.baudrate = kl5kusb105a_sio_b57600;
 			break;
-		case B115200: priv->cfg.baudrate = kl5kusb105a_sio_b115200;
+		case 115200:
+			priv->cfg.baudrate = kl5kusb105a_sio_b115200;
 			break;
 		default:
 			err("KLSI USB->Serial converter:"
@@ -899,69 +917,6 @@ static int klsi_105_tiocmset (struct usb_serial_port *port, struct file *file,
 */
 	return retval;
 }
-					
-static int klsi_105_ioctl (struct usb_serial_port *port, struct file * file,
-			   unsigned int cmd, unsigned long arg)
-{
-	struct klsi_105_private *priv = usb_get_serial_port_data(port);
-	void __user *user_arg = (void __user *)arg;
-	
-	dbg("%scmd=0x%x", __FUNCTION__, cmd);
-
-	/* Based on code from acm.c and others */
-	switch (cmd) {
-	case TIOCMIWAIT:
-		/* wait for any of the 4 modem inputs (DCD,RI,DSR,CTS)*/
-		/* TODO */
-		dbg("%s - TIOCMIWAIT not handled", __FUNCTION__);
-		return -ENOIOCTLCMD;
-	case TIOCGICOUNT:
-		/* return count of modemline transitions */
-		/* TODO */
-		dbg("%s - TIOCGICOUNT not handled", __FUNCTION__);
-		return -ENOIOCTLCMD;
-	case TCGETS:
-		/* return current info to caller */
-		dbg("%s - TCGETS data faked/incomplete", __FUNCTION__);
-
-		if (!access_ok(VERIFY_WRITE, user_arg, sizeof(struct termios)))
-			return -EFAULT;
-
-		if (kernel_termios_to_user_termios((struct termios __user *)arg,
-						   &priv->termios))
-			return -EFAULT;
-		return 0;
-	case TCSETS:
-		/* set port termios to the one given by the user */
-		dbg("%s - TCSETS not handled", __FUNCTION__);
-
-		if (!access_ok(VERIFY_READ, user_arg, sizeof(struct termios)))
-			return -EFAULT;
-
-		if (user_termios_to_kernel_termios(&priv->termios,
-						   (struct termios __user *)arg))
-			return -EFAULT;
-		klsi_105_set_termios(port, &priv->termios);
-		return 0;
-	case TCSETSW: {
-		/* set port termios and try to wait for completion of last
-		 * write operation */
-		/* We guess here. If there are not too many write urbs
-		 * outstanding, we lie. */
-		/* what is the right way to wait here? schedule() ? */
-	        /*
-		while (klsi_105_chars_in_buffer(port) > (NUM_URBS / 4 ) * URB_TRANSFER_BUFFER_SIZE)
-			    schedule();
-		 */
-		return -ENOIOCTLCMD;
-		      }
-	default:
-		dbg("%s: arg not supported - 0x%04x", __FUNCTION__,cmd);
-		return(-ENOIOCTLCMD);
-		break;
-	}
-	return 0;
-} /* klsi_105_ioctl */
 
 static void klsi_105_throttle (struct usb_serial_port *port)
 {

@@ -63,9 +63,9 @@ static int  cyberjack_open (struct usb_serial_port *port, struct file *filp);
 static void cyberjack_close (struct usb_serial_port *port, struct file *filp);
 static int cyberjack_write (struct usb_serial_port *port, const unsigned char *buf, int count);
 static int cyberjack_write_room( struct usb_serial_port *port );
-static void cyberjack_read_int_callback (struct urb *urb, struct pt_regs *regs);
-static void cyberjack_read_bulk_callback (struct urb *urb, struct pt_regs *regs);
-static void cyberjack_write_bulk_callback (struct urb *urb, struct pt_regs *regs);
+static void cyberjack_read_int_callback (struct urb *urb);
+static void cyberjack_read_bulk_callback (struct urb *urb);
+static void cyberjack_write_bulk_callback (struct urb *urb);
 
 static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(CYBERJACK_VENDOR_ID, CYBERJACK_PRODUCT_ID) },
@@ -88,6 +88,7 @@ static struct usb_serial_driver cyberjack_device = {
 		.name =		"cyberjack",
 	},
 	.description =		"Reiner SCT Cyberjack USB card reader",
+	.usb_driver = 		&cyberjack_driver,
 	.id_table =		id_table,
 	.num_interrupt_in =	1,
 	.num_bulk_in =		1,
@@ -98,7 +99,7 @@ static struct usb_serial_driver cyberjack_device = {
 	.open =			cyberjack_open,
 	.close =		cyberjack_close,
 	.write =		cyberjack_write,
-	.write_room =	cyberjack_write_room,
+	.write_room =		cyberjack_write_room,
 	.read_int_callback =	cyberjack_read_int_callback,
 	.read_bulk_callback =	cyberjack_read_bulk_callback,
 	.write_bulk_callback =	cyberjack_write_bulk_callback,
@@ -214,14 +215,14 @@ static int cyberjack_write (struct usb_serial_port *port, const unsigned char *b
 		return (0);
 	}
 
-	spin_lock(&port->lock);
+	spin_lock_bh(&port->lock);
 	if (port->write_urb_busy) {
-		spin_unlock(&port->lock);
+		spin_unlock_bh(&port->lock);
 		dbg("%s - already writing", __FUNCTION__);
 		return 0;
 	}
 	port->write_urb_busy = 1;
-	spin_unlock(&port->lock);
+	spin_unlock_bh(&port->lock);
 
 	spin_lock_irqsave(&priv->lock, flags);
 
@@ -299,17 +300,18 @@ static int cyberjack_write_room( struct usb_serial_port *port )
 	return CYBERJACK_LOCAL_BUF_SIZE;
 }
 
-static void cyberjack_read_int_callback( struct urb *urb, struct pt_regs *regs )
+static void cyberjack_read_int_callback( struct urb *urb )
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct cyberjack_private *priv = usb_get_serial_port_data(port);
 	unsigned char *data = urb->transfer_buffer;
+	int status = urb->status;
 	int result;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	/* the urb might have been killed. */
-	if (urb->status)
+	if (status)
 		return;
 
 	usb_serial_debug_data(debug, &port->dev, __FUNCTION__, urb->actual_length, data);
@@ -356,7 +358,7 @@ resubmit:
 	dbg("%s - usb_submit_urb(int urb)", __FUNCTION__);
 }
 
-static void cyberjack_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void cyberjack_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct cyberjack_private *priv = usb_get_serial_port_data(port);
@@ -364,12 +366,14 @@ static void cyberjack_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
 	unsigned char *data = urb->transfer_buffer;
 	short todo;
 	int result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
-	
+
 	usb_serial_debug_data(debug, &port->dev, __FUNCTION__, urb->actual_length, data);
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -406,16 +410,18 @@ static void cyberjack_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
 	}
 }
 
-static void cyberjack_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void cyberjack_write_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct cyberjack_private *priv = usb_get_serial_port_data(port);
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
 	port->write_urb_busy = 0;
-	if (urb->status) {
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 

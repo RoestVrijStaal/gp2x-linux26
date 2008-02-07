@@ -74,13 +74,13 @@
 #include <linux/usb/serial.h>
 
 
-#ifndef CONFIG_USB_SAFE_PADDED
-#define CONFIG_USB_SAFE_PADDED 0
+#ifndef CONFIG_USB_SERIAL_SAFE_PADDED
+#define CONFIG_USB_SERIAL_SAFE_PADDED 0
 #endif
 
 static int debug;
 static int safe = 1;
-static int padded = CONFIG_USB_SAFE_PADDED;
+static int padded = CONFIG_USB_SERIAL_SAFE_PADDED;
 
 #define DRIVER_VERSION "v0.0b"
 #define DRIVER_AUTHOR "sl@lineo.com, tbr@lineo.com"
@@ -90,18 +90,12 @@ MODULE_AUTHOR (DRIVER_AUTHOR);
 MODULE_DESCRIPTION (DRIVER_DESC);
 MODULE_LICENSE("GPL");
 
-#if defined(CONFIG_USBD_SAFE_SERIAL_VENDOR) && !defined(CONFIG_USBD_SAFE_SERIAL_PRODUCT)
-#error "SAFE_SERIAL_VENDOR defined without SAFE_SERIAL_PRODUCT"
-#endif
-
-#if ! defined(CONFIG_USBD_SAFE_SERIAL_VENDOR)
 static __u16 vendor;		// no default
 static __u16 product;		// no default
 module_param(vendor, ushort, 0);
 MODULE_PARM_DESC(vendor, "User specified USB idVendor (required)");
 module_param(product, ushort, 0);
 MODULE_PARM_DESC(product, "User specified USB idProduct (required)");
-#endif
 
 module_param(debug, bool, S_IRUGO | S_IWUSR);
 MODULE_PARM_DESC(debug, "Debug enabled or not");
@@ -145,11 +139,6 @@ static struct usb_device_id id_table[] = {
 	{MY_USB_DEVICE (0x4dd, 0x8003, CDC_DEVICE_CLASS, LINEO_INTERFACE_CLASS, LINEO_INTERFACE_SUBCLASS_SAFESERIAL)},	// Collie 
 	{MY_USB_DEVICE (0x4dd, 0x8004, CDC_DEVICE_CLASS, LINEO_INTERFACE_CLASS, LINEO_INTERFACE_SUBCLASS_SAFESERIAL)},	// Collie 
 	{MY_USB_DEVICE (0x5f9, 0xffff, CDC_DEVICE_CLASS, LINEO_INTERFACE_CLASS, LINEO_INTERFACE_SUBCLASS_SAFESERIAL)},	// Sharp tmp
-#if defined(CONFIG_USB_SAFE_SERIAL_VENDOR)
-	{MY_USB_DEVICE
-	 (CONFIG_USB_SAFE_SERIAL_VENDOR, CONFIG_USB_SAFE_SERIAL_PRODUCT, CDC_DEVICE_CLASS,
-	  LINEO_INTERFACE_CLASS, LINEO_INTERFACE_SUBCLASS_SAFESERIAL)},
-#endif
 	// extra null entry for module 
 	// vendor/produc parameters
 	{MY_USB_DEVICE (0, 0, CDC_DEVICE_CLASS, LINEO_INTERFACE_CLASS, LINEO_INTERFACE_SUBCLASS_SAFESERIAL)},
@@ -204,18 +193,20 @@ static __u16 __inline__ fcs_compute10 (unsigned char *sp, int len, __u16 fcs)
 	return fcs;
 }
 
-static void safe_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void safe_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *) urb->context;
 	unsigned char *data = urb->transfer_buffer;
 	unsigned char length = urb->actual_length;
 	int i;
 	int result;
+	int status = urb->status;
 
 	dbg ("%s", __FUNCTION__);
 
-	if (urb->status) {
-		dbg ("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -298,14 +289,14 @@ static int safe_write (struct usb_serial_port *port, const unsigned char *buf, i
 		dbg ("%s - write request of 0 bytes", __FUNCTION__);
 		return (0);
 	}
-	spin_lock(&port->lock);
+	spin_lock_bh(&port->lock);
 	if (port->write_urb_busy) {
-		spin_unlock(&port->lock);
+		spin_unlock_bh(&port->lock);
 		dbg("%s - already writing", __FUNCTION__);
 		return 0;
 	}
 	port->write_urb_busy = 1;
-	spin_unlock(&port->lock);
+	spin_unlock_bh(&port->lock);
 
 	packet_length = port->bulk_out_size;	// get max packetsize
 
@@ -402,6 +393,7 @@ static struct usb_serial_driver safe_device = {
 		.name =		"safe_serial",
 	},
 	.id_table =		id_table,
+	.usb_driver =		&safe_driver,
 	.num_interrupt_in =	NUM_DONT_CARE,
 	.num_bulk_in =		NUM_DONT_CARE,
 	.num_bulk_out =		NUM_DONT_CARE,

@@ -53,6 +53,15 @@ config USB_SERIAL_GENERIC
 	  support" be compiled as a module for this driver to be used
 	  properly.
 
+config USB_SERIAL_AIRCABLE
+	tristate "USB AIRcable Bluetooth Dongle Driver (EXPERIMENTAL)"
+	depends on USB_SERIAL && EXPERIMENTAL
+	help
+	    Say Y here if you want to use USB AIRcable Bluetooth Dongle.
+
+	    To compile this driver as a module, choose M here: the module
+	    will be called aircable.
+
 config USB_SERIAL_AIRPRIME
 	tristate "USB AirPrime CDMA Wireless Driver"
 	depends on USB_SERIAL
@@ -82,6 +91,16 @@ config USB_SERIAL_BELKIN
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called belkin_sa.
+
+config USB_SERIAL_CH341
+	tristate "USB Winchiphead CH341 Single Port Serial Driver"
+	depends on USB_SERIAL
+	help
+	  Say Y here if you want to use a Winchiphead CH341 single port
+	  USB to serial adapter.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ch341.
 
 config USB_SERIAL_WHITEHEAT
 	tristate "USB ConnectTech WhiteHEAT Serial Driver"
@@ -413,6 +432,31 @@ config USB_SERIAL_MCT_U232
 	  To compile this driver as a module, choose M here: the
 	  module will be called mct_u232.
 
+config USB_SERIAL_MOS7720
+	tristate "USB Moschip 7720 Serial Driver"
+	depends on USB_SERIAL
+	---help---
+	  Say Y here if you want to use USB Serial single and double
+	  port adapters from Moschip Semiconductor Tech.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mos7720.
+
+config USB_SERIAL_MOS7840
+	tristate "USB Moschip 7840/7820 USB Serial Driver"
+	depends on USB_SERIAL
+	---help---
+	  Say Y here if you want to use a MCS7840 Quad-Serial or MCS7820
+	  Dual-Serial port device from MosChip Semiconductor.
+
+	  The MCS7840 and MCS7820 have been developed to connect a wide range
+	  of standard serial devices to a USB host.  The MCS7840 has a USB
+	  device controller connected to four (4) individual UARTs while the
+	  MCS7820 controller connects to two (2) individual UARTs.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mos7840.  If unsure, choose N.
+
 config USB_SERIAL_NAVMAN
 	tristate "USB Navman GPS device"
 	depends on USB_SERIAL
@@ -429,6 +473,16 @@ config USB_SERIAL_PL2303
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called pl2303.
+
+config USB_SERIAL_OTI6858
+	tristate "USB Ours Technology Inc. OTi-6858 USB To RS232 Bridge Controller (EXPERIMENTAL)"
+	depends on USB_SERIAL
+	help
+	  Say Y here if you want to use the OTi-6858 single port USB to serial
+          converter device.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called oti6858.
 
 config USB_SERIAL_HP4X
         tristate "USB HP4x Calculators support"
@@ -473,7 +527,7 @@ config USB_SERIAL_CYBERJACK
 	depends on USB_SERIAL && EXPERIMENTAL
 	---help---
 	  Say Y here if you want to use a cyberJack pinpad/e-com USB chipcard
-	  reader. This is an interface to ISO 7816 compatible contactbased
+	  reader. This is an interface to ISO 7816 compatible contact-based
 	  chipcards, e.g. GSM SIMs.
 
 	  To compile this driver as a module, choose M here: the
@@ -503,8 +557,7 @@ config USB_SERIAL_OPTION
 	  The USB bus on these cards is not accessible externally.
 
 	  Supported devices include (some of?) those made by:
-	  Option, Huawei, Audiovox, Sierra Wireless, Novatel Wireless, or
-	  Anydata.
+	  Option, Huawei, Audiovox, Novatel Wireless, or Anydata.
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called option.
@@ -521,10 +574,22 @@ config USB_SERIAL_OMNINET
 	  To compile this driver as a module, choose M here: the
 	  module will be called omninet.
 
+config USB_SERIAL_DEBUG
+	tristate "USB Debugging Device"
+	depends on USB_SERIAL
+	help
+	  Say Y here if you have a USB debugging device used to receive
+	  debugging data from another machine.  The most common of these
+	  devices is the NetChip TurboCONNECT device.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called usb-debug.
+
 config USB_EZUSB
 	bool
 	depends on USB_SERIAL_KEYSPAN_PDA || USB_SERIAL_XIRCOM || USB_SERIAL_KEYSPAN || USB_SERIAL_WHITEHEAT
 	default y
+
 
 endmenu
 

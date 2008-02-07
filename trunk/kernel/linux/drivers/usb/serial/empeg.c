@@ -92,9 +92,9 @@ static int  empeg_ioctl			(struct usb_serial_port *port,
 					struct file * file,
 					unsigned int cmd,
 					unsigned long arg);
-static void empeg_set_termios		(struct usb_serial_port *port, struct termios *old_termios);
-static void empeg_write_bulk_callback	(struct urb *urb, struct pt_regs *regs);
-static void empeg_read_bulk_callback	(struct urb *urb, struct pt_regs *regs);
+static void empeg_set_termios		(struct usb_serial_port *port, struct ktermios *old_termios);
+static void empeg_write_bulk_callback	(struct urb *urb);
+static void empeg_read_bulk_callback	(struct urb *urb);
 
 static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(EMPEG_VENDOR_ID, EMPEG_PRODUCT_ID) },
@@ -117,6 +117,7 @@ static struct usb_serial_driver empeg_device = {
 		.name =		"empeg",
 	},
 	.id_table =		id_table,
+	.usb_driver = 		&empeg_driver,
 	.num_interrupt_in =	0,
 	.num_bulk_in =		1,
 	.num_bulk_out =		1,
@@ -323,14 +324,16 @@ static int empeg_chars_in_buffer (struct usb_serial_port *port)
 }
 
 
-static void empeg_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void empeg_write_bulk_callback (struct urb *urb)
 {
-	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
+	struct usb_serial_port *port = urb->context;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero write bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero write bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -338,17 +341,19 @@ static void empeg_write_bulk_callback (struct urb *urb, struct pt_regs *regs)
 }
 
 
-static void empeg_read_bulk_callback (struct urb *urb, struct pt_regs *regs)
+static void empeg_read_bulk_callback (struct urb *urb)
 {
 	struct usb_serial_port *port = (struct usb_serial_port *)urb->context;
 	struct tty_struct *tty;
 	unsigned char *data = urb->transfer_buffer;
 	int result;
+	int status = urb->status;
 
 	dbg("%s - port %d", __FUNCTION__, port->number);
 
-	if (urb->status) {
-		dbg("%s - nonzero read bulk status received: %d", __FUNCTION__, urb->status);
+	if (status) {
+		dbg("%s - nonzero read bulk status received: %d",
+		    __FUNCTION__, status);
 		return;
 	}
 
@@ -442,15 +447,10 @@ static int empeg_ioctl (struct usb_serial_port *port, struct file * file, unsign
 }
 
 
-static void empeg_set_termios (struct usb_serial_port *port, struct termios *old_termios)
+static void empeg_set_termios (struct usb_serial_port *port, struct ktermios *old_termios)
 {
-
+	struct ktermios *termios = port->tty->termios;
 	dbg("%s - port %d", __FUNCTION__, port->number);
-
-	if ((!port->tty) || (!port->tty->termios)) {
-		dbg("%s - no tty structures", __FUNCTION__);
-		return;
-	}
 
 	/*
          * The empeg-car player wants these particular tty settings.
@@ -461,7 +461,7 @@ static void empeg_set_termios (struct usb_serial_port *port, struct termios *old
          *
          * The default requirements for this device are:
          */
-	port->tty->termios->c_iflag
+	termios->c_iflag
 		&= ~(IGNBRK	/* disable ignore break */
 		| BRKINT	/* disable break causes interrupt */
 		| PARMRK	/* disable mark parity errors */
@@ -471,24 +471,23 @@ static void empeg_set_termios (struct usb_serial_port *port, struct termios *old
 		| ICRNL		/* disable translate CR to NL */
 		| IXON);	/* disable enable XON/XOFF flow control */
 
-	port->tty->termios->c_oflag
+	termios->c_oflag
 		&= ~OPOST;	/* disable postprocess output characters */
 
-	port->tty->termios->c_lflag
+	termios->c_lflag
 		&= ~(ECHO	/* disable echo input characters */
 		| ECHONL	/* disable echo new line */
 		| ICANON	/* disable erase, kill, werase, and rprnt special characters */
 		| ISIG		/* disable interrupt, quit, and suspend special characters */
 		| IEXTEN);	/* disable non-POSIX special characters */
 
-	port->tty->termios->c_cflag
+	termios->c_cflag
 		&= ~(CSIZE	/* no size */
 		| PARENB	/* disable parity bit */
 		| CBAUD);	/* clear current baud rate */
 
-	port->tty->termios->c_cflag
-		|= (CS8		/* character size 8 bits */
-		| B115200);	/* baud rate 115200 */
+	termios->c_cflag
+		|= CS8;		/* character size 8 bits */
 
 	/*
 	 * Force low_latency on; otherwise the pushes are scheduled;
@@ -496,8 +495,7 @@ static void empeg_set_termios (struct usb_serial_port *port, struct termios *old
 	 * on the floor.  We don't want to drop bytes on the floor. :)
 	 */
 	port->tty->low_latency = 1;
-
-	return;
+	tty_encode_baud_rate(port->tty, 115200, 115200);
 }
 
 
