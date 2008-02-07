@@ -5,7 +5,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/sched.h>
 #include <linux/errno.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -217,14 +216,14 @@ uctrl_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static irqreturn_t uctrl_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t uctrl_interrupt(int irq, void *dev_id)
 {
 	struct uctrl_driver *driver = (struct uctrl_driver *)dev_id;
 	printk("in uctrl_interrupt\n");
 	return IRQ_HANDLED;
 }
 
-static struct file_operations uctrl_fops = {
+static const struct file_operations uctrl_fops = {
 	.owner =	THIS_MODULE,
 	.llseek =	no_llseek,
 	.ioctl =	uctrl_ioctl,
@@ -365,6 +364,7 @@ static int __init ts102_uctrl_init(void)
 	struct linux_prom_irqs tmp_irq[2];
         unsigned int vaddr[2] = { 0, 0 };
 	int tmpnode, uctrlnode = prom_getchild(prom_root_node);
+	int err;
 
 	tmpnode = prom_searchsiblings(uctrlnode, "obio");
 
@@ -390,7 +390,12 @@ static int __init ts102_uctrl_init(void)
 	if(!driver->irq) 
 		driver->irq = tmp_irq[0].pri;
 
-	request_irq(driver->irq, uctrl_interrupt, 0, "uctrl", driver);
+	err = request_irq(driver->irq, uctrl_interrupt, 0, "uctrl", driver);
+	if (err) {
+		printk("%s: unable to register irq %d\n",
+		       __FUNCTION__, driver->irq);
+		return err;
+	}
 
 	if (misc_register(&uctrl_dev)) {
 		printk("%s: unable to get misc minor %d\n",
@@ -400,7 +405,7 @@ static int __init ts102_uctrl_init(void)
 	}
 
 	driver->regs->uctrl_intr = UCTRL_INTR_RXNE_REQ|UCTRL_INTR_RXNE_MSK;
-	printk("uctrl: 0x%x (irq %d)\n", driver->regs, driver->irq);
+	printk("uctrl: 0x%p (irq %d)\n", driver->regs, driver->irq);
 	uctrl_get_event_status();
 	uctrl_get_external_status();
         return 0;
