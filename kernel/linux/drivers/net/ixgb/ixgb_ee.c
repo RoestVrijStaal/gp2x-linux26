@@ -1,27 +1,27 @@
 /*******************************************************************************
 
-  
-  Copyright(c) 1999 - 2006 Intel Corporation. All rights reserved.
-  
-  This program is free software; you can redistribute it and/or modify it 
-  under the terms of the GNU General Public License as published by the Free 
-  Software Foundation; either version 2 of the License, or (at your option) 
-  any later version.
-  
-  This program is distributed in the hope that it will be useful, but WITHOUT 
-  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or 
-  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for 
+  Intel PRO/10GbE Linux driver
+  Copyright(c) 1999 - 2006 Intel Corporation.
+
+  This program is free software; you can redistribute it and/or modify it
+  under the terms and conditions of the GNU General Public License,
+  version 2, as published by the Free Software Foundation.
+
+  This program is distributed in the hope it will be useful, but WITHOUT
+  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+  FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
   more details.
-  
+
   You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc., 59 
-  Temple Place - Suite 330, Boston, MA  02111-1307, USA.
-  
-  The full GNU General Public License is included in this distribution in the
-  file called LICENSE.
-  
+  this program; if not, write to the Free Software Foundation, Inc.,
+  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
+
+  The full GNU General Public License is included in this distribution in
+  the file called "COPYING".
+
   Contact Information:
   Linux NICS <linux.nics@intel.com>
+  e1000-devel Mailing List <e1000-devel@lists.sourceforge.net>
   Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
 
 *******************************************************************************/
@@ -315,7 +315,7 @@ ixgb_wait_eeprom_command(struct ixgb_hw *hw)
  * hw - Struct containing variables accessed by shared code
  *
  * Reads the first 64 16 bit words of the EEPROM and sums the values read.
- * If the the sum of the 64 16 bit words is 0xBABA, the EEPROM's checksum is
+ * If the sum of the 64 16 bit words is 0xBABA, the EEPROM's checksum is
  * valid.
  *
  * Returns:
@@ -411,7 +411,7 @@ ixgb_write_eeprom(struct ixgb_hw *hw, uint16_t offset, uint16_t data)
 	ixgb_cleanup_eeprom(hw);
 
 	/* clear the init_ctrl_reg_1 to signify that the cache is invalidated */
-	ee_map->init_ctrl_reg_1 = le16_to_cpu(EEPROM_ICW1_SIGNATURE_CLEAR);
+	ee_map->init_ctrl_reg_1 = cpu_to_le16(EEPROM_ICW1_SIGNATURE_CLEAR);
 
 	return;
 }
@@ -476,19 +476,19 @@ ixgb_get_eeprom_data(struct ixgb_hw *hw)
 		uint16_t ee_data;
 		ee_data = ixgb_read_eeprom(hw, i);
 		checksum += ee_data;
-		hw->eeprom[i] = le16_to_cpu(ee_data);
+		hw->eeprom[i] = cpu_to_le16(ee_data);
 	}
 
 	if (checksum != (uint16_t) EEPROM_SUM) {
 		DEBUGOUT("ixgb_ee: Checksum invalid.\n");
 		/* clear the init_ctrl_reg_1 to signify that the cache is
 		 * invalidated */
-		ee_map->init_ctrl_reg_1 = le16_to_cpu(EEPROM_ICW1_SIGNATURE_CLEAR);
+		ee_map->init_ctrl_reg_1 = cpu_to_le16(EEPROM_ICW1_SIGNATURE_CLEAR);
 		return (FALSE);
 	}
 
-	if ((ee_map->init_ctrl_reg_1 & le16_to_cpu(EEPROM_ICW1_SIGNATURE_MASK))
-		 != le16_to_cpu(EEPROM_ICW1_SIGNATURE_VALID)) {
+	if ((ee_map->init_ctrl_reg_1 & cpu_to_le16(EEPROM_ICW1_SIGNATURE_MASK))
+		 != cpu_to_le16(EEPROM_ICW1_SIGNATURE_VALID)) {
 		DEBUGOUT("ixgb_ee: Signature invalid.\n");
 		return(FALSE);
 	}
@@ -511,8 +511,8 @@ ixgb_check_and_get_eeprom_data (struct ixgb_hw* hw)
 {
 	struct ixgb_ee_map_type *ee_map = (struct ixgb_ee_map_type *)hw->eeprom;
 
-	if ((ee_map->init_ctrl_reg_1 & le16_to_cpu(EEPROM_ICW1_SIGNATURE_MASK))
-	    == le16_to_cpu(EEPROM_ICW1_SIGNATURE_VALID)) {
+	if ((ee_map->init_ctrl_reg_1 & cpu_to_le16(EEPROM_ICW1_SIGNATURE_MASK))
+	    == cpu_to_le16(EEPROM_ICW1_SIGNATURE_VALID)) {
 		return (TRUE);
 	} else {
 		return ixgb_get_eeprom_data(hw);
@@ -528,7 +528,7 @@ ixgb_check_and_get_eeprom_data (struct ixgb_hw* hw)
  * Returns:
  *          Word at indexed offset in eeprom, if valid, 0 otherwise.
  ******************************************************************************/
-uint16_t
+__le16
 ixgb_get_eeprom_word(struct ixgb_hw *hw, uint16_t index)
 {
 
