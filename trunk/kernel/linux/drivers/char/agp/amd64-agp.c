@@ -14,6 +14,7 @@
 #include <linux/agp_backend.h>
 #include <linux/mmzone.h>
 #include <asm/page.h>		/* PAGE_SIZE */
+#include <asm/e820.h>
 #include <asm/k8.h>
 #include "agp.h"
 
@@ -62,12 +63,18 @@ static int amd64_insert_memory(struct agp_memory *mem, off_t pg_start, int type)
 {
 	int i, j, num_entries;
 	long long tmp;
+	int mask_type;
+	struct agp_bridge_data *bridge = mem->bridge;
 	u32 pte;
 
 	num_entries = agp_num_entries();
 
-	if (type != 0 || mem->type != 0)
+	if (type != mem->type)
 		return -EINVAL;
+	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);
+	if (mask_type != 0)
+		return -EINVAL;
+
 
 	/* Make sure we can fit the range in the gatt table. */
 	/* FIXME: could wrap */
@@ -90,7 +97,7 @@ static int amd64_insert_memory(struct agp_memory *mem, off_t pg_start, int type)
 
 	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
 		tmp = agp_bridge->driver->mask_memory(agp_bridge,
-			mem->memory[i], mem->type);
+			mem->memory[i], mask_type);
 
 		BUG_ON(tmp & 0xffffff0000000ffcULL);
 		pte = (tmp & 0x000000ff00000000ULL) >> 28;
@@ -186,7 +193,7 @@ static u64 amd64_configure (struct pci_dev *hammer, u64 gatt_table)
 }
 
 
-static struct aper_size_info_32 amd_8151_sizes[7] =
+static const struct aper_size_info_32 amd_8151_sizes[7] =
 {
 	{2048, 524288, 9, 0x00000000 },	/* 0 0 0 0 0 0 */
 	{1024, 262144, 8, 0x00000400 },	/* 1 0 0 0 0 0 */
@@ -226,7 +233,7 @@ static void amd64_cleanup(void)
 }
 
 
-static struct agp_bridge_driver amd_8151_driver = {
+static const struct agp_bridge_driver amd_8151_driver = {
 	.owner			= THIS_MODULE,
 	.aperture_sizes		= amd_8151_sizes,
 	.size_type		= U32_APER_SIZE,
@@ -247,12 +254,12 @@ static struct agp_bridge_driver amd_8151_driver = {
 	.free_by_type		= agp_generic_free_by_type,
 	.agp_alloc_page		= agp_generic_alloc_page,
 	.agp_destroy_page	= agp_generic_destroy_page,
+	.agp_type_to_mask_type  = agp_generic_type_to_mask_type,
 };
 
 /* Some basic sanity checks for the aperture. */
 static int __devinit aperture_valid(u64 aper, u32 size)
 {
-	u32 pfn, c;
 	if (aper == 0) {
 		printk(KERN_ERR PFX "No aperture\n");
 		return 0;
@@ -261,18 +268,13 @@ static int __devinit aperture_valid(u64 aper, u32 size)
 		printk(KERN_ERR PFX "Aperture too small (%d MB)\n", size>>20);
 		return 0;
 	}
-	if (aper + size > 0xffffffff) {
+       if ((u64)aper + size > 0x100000000ULL) {
 		printk(KERN_ERR PFX "Aperture out of bounds\n");
 		return 0;
 	}
-	pfn = aper >> PAGE_SHIFT;
-	for (c = 0; c < size/PAGE_SIZE; c++) {
-		if (!pfn_valid(pfn + c))
-			break;
-		if (!PageReserved(pfn_to_page(pfn + c))) {
-			printk(KERN_ERR PFX "Aperture pointing to RAM\n");
-			return 0;
-		}
+	if (e820_any_mapped(aper, aper + size, E820_RAM)) {
+		printk(KERN_ERR PFX "Aperture pointing to RAM\n");
+		return 0;
 	}
 
 	/* Request the Aperture. This catches cases when someone else
@@ -365,10 +367,8 @@ static __devinit int cache_nbs (struct pci_dev *pdev, u32 cap_ptr)
 static void __devinit amd8151_init(struct pci_dev *pdev, struct agp_bridge_data *bridge)
 {
 	char *revstring;
-	u8 rev_id;
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &rev_id);
-	switch (rev_id) {
+	switch (pdev->revision) {
 	case 0x01: revstring="A0"; break;
 	case 0x02: revstring="A1"; break;
 	case 0x11: revstring="B0"; break;
@@ -384,7 +384,7 @@ static void __devinit amd8151_init(struct pci_dev *pdev, struct agp_bridge_data 
 	 * Work around errata.
 	 * Chips before B2 stepping incorrectly reporting v3.5
 	 */
-	if (rev_id < 0x13) {
+	if (pdev->revision < 0x13) {
 		printk (KERN_INFO PFX "Correcting AGP revision (reports 3.5, is really 3.0)\n");
 		bridge->major_version = 3;
 		bridge->minor_version = 0;
@@ -409,7 +409,7 @@ static int __devinit uli_agp_init(struct pci_dev *pdev)
 	int i;
 	unsigned size = amd64_fetch_size();
 	printk(KERN_INFO "Setting up ULi AGP.\n");
-	dev1 = pci_find_slot ((unsigned int)pdev->bus->number,PCI_DEVFN(0,0));
+	dev1 = pci_get_slot (pdev->bus,PCI_DEVFN(0,0));
 	if (dev1 == NULL) {
 		printk(KERN_INFO PFX "Detected a ULi chipset, "
 			"but could not fine the secondary device.\n");
@@ -442,6 +442,8 @@ static int __devinit uli_agp_init(struct pci_dev *pdev)
 	enuscr= httfea+ (size * 1024 * 1024) - 1;
 	pci_write_config_dword(dev1, ULI_X86_64_HTT_FEA_REG, httfea);
 	pci_write_config_dword(dev1, ULI_X86_64_ENU_SCR_REG, enuscr);
+
+	pci_dev_put(dev1);
 	return 0;
 }
 
@@ -457,7 +459,7 @@ static const struct aper_size_info_32 nforce3_sizes[5] =
 
 /* Handle shadow device of the Nvidia NForce3 */
 /* CHECK-ME original 2.4 version set up some IORRs. Check if that is needed. */
-static int __devinit nforce3_agp_init(struct pci_dev *pdev)
+static int nforce3_agp_init(struct pci_dev *pdev)
 {
 	u32 tmp, apbase, apbar, aplimit;
 	struct pci_dev *dev1;
@@ -466,7 +468,7 @@ static int __devinit nforce3_agp_init(struct pci_dev *pdev)
 
 	printk(KERN_INFO PFX "Setting up Nforce3 AGP.\n");
 
-	dev1 = pci_find_slot((unsigned int)pdev->bus->number, PCI_DEVFN(11, 0));
+	dev1 = pci_get_slot(pdev->bus, PCI_DEVFN(11, 0));
 	if (dev1 == NULL) {
 		printk(KERN_INFO PFX "agpgart: Detected an NVIDIA "
 			"nForce3 chipset, but could not find "
@@ -509,6 +511,8 @@ static int __devinit nforce3_agp_init(struct pci_dev *pdev)
 	pci_write_config_dword(dev1, NVIDIA_X86_64_1_APLIMIT1, aplimit);
 	pci_write_config_dword(dev1, NVIDIA_X86_64_1_APBASE2, apbase);
 	pci_write_config_dword(dev1, NVIDIA_X86_64_1_APLIMIT2, aplimit);
+
+	pci_dev_put(dev1);
 
 	return 0;
 }
@@ -646,6 +650,15 @@ static struct pci_device_id agp_amd64_pci_table[] = {
 	.subvendor	= PCI_ANY_ID,
 	.subdevice	= PCI_ANY_ID,
 	},
+	/* VIA K8M890 / K8N890 */
+	{
+	.class          = (PCI_CLASS_BRIDGE_HOST << 8),
+	.class_mask     = ~0,
+	.vendor         = PCI_VENDOR_ID_VIA,
+	.device         = PCI_DEVICE_ID_VIA_VT3336,
+	.subvendor      = PCI_ANY_ID,
+	.subdevice      = PCI_ANY_ID,
+	},
 	/* VIA K8T890 */
 	{
 	.class		= (PCI_CLASS_BRIDGE_HOST << 8),
@@ -774,7 +787,7 @@ static void __exit agp_amd64_cleanup(void)
 
 /* On AMD64 the PCI driver needs to initialize this driver early
    for the IOMMU, so it has to be called via a backdoor. */
-#ifndef CONFIG_IOMMU
+#ifndef CONFIG_GART_IOMMU
 module_init(agp_amd64_init);
 module_exit(agp_amd64_cleanup);
 #endif

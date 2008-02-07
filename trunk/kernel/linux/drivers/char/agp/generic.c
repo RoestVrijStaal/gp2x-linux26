@@ -37,6 +37,7 @@
 #include <linux/vmalloc.h>
 #include <linux/dma-mapping.h>
 #include <linux/mm.h>
+#include <linux/sched.h>
 #include <asm/io.h>
 #include <asm/cacheflush.h>
 #include <asm/pgtable.h>
@@ -50,28 +51,6 @@ int agp_memory_reserved;
  * nice to do this some other way instead of needing this export.
  */
 EXPORT_SYMBOL_GPL(agp_memory_reserved);
-
-#if defined(CONFIG_X86)
-int map_page_into_agp(struct page *page)
-{
-	int i;
-	i = change_page_attr(page, 1, PAGE_KERNEL_NOCACHE);
-	/* Caller's responsibility to call global_flush_tlb() for
-	 * performance reasons */
-	return i;
-}
-EXPORT_SYMBOL_GPL(map_page_into_agp);
-
-int unmap_page_from_agp(struct page *page)
-{
-	int i;
-	i = change_page_attr(page, 1, PAGE_KERNEL);
-	/* Caller's responsibility to call global_flush_tlb() for
-	 * performance reasons */
-	return i;
-}
-EXPORT_SYMBOL_GPL(unmap_page_from_agp);
-#endif
 
 /*
  * Generic routines for handling agp_memory structures -
@@ -101,6 +80,63 @@ static int agp_get_key(void)
 	return -1;
 }
 
+/*
+ * Use kmalloc if possible for the page list. Otherwise fall back to
+ * vmalloc. This speeds things up and also saves memory for small AGP
+ * regions.
+ */
+
+void agp_alloc_page_array(size_t size, struct agp_memory *mem)
+{
+	mem->memory = NULL;
+	mem->vmalloc_flag = 0;
+
+	if (size <= 2*PAGE_SIZE)
+		mem->memory = kmalloc(size, GFP_KERNEL | __GFP_NORETRY);
+	if (mem->memory == NULL) {
+		mem->memory = vmalloc(size);
+		mem->vmalloc_flag = 1;
+	}
+}
+EXPORT_SYMBOL(agp_alloc_page_array);
+
+void agp_free_page_array(struct agp_memory *mem)
+{
+	if (mem->vmalloc_flag) {
+		vfree(mem->memory);
+	} else {
+		kfree(mem->memory);
+	}
+}
+EXPORT_SYMBOL(agp_free_page_array);
+
+
+static struct agp_memory *agp_create_user_memory(unsigned long num_agp_pages)
+{
+	struct agp_memory *new;
+	unsigned long alloc_size = num_agp_pages*sizeof(struct page *);
+
+	new = kzalloc(sizeof(struct agp_memory), GFP_KERNEL);
+	if (new == NULL)
+		return NULL;
+
+	new->key = agp_get_key();
+
+	if (new->key < 0) {
+		kfree(new);
+		return NULL;
+	}
+
+	agp_alloc_page_array(alloc_size, new);
+
+	if (new->memory == NULL) {
+		agp_free_key(new->key);
+		kfree(new);
+		return NULL;
+	}
+	new->num_scratch_pages = 0;
+	return new;
+}
 
 struct agp_memory *agp_create_memory(int scratch_pages)
 {
@@ -116,7 +152,8 @@ struct agp_memory *agp_create_memory(int scratch_pages)
 		kfree(new);
 		return NULL;
 	}
-	new->memory = vmalloc(PAGE_SIZE * scratch_pages);
+
+	agp_alloc_page_array(PAGE_SIZE * scratch_pages, new);
 
 	if (new->memory == NULL) {
 		agp_free_key(new->key);
@@ -124,6 +161,7 @@ struct agp_memory *agp_create_memory(int scratch_pages)
 		return NULL;
 	}
 	new->num_scratch_pages = scratch_pages;
+	new->type = AGP_NORMAL_MEMORY;
 	return new;
 }
 EXPORT_SYMBOL(agp_create_memory);
@@ -146,18 +184,26 @@ void agp_free_memory(struct agp_memory *curr)
 	if (curr->is_bound == TRUE)
 		agp_unbind_memory(curr);
 
+	if (curr->type >= AGP_USER_TYPES) {
+		agp_generic_free_by_type(curr);
+		return;
+	}
+
 	if (curr->type != 0) {
 		curr->bridge->driver->free_by_type(curr);
 		return;
 	}
 	if (curr->page_count != 0) {
 		for (i = 0; i < curr->page_count; i++) {
-			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]));
+			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]), AGP_PAGE_DESTROY_UNMAP);
 		}
 		flush_agp_mappings();
+		for (i = 0; i < curr->page_count; i++) {
+			curr->bridge->driver->agp_destroy_page(gart_to_virt(curr->memory[i]), AGP_PAGE_DESTROY_FREE);
+		}
 	}
 	agp_free_key(curr->key);
-	vfree(curr->memory);
+	agp_free_page_array(curr);
 	kfree(curr);
 }
 EXPORT_SYMBOL(agp_free_memory);
@@ -187,6 +233,13 @@ struct agp_memory *agp_allocate_memory(struct agp_bridge_data *bridge,
 
 	if ((atomic_read(&bridge->current_memory_agp) + page_count) > bridge->max_memory_agp)
 		return NULL;
+
+	if (type >= AGP_USER_TYPES) {
+		new = agp_generic_alloc_user(page_count, type);
+		if (new)
+			new->bridge = bridge;
+		return new;
+	}
 
 	if (type != 0) {
 		new = bridge->driver->alloc_by_type(page_count, type);
@@ -419,6 +472,31 @@ static void agp_v2_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 		*requested_mode &= ~AGP2_RESERVED_MASK;
 	}
 
+	/*
+	 * Some dumb bridges are programmed to disobey the AGP2 spec.
+	 * This is likely a BIOS misprogramming rather than poweron default, or
+	 * it would be a lot more common.
+	 * https://bugs.freedesktop.org/show_bug.cgi?id=8816
+	 * AGPv2 spec 6.1.9 states:
+	 *   The RATE field indicates the data transfer rates supported by this
+	 *   device. A.G.P. devices must report all that apply.
+	 * Fix them up as best we can.
+	 */
+	switch (*bridge_agpstat & 7) {
+	case 4:
+		*bridge_agpstat |= (AGPSTAT2_2X | AGPSTAT2_1X);
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x4 rate"
+			"Fixing up support for x2 & x1\n");
+		break;
+	case 2:
+		*bridge_agpstat |= AGPSTAT2_1X;
+		printk(KERN_INFO PFX "BIOS bug. AGP bridge claims to only support x2 rate"
+			"Fixing up support for x1\n");
+		break;
+	default:
+		break;
+	}
+
 	/* Check the speed bits make sense. Only one should be set. */
 	tmp = *requested_mode & 7;
 	switch (tmp) {
@@ -568,25 +646,37 @@ static void agp_v3_parse_one(u32 *requested_mode, u32 *bridge_agpstat, u32 *vga_
 		*bridge_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
 		goto done;
 
+	} else if (*requested_mode & AGPSTAT3_4X) {
+		*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+		*bridge_agpstat |= AGPSTAT3_4X;
+		goto done;
+
 	} else {
 
 		/*
-		 * If we didn't specify AGPx8, we can only do x4.
-		 * If the hardware can't do x4, we're up shit creek, and never
-		 *  should have got this far.
+		 * If we didn't specify an AGP mode, we see if both
+		 * the graphics card, and the bridge can do x8, and use if so.
+		 * If not, we fall back to x4 mode.
 		 */
-		*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
-		if ((*bridge_agpstat & AGPSTAT3_4X) && (*vga_agpstat & AGPSTAT3_4X))
-			*bridge_agpstat |= AGPSTAT3_4X;
-		else {
-			printk(KERN_INFO PFX "Badness. Don't know which AGP mode to set. "
-							"[bridge_agpstat:%x vga_agpstat:%x fell back to:- bridge_agpstat:%x vga_agpstat:%x]\n",
-							origbridge, origvga, *bridge_agpstat, *vga_agpstat);
-			if (!(*bridge_agpstat & AGPSTAT3_4X))
-				printk(KERN_INFO PFX "Bridge couldn't do AGP x4.\n");
-			if (!(*vga_agpstat & AGPSTAT3_4X))
-				printk(KERN_INFO PFX "Graphic card couldn't do AGP x4.\n");
-			return;
+		if ((*bridge_agpstat & AGPSTAT3_8X) && (*vga_agpstat & AGPSTAT3_8X)) {
+			printk(KERN_INFO PFX "No AGP mode specified. Setting to highest mode "
+				"supported by bridge & card (x8).\n");
+			*bridge_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
+			*vga_agpstat &= ~(AGPSTAT3_4X | AGPSTAT3_RSVD);
+		} else {
+			printk(KERN_INFO PFX "Fell back to AGPx4 mode because");
+			if (!(*bridge_agpstat & AGPSTAT3_8X)) {
+				printk(KERN_INFO PFX "bridge couldn't do x8. bridge_agpstat:%x (orig=%x)\n",
+					*bridge_agpstat, origbridge);
+				*bridge_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+				*bridge_agpstat |= AGPSTAT3_4X;
+			}
+			if (!(*vga_agpstat & AGPSTAT3_8X)) {
+				printk(KERN_INFO PFX "graphics card couldn't do x8. vga_agpstat:%x (orig=%x)\n",
+					*vga_agpstat, origvga);
+				*vga_agpstat &= ~(AGPSTAT3_8X | AGPSTAT3_RSVD);
+				*vga_agpstat |= AGPSTAT3_4X;
+			}
 		}
 	}
 
@@ -923,10 +1013,14 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 	off_t j;
 	void *temp;
 	struct agp_bridge_data *bridge;
+	int mask_type;
 
 	bridge = mem->bridge;
 	if (!bridge)
 		return -EINVAL;
+
+	if (mem->page_count == 0)
+		return 0;
 
 	temp = bridge->current_size;
 
@@ -955,7 +1049,11 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 	num_entries -= agp_memory_reserved/PAGE_SIZE;
 	if (num_entries < 0) num_entries = 0;
 
-	if (type != 0 || mem->type != 0) {
+	if (type != mem->type)
+		return -EINVAL;
+
+	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);
+	if (mask_type != 0) {
 		/* The generic routines know nothing of memory types */
 		return -EINVAL;
 	}
@@ -978,9 +1076,10 @@ int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
 	}
 
 	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
-		writel(bridge->driver->mask_memory(bridge, mem->memory[i], mem->type), bridge->gatt_table+j);
-		readl(bridge->gatt_table+j);	/* PCI Posting. */
+		writel(bridge->driver->mask_memory(bridge, mem->memory[i], mask_type),
+		       bridge->gatt_table+j);
 	}
+	readl(bridge->gatt_table+j-1);	/* PCI Posting. */
 
 	bridge->driver->tlb_flush(mem);
 	return 0;
@@ -992,12 +1091,20 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 {
 	size_t i;
 	struct agp_bridge_data *bridge;
+	int mask_type;
 
 	bridge = mem->bridge;
 	if (!bridge)
 		return -EINVAL;
 
-	if (type != 0 || mem->type != 0) {
+	if (mem->page_count == 0)
+		return 0;
+
+	if (type != mem->type)
+		return -EINVAL;
+
+	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);
+	if (mask_type != 0) {
 		/* The generic routines know nothing of memory types */
 		return -EINVAL;
 	}
@@ -1005,15 +1112,13 @@ int agp_generic_remove_memory(struct agp_memory *mem, off_t pg_start, int type)
 	/* AK: bogus, should encode addresses > 4GB */
 	for (i = pg_start; i < (mem->page_count + pg_start); i++) {
 		writel(bridge->scratch_page, bridge->gatt_table+i);
-		readl(bridge->gatt_table+i);	/* PCI Posting. */
 	}
+	readl(bridge->gatt_table+i-1);	/* PCI Posting. */
 
-	global_cache_flush();
 	bridge->driver->tlb_flush(mem);
 	return 0;
 }
 EXPORT_SYMBOL(agp_generic_remove_memory);
-
 
 struct agp_memory *agp_generic_alloc_by_type(size_t page_count, int type)
 {
@@ -1021,15 +1126,34 @@ struct agp_memory *agp_generic_alloc_by_type(size_t page_count, int type)
 }
 EXPORT_SYMBOL(agp_generic_alloc_by_type);
 
-
 void agp_generic_free_by_type(struct agp_memory *curr)
 {
-	vfree(curr->memory);
+	agp_free_page_array(curr);
 	agp_free_key(curr->key);
 	kfree(curr);
 }
 EXPORT_SYMBOL(agp_generic_free_by_type);
 
+struct agp_memory *agp_generic_alloc_user(size_t page_count, int type)
+{
+	struct agp_memory *new;
+	int i;
+	int pages;
+
+	pages = (page_count + ENTRIES_PER_PAGE - 1) / ENTRIES_PER_PAGE;
+	new = agp_create_user_memory(page_count);
+	if (new == NULL)
+		return NULL;
+
+	for (i = 0; i < page_count; i++)
+		new->memory[i] = 0;
+	new->page_count = 0;
+	new->type = type;
+	new->num_scratch_pages = pages;
+
+	return new;
+}
+EXPORT_SYMBOL(agp_generic_alloc_user);
 
 /*
  * Basic Page Allocation Routines -
@@ -1042,21 +1166,20 @@ void *agp_generic_alloc_page(struct agp_bridge_data *bridge)
 {
 	struct page * page;
 
-	page = alloc_page(GFP_KERNEL);
+	page = alloc_page(GFP_KERNEL | GFP_DMA32);
 	if (page == NULL)
 		return NULL;
 
 	map_page_into_agp(page);
 
 	get_page(page);
-	SetPageLocked(page);
 	atomic_inc(&agp_bridge->current_memory_agp);
 	return page_address(page);
 }
 EXPORT_SYMBOL(agp_generic_alloc_page);
 
 
-void agp_generic_destroy_page(void *addr)
+void agp_generic_destroy_page(void *addr, int flags)
 {
 	struct page *page;
 
@@ -1064,11 +1187,14 @@ void agp_generic_destroy_page(void *addr)
 		return;
 
 	page = virt_to_page(addr);
-	unmap_page_from_agp(page);
-	put_page(page);
-	unlock_page(page);
-	free_page((unsigned long)addr);
-	atomic_dec(&agp_bridge->current_memory_agp);
+	if (flags & AGP_PAGE_DESTROY_UNMAP)
+		unmap_page_from_agp(page);
+
+	if (flags & AGP_PAGE_DESTROY_FREE) {
+		put_page(page);
+		free_page((unsigned long)addr);
+		atomic_dec(&agp_bridge->current_memory_agp);
+	}
 }
 EXPORT_SYMBOL(agp_generic_destroy_page);
 
@@ -1122,6 +1248,15 @@ unsigned long agp_generic_mask_memory(struct agp_bridge_data *bridge,
 		return addr;
 }
 EXPORT_SYMBOL(agp_generic_mask_memory);
+
+int agp_generic_type_to_mask_type(struct agp_bridge_data *bridge,
+				  int type)
+{
+	if (type >= AGP_USER_TYPES)
+		return 0;
+	return type;
+}
+EXPORT_SYMBOL(agp_generic_type_to_mask_type);
 
 /*
  * These functions are implemented according to the AGPv3 spec,
@@ -1189,7 +1324,7 @@ void agp3_generic_cleanup(void)
 }
 EXPORT_SYMBOL(agp3_generic_cleanup);
 
-struct aper_size_info_16 agp3_generic_sizes[AGP_GENERIC_SIZES_ENTRIES] =
+const struct aper_size_info_16 agp3_generic_sizes[AGP_GENERIC_SIZES_ENTRIES] =
 {
 	{4096, 1048576, 10,0x000},
 	{2048,  524288, 9, 0x800},
