@@ -7,6 +7,7 @@
  *	     used by other architectures		/Roman Zippel
  */
 
+#include <linux/module.h>
 #include <linux/mm.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -58,7 +59,7 @@ static struct vm_struct *get_io_area(unsigned long size)
 	unsigned long addr;
 	struct vm_struct **p, *tmp, *area;
 
-	area = (struct vm_struct *)kmalloc(sizeof(*area), GFP_KERNEL);
+	area = kmalloc(sizeof(*area), GFP_KERNEL);
 	if (!area)
 		return NULL;
 	addr = KMAP_START;
@@ -219,6 +220,7 @@ void __iomem *__ioremap(unsigned long physaddr, unsigned long size, int cachefla
 
 	return (void __iomem *)retaddr;
 }
+EXPORT_SYMBOL(__ioremap);
 
 /*
  * Unmap a ioremap()ed region again
@@ -234,6 +236,7 @@ void iounmap(void __iomem *addr)
 	free_io_area((__force void *)addr);
 #endif
 }
+EXPORT_SYMBOL(iounmap);
 
 /*
  * __iounmap unmaps nearly everything, so be careful
@@ -360,3 +363,4 @@ void kernel_set_cachemode(void *addr, unsigned long size, int cmode)
 
 	flush_tlb_all();
 }
+EXPORT_SYMBOL(kernel_set_cachemode);

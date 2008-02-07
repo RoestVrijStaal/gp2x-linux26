@@ -114,6 +114,7 @@
  *
  */
 
+#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
@@ -133,6 +134,7 @@
 #include <asm/hwtest.h>
 #include <asm/errno.h>
 #include <asm/macints.h>
+#include <asm/irq_regs.h>
 
 #define DEBUG_SPURIOUS
 #define SHUTUP_SONIC
@@ -208,8 +210,8 @@ static void scc_irq_disable(unsigned int);
  * console_loglevel determines NMI handler function
  */
 
-irqreturn_t mac_nmi_handler(int, void *, struct pt_regs *);
-irqreturn_t mac_debug_handler(int, void *, struct pt_regs *);
+irqreturn_t mac_nmi_handler(int, void *);
+irqreturn_t mac_debug_handler(int, void *);
 
 /* #define DEBUG_MACINTS */
 
@@ -218,12 +220,12 @@ static void mac_disable_irq(unsigned int irq);
 
 static struct irq_controller mac_irq_controller = {
 	.name		= "mac",
-	.lock		= SPIN_LOCK_UNLOCKED,
+	.lock		= __SPIN_LOCK_UNLOCKED(mac_irq_controller.lock),
 	.enable		= mac_enable_irq,
 	.disable	= mac_disable_irq,
 };
 
-void mac_init_IRQ(void)
+void __init mac_init_IRQ(void)
 {
 #ifdef DEBUG_MACINTS
 	printk("mac_init_IRQ(): Setting things up...\n");
@@ -390,10 +392,11 @@ int mac_irq_pending(unsigned int irq)
 	}
 	return 0;
 }
+EXPORT_SYMBOL(mac_irq_pending);
 
 static int num_debug[8];
 
-irqreturn_t mac_debug_handler(int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t mac_debug_handler(int irq, void *dev_id)
 {
 	if (num_debug[irq] < 10) {
 		printk("DEBUG: Unexpected IRQ %d\n", irq);
@@ -405,7 +408,7 @@ irqreturn_t mac_debug_handler(int irq, void *dev_id, struct pt_regs *regs)
 static int in_nmi;
 static volatile int nmi_hold;
 
-irqreturn_t mac_nmi_handler(int irq, void *dev_id, struct pt_regs *fp)
+irqreturn_t mac_nmi_handler(int irq, void *dev_id)
 {
 	int i;
 	/*
@@ -432,6 +435,7 @@ irqreturn_t mac_nmi_handler(int irq, void *dev_id, struct pt_regs *fp)
 
 	if (console_loglevel >= 8) {
 #if 0
+		struct pt_regs *fp = get_irq_regs();
 		show_state();
 		printk("PC: %08lx\nSR: %04x  SP: %p\n", fp->pc, fp->sr, fp);
 		printk("d0: %08lx    d1: %08lx    d2: %08lx    d3: %08lx\n",
@@ -479,7 +483,7 @@ static void scc_irq_disable(unsigned int irq)
  * here is cleaner than hacking it into drivers/char/macserial.c.
  */
 
-void mac_scc_dispatch(int irq, void *dev_id, struct pt_regs *regs)
+void mac_scc_dispatch(int irq, void *dev_id)
 {
 	volatile unsigned char *scc = (unsigned char *) mac_bi_data.sccbase + 2;
 	unsigned char reg;
@@ -504,7 +508,7 @@ void mac_scc_dispatch(int irq, void *dev_id, struct pt_regs *regs)
 	/* pretty much kill the system.                 */
 
 	if (reg & 0x38)
-		m68k_handle_int(IRQ_SCCA, regs);
+		m68k_handle_int(IRQ_SCCA);
 	if (reg & 0x07)
-		m68k_handle_int(IRQ_SCCB, regs);
+		m68k_handle_int(IRQ_SCCB);
 }

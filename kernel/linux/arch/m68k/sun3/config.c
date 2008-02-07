@@ -21,6 +21,7 @@
 #include <asm/contregs.h>
 #include <asm/movs.h>
 #include <asm/pgtable.h>
+#include <asm/pgalloc.h>
 #include <asm/sun3-head.h>
 #include <asm/sun3mmu.h>
 #include <asm/rtc.h>
@@ -35,7 +36,7 @@ extern char _text, _end;
 char sun3_reserved_pmeg[SUN3_PMEGS_NUM];
 
 extern unsigned long sun3_gettimeoffset(void);
-extern void sun3_sched_init(irqreturn_t (*handler)(int, void *, struct pt_regs *));
+extern void sun3_sched_init(irq_handler_t handler);
 extern void sun3_get_model (char* model);
 extern void idprom_init (void);
 extern int sun3_hwclk(int set, struct rtc_time *t);
@@ -127,6 +128,7 @@ void __init sun3_bootmem_alloc(unsigned long memory_start, unsigned long memory_
 	high_memory = (void *)memory_end;
 	availmem = memory_start;
 
+	m68k_setup_node(0);
 	availmem += init_bootmem_node(NODE_DATA(0), start_page, 0, num_pages);
 	availmem = (availmem + (PAGE_SIZE-1)) & PAGE_MASK;
 
@@ -162,7 +164,7 @@ void __init config_sun3(void)
 	sun3_bootmem_alloc(memory_start, memory_end);
 }
 
-void __init sun3_sched_init(irqreturn_t (*timer_routine)(int, void *, struct pt_regs *))
+void __init sun3_sched_init(irq_handler_t timer_routine)
 {
 	sun3_disable_interrupts();
         intersil_clock->cmd_reg=(INTERSIL_RUN|INTERSIL_INT_DISABLE|INTERSIL_24H_MODE);
