@@ -27,32 +27,42 @@
 static int uninorth_rev;
 static int is_u3;
 
+static char __devinitdata *aperture = NULL;
 
 static int uninorth_fetch_size(void)
 {
-	int i;
-	u32 temp;
-	struct aper_size_info_32 *values;
+	int i, size = 0;
+	struct aper_size_info_32 *values =
+	    A_SIZE_32(agp_bridge->driver->aperture_sizes);
 
-	pci_read_config_dword(agp_bridge->dev, UNI_N_CFG_GART_BASE, &temp);
-	temp &= ~(0xfffff000);
-	values = A_SIZE_32(agp_bridge->driver->aperture_sizes);
+	if (aperture) {
+		char *save = aperture;
 
-	for (i = 0; i < agp_bridge->driver->num_aperture_sizes; i++) {
-		if (temp == values[i].size_value) {
-			agp_bridge->previous_size =
-			    agp_bridge->current_size = (void *) (values + i);
-			agp_bridge->aperture_size_idx = i;
-			return values[i].size;
+		size = memparse(aperture, &aperture) >> 20;
+		aperture = save;
+
+		for (i = 0; i < agp_bridge->driver->num_aperture_sizes; i++)
+			if (size == values[i].size)
+				break;
+
+		if (i == agp_bridge->driver->num_aperture_sizes) {
+			printk(KERN_ERR PFX "Invalid aperture size, using"
+			       " default\n");
+			size = 0;
+			aperture = NULL;
 		}
 	}
 
-	agp_bridge->previous_size =
-	    agp_bridge->current_size = (void *) (values + 1);
-	agp_bridge->aperture_size_idx = 1;
-	return values[1].size;
+	if (!size) {
+		for (i = 0; i < agp_bridge->driver->num_aperture_sizes; i++)
+			if (values[i].size == 32)
+				break;
+	}
 
-	return 0;
+	agp_bridge->previous_size =
+	    agp_bridge->current_size = (void *)(values + i);
+	agp_bridge->aperture_size_idx = i;
+	return values[i].size;
 }
 
 static void uninorth_tlbflush(struct agp_memory *mem)
@@ -450,7 +460,7 @@ void null_cache_flush(void)
 
 /* Setup function */
 
-static struct aper_size_info_32 uninorth_sizes[7] =
+static const struct aper_size_info_32 uninorth_sizes[7] =
 {
 #if 0 /* Not sure uninorth supports that high aperture sizes */
 	{256, 65536, 6, 64},
@@ -467,7 +477,7 @@ static struct aper_size_info_32 uninorth_sizes[7] =
  * Not sure that u3 supports that high aperture sizes but it
  * would strange if it did not :)
  */
-static struct aper_size_info_32 u3_sizes[8] =
+static const struct aper_size_info_32 u3_sizes[8] =
 {
 	{512, 131072, 7, 128},
 	{256, 65536, 6, 64},
@@ -479,7 +489,7 @@ static struct aper_size_info_32 u3_sizes[8] =
 	{4, 1024, 0, 1}
 };
 
-struct agp_bridge_driver uninorth_agp_driver = {
+const struct agp_bridge_driver uninorth_agp_driver = {
 	.owner			= THIS_MODULE,
 	.aperture_sizes		= (void *)uninorth_sizes,
 	.size_type		= U32_APER_SIZE,
@@ -500,10 +510,11 @@ struct agp_bridge_driver uninorth_agp_driver = {
 	.free_by_type		= agp_generic_free_by_type,
 	.agp_alloc_page		= agp_generic_alloc_page,
 	.agp_destroy_page	= agp_generic_destroy_page,
+	.agp_type_to_mask_type  = agp_generic_type_to_mask_type,
 	.cant_use_aperture	= 1,
 };
 
-struct agp_bridge_driver u3_agp_driver = {
+const struct agp_bridge_driver u3_agp_driver = {
 	.owner			= THIS_MODULE,
 	.aperture_sizes		= (void *)u3_sizes,
 	.size_type		= U32_APER_SIZE,
@@ -524,6 +535,7 @@ struct agp_bridge_driver u3_agp_driver = {
 	.free_by_type		= agp_generic_free_by_type,
 	.agp_alloc_page		= agp_generic_alloc_page,
 	.agp_destroy_page	= agp_generic_destroy_page,
+	.agp_type_to_mask_type  = agp_generic_type_to_mask_type,
 	.cant_use_aperture	= 1,
 	.needs_scratch_page	= 1,
 };
@@ -601,8 +613,8 @@ static int __devinit agp_uninorth_probe(struct pci_dev *pdev,
 		uninorth_node = of_find_node_by_name(NULL, "u3");
 	}
 	if (uninorth_node) {
-		int *revprop = (int *)
-			get_property(uninorth_node, "device-rev", NULL);
+		const int *revprop = of_get_property(uninorth_node,
+				"device-rev", NULL);
 		if (revprop != NULL)
 			uninorth_rev = *revprop & 0x3f;
 		of_node_put(uninorth_node);
@@ -682,6 +694,12 @@ static void __exit agp_uninorth_cleanup(void)
 
 module_init(agp_uninorth_init);
 module_exit(agp_uninorth_cleanup);
+
+module_param(aperture, charp, 0);
+MODULE_PARM_DESC(aperture,
+		 "Aperture size, must be power of two between 4MB and an\n"
+		 "\t\tupper limit specific to the UniNorth revision.\n"
+		 "\t\tDefault: 32M");
 
 MODULE_AUTHOR("Ben Herrenschmidt & Paul Mackerras");
 MODULE_LICENSE("GPL");
