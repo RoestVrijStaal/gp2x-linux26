@@ -22,6 +22,7 @@
 #include "xfs_inum.h"
 #include "xfs_trans.h"
 #include "xfs_sb.h"
+#include "xfs_ag.h"
 #include "xfs_dmapi.h"
 #include "xfs_mount.h"
 #include "xfs_trans_priv.h"
@@ -90,7 +91,7 @@ xfs_trans_push_ail(
 	int			flush_log;
 	SPLDECL(s);
 
-#define	XFS_TRANS_PUSH_AIL_RESTARTS	10
+#define	XFS_TRANS_PUSH_AIL_RESTARTS	1000
 
 	AIL_LOCK(mp,s);
 	lip = xfs_trans_first_ail(mp, &gen);
@@ -276,7 +277,7 @@ xfs_trans_update_ail(
 	xfs_mount_t	*mp,
 	xfs_log_item_t	*lip,
 	xfs_lsn_t	lsn,
-	unsigned long	s)
+	unsigned long	s) __releases(mp->m_ail_lock)
 {
 	xfs_ail_entry_t		*ailp;
 	xfs_log_item_t		*dlip=NULL;
@@ -328,7 +329,7 @@ void
 xfs_trans_delete_ail(
 	xfs_mount_t	*mp,
 	xfs_log_item_t	*lip,
-	unsigned long	s)
+	unsigned long	s) __releases(mp->m_ail_lock)
 {
 	xfs_ail_entry_t		*ailp;
 	xfs_log_item_t		*dlip;

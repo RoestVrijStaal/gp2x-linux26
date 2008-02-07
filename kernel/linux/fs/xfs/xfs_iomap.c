@@ -43,8 +43,6 @@
 #include "xfs_itable.h"
 #include "xfs_rw.h"
 #include "xfs_acl.h"
-#include "xfs_cap.h"
-#include "xfs_mac.h"
 #include "xfs_attr.h"
 #include "xfs_buf_item.h"
 #include "xfs_trans_space.h"
@@ -137,14 +135,10 @@ xfs_imap_to_bmap(
 	int		flags)
 {
 	xfs_mount_t	*mp;
-	xfs_fsize_t	nisize;
 	int		pbm;
 	xfs_fsblock_t	start_block;
 
 	mp = io->io_mount;
-	nisize = XFS_SIZE(mp, io);
-	if (io->io_new_size > nisize)
-		nisize = io->io_new_size;
 
 	for (pbm = 0; imaps && pbm < iomaps; imaps--, iomapp++, imap++, pbm++) {
 		iomapp->iomap_offset = XFS_FSB_TO_B(mp, imap->br_startoff);
@@ -169,10 +163,6 @@ xfs_imap_to_bmap(
 			iomapp->iomap_bn = XFS_FSB_TO_DB_IO(io, start_block);
 			if (ISUNWRITTEN(imap))
 				iomapp->iomap_flags |= IOMAP_UNWRITTEN;
-		}
-
-		if ((iomapp->iomap_offset + iomapp->iomap_bsize) >= nisize) {
-			iomapp->iomap_flags |= IOMAP_EOF;
 		}
 
 		offset += iomapp->iomap_bsize - iomapp->iomap_delta;
@@ -398,6 +388,23 @@ xfs_flush_space(
 	return 1;
 }
 
+STATIC int
+xfs_cmn_err_fsblock_zero(
+	xfs_inode_t	*ip,
+	xfs_bmbt_irec_t	*imap)
+{
+	xfs_cmn_err(XFS_PTAG_FSBLOCK_ZERO, CE_ALERT, ip->i_mount,
+			"Access to block zero in inode %llu "
+			"start_block: %llx start_off: %llx "
+			"blkcnt: %llx extent-state: %x\n",
+		(unsigned long long)ip->i_ino,
+		(unsigned long long)imap->br_startblock,
+		(unsigned long long)imap->br_startoff,
+		(unsigned long long)imap->br_blockcount,
+		imap->br_state);
+	return EFSCORRUPTED;
+}
+
 int
 xfs_iomap_write_direct(
 	xfs_inode_t	*ip,
@@ -436,19 +443,14 @@ xfs_iomap_write_direct(
 		return XFS_ERROR(error);
 
 	rt = XFS_IS_REALTIME_INODE(ip);
-	if (unlikely(rt)) {
-		if (!(extsz = ip->i_d.di_extsize))
-			extsz = mp->m_sb.sb_rextsize;
-	} else {
-		extsz = ip->i_d.di_extsize;
-	}
+	extsz = xfs_get_extsz_hint(ip);
 
-	isize = ip->i_d.di_size;
+	isize = ip->i_size;
 	if (io->io_new_size > isize)
 		isize = io->io_new_size;
 
-  	offset_fsb = XFS_B_TO_FSBT(mp, offset);
-  	last_fsb = XFS_B_TO_FSB(mp, ((xfs_ufsize_t)(offset + count)));
+	offset_fsb = XFS_B_TO_FSBT(mp, offset);
+	last_fsb = XFS_B_TO_FSB(mp, ((xfs_ufsize_t)(offset + count)));
 	if ((offset + count) > isize) {
 		error = xfs_iomap_eof_align_last_fsb(mp, io, isize, extsz,
 							&last_fsb);
@@ -474,13 +476,13 @@ xfs_iomap_write_direct(
 	if (unlikely(rt)) {
 		resrtextents = qblocks = resaligned;
 		resrtextents /= mp->m_sb.sb_rextsize;
-  		resblks = XFS_DIOSTRAT_SPACE_RES(mp, 0);
-  		quota_flag = XFS_QMOPT_RES_RTBLKS;
-  	} else {
-  		resrtextents = 0;
+		resblks = XFS_DIOSTRAT_SPACE_RES(mp, 0);
+		quota_flag = XFS_QMOPT_RES_RTBLKS;
+	} else {
+		resrtextents = 0;
 		resblks = qblocks = XFS_DIOSTRAT_SPACE_RES(mp, resaligned);
-  		quota_flag = XFS_QMOPT_RES_REGBLKS;
-  	}
+		quota_flag = XFS_QMOPT_RES_REGBLKS;
+	}
 
 	/*
 	 * Allocate and setup the transaction
@@ -509,7 +511,7 @@ xfs_iomap_write_direct(
 	xfs_trans_ihold(tp, ip);
 
 	bmapi_flag = XFS_BMAPI_WRITE;
-	if ((flags & BMAPI_DIRECT) && (offset < ip->i_d.di_size || extsz))
+	if ((flags & BMAPI_DIRECT) && (offset < ip->i_size || extsz))
 		bmapi_flag |= XFS_BMAPI_PREALLOC;
 
 	/*
@@ -525,10 +527,10 @@ xfs_iomap_write_direct(
 	/*
 	 * Complete the transaction
 	 */
-	error = xfs_bmap_finish(&tp, &free_list, firstfsb, &committed);
+	error = xfs_bmap_finish(&tp, &free_list, &committed);
 	if (error)
 		goto error0;
-	error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES, NULL);
+	error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES);
 	if (error)
 		goto error_out;
 
@@ -536,23 +538,17 @@ xfs_iomap_write_direct(
 	 * Copy any maps to caller's array and return any error.
 	 */
 	if (nimaps == 0) {
-		error = (ENOSPC);
+		error = ENOSPC;
+		goto error_out;
+	}
+
+	if (unlikely(!imap.br_startblock && !(io->io_flags & XFS_IOCORE_RT))) {
+		error = xfs_cmn_err_fsblock_zero(ip, &imap);
 		goto error_out;
 	}
 
 	*ret_imap = imap;
 	*nmaps = 1;
-	if ( !(io->io_flags & XFS_IOCORE_RT)  && !ret_imap->br_startblock) {
-                cmn_err(CE_PANIC,"Access to block zero:  fs <%s> inode: %lld "
-                        "start_block : %llx start_off : %llx blkcnt : %llx "
-                        "extent-state : %x \n",
-                        (ip->i_mount)->m_fsname,
-                        (long long)ip->i_ino,
-                        (unsigned long long)ret_imap->br_startblock,
-			(unsigned long long)ret_imap->br_startoff,
-                        (unsigned long long)ret_imap->br_blockcount,
-			ret_imap->br_state);
-        }
 	return 0;
 
 error0:	/* Cancel bmap, unlock inode, unreserve quota blocks, cancel trans */
@@ -657,17 +653,11 @@ xfs_iomap_write_delay(
 	if (error)
 		return XFS_ERROR(error);
 
-	if (XFS_IS_REALTIME_INODE(ip)) {
-		if (!(extsz = ip->i_d.di_extsize))
-			extsz = mp->m_sb.sb_rextsize;
-	} else {
-		extsz = ip->i_d.di_extsize;
-	}
-
+	extsz = xfs_get_extsz_hint(ip);
 	offset_fsb = XFS_B_TO_FSBT(mp, offset);
 
 retry:
-	isize = ip->i_d.di_size;
+	isize = ip->i_size;
 	if (io->io_new_size > isize)
 		isize = io->io_new_size;
 
@@ -715,17 +705,8 @@ retry:
 		goto retry;
 	}
 
-	if (!(io->io_flags & XFS_IOCORE_RT)  && !ret_imap->br_startblock) {
-		cmn_err(CE_PANIC,"Access to block zero:  fs <%s> inode: %lld "
-                        "start_block : %llx start_off : %llx blkcnt : %llx "
-                        "extent-state : %x \n",
-                        (ip->i_mount)->m_fsname,
-                        (long long)ip->i_ino,
-                        (unsigned long long)ret_imap->br_startblock,
-			(unsigned long long)ret_imap->br_startoff,
-                        (unsigned long long)ret_imap->br_blockcount,
-			ret_imap->br_state);
-	}
+	if (unlikely(!imap[0].br_startblock && !(io->io_flags & XFS_IOCORE_RT)))
+		return xfs_cmn_err_fsblock_zero(ip, &imap[0]);
 
 	*ret_imap = imap[0];
 	*nmaps = 1;
@@ -788,18 +769,12 @@ xfs_iomap_write_allocate(
 		nimaps = 0;
 		while (nimaps == 0) {
 			tp = xfs_trans_alloc(mp, XFS_TRANS_STRAT_WRITE);
+			tp->t_flags |= XFS_TRANS_RESERVE;
 			nres = XFS_EXTENTADD_SPACE_RES(mp, XFS_DATA_FORK);
 			error = xfs_trans_reserve(tp, nres,
 					XFS_WRITE_LOG_RES(mp),
 					0, XFS_TRANS_PERM_LOG_RES,
 					XFS_WRITE_LOG_COUNT);
-			if (error == ENOSPC) {
-				error = xfs_trans_reserve(tp, 0,
-						XFS_WRITE_LOG_RES(mp),
-						0,
-						XFS_TRANS_PERM_LOG_RES,
-						XFS_WRITE_LOG_COUNT);
-			}
 			if (error) {
 				xfs_trans_cancel(tp, 0);
 				return XFS_ERROR(error);
@@ -817,7 +792,7 @@ xfs_iomap_write_allocate(
 			 * we dropped the ilock in the interim.
 			 */
 
-			end_fsb = XFS_B_TO_FSB(mp, ip->i_d.di_size);
+			end_fsb = XFS_B_TO_FSB(mp, ip->i_size);
 			xfs_bmap_last_offset(NULL, ip, &last_block,
 				XFS_DATA_FORK);
 			last_block = XFS_FILEOFF_MAX(last_block, end_fsb);
@@ -836,13 +811,11 @@ xfs_iomap_write_allocate(
 			if (error)
 				goto trans_cancel;
 
-			error = xfs_bmap_finish(&tp, &free_list,
-					first_block, &committed);
+			error = xfs_bmap_finish(&tp, &free_list, &committed);
 			if (error)
 				goto trans_cancel;
 
-			error = xfs_trans_commit(tp,
-					XFS_TRANS_RELEASE_LOG_RES, NULL);
+			error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES);
 			if (error)
 				goto error0;
 
@@ -853,24 +826,10 @@ xfs_iomap_write_allocate(
 		 * See if we were able to allocate an extent that
 		 * covers at least part of the callers request
 		 */
-
 		for (i = 0; i < nimaps; i++) {
-			if (!(io->io_flags & XFS_IOCORE_RT)  &&
-			    !imap[i].br_startblock) {
-				cmn_err(CE_PANIC,"Access to block zero:  "
-					"fs <%s> inode: %lld "
-					"start_block : %llx start_off : %llx "
-					"blkcnt : %llx extent-state : %x \n",
-					(ip->i_mount)->m_fsname,
-					(long long)ip->i_ino,
-					(unsigned long long)
-						imap[i].br_startblock,
-					(unsigned long long)
-						imap[i].br_startoff,
-					(unsigned long long)
-				        	imap[i].br_blockcount,
-					imap[i].br_state);
-                        }
+			if (unlikely(!imap[i].br_startblock &&
+				     !(io->io_flags & XFS_IOCORE_RT)))
+				return xfs_cmn_err_fsblock_zero(ip, &imap[i]);
 			if ((offset_fsb >= imap[i].br_startoff) &&
 			    (offset_fsb < (imap[i].br_startoff +
 					   imap[i].br_blockcount))) {
@@ -933,15 +892,15 @@ xfs_iomap_write_unwritten(
 		 * from unwritten to real. Do allocations in a loop until
 		 * we have covered the range passed in.
 		 */
-
 		tp = xfs_trans_alloc(mp, XFS_TRANS_STRAT_WRITE);
+		tp->t_flags |= XFS_TRANS_RESERVE;
 		error = xfs_trans_reserve(tp, resblks,
 				XFS_WRITE_LOG_RES(mp), 0,
 				XFS_TRANS_PERM_LOG_RES,
 				XFS_WRITE_LOG_COUNT);
 		if (error) {
 			xfs_trans_cancel(tp, 0);
-			goto error0;
+			return XFS_ERROR(error);
 		}
 
 		xfs_ilock(ip, XFS_ILOCK_EXCL);
@@ -959,27 +918,18 @@ xfs_iomap_write_unwritten(
 		if (error)
 			goto error_on_bmapi_transaction;
 
-		error = xfs_bmap_finish(&(tp), &(free_list),
-				firstfsb, &committed);
+		error = xfs_bmap_finish(&(tp), &(free_list), &committed);
 		if (error)
 			goto error_on_bmapi_transaction;
 
-		error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES, NULL);
+		error = xfs_trans_commit(tp, XFS_TRANS_RELEASE_LOG_RES);
 		xfs_iunlock(ip, XFS_ILOCK_EXCL);
 		if (error)
-			goto error0;
+			return XFS_ERROR(error);
 
-		if ( !(io->io_flags & XFS_IOCORE_RT)  && !imap.br_startblock) {
-			cmn_err(CE_PANIC,"Access to block zero:  fs <%s> "
-				"inode: %lld start_block : %llx start_off : "
-				"%llx blkcnt : %llx extent-state : %x \n",
-				(ip->i_mount)->m_fsname,
-				(long long)ip->i_ino,
-				(unsigned long long)imap.br_startblock,
-				(unsigned long long)imap.br_startoff,
-				(unsigned long long)imap.br_blockcount,
-				imap.br_state);
-        	}
+		if (unlikely(!imap.br_startblock &&
+			     !(io->io_flags & XFS_IOCORE_RT)))
+			return xfs_cmn_err_fsblock_zero(ip, &imap);
 
 		if ((numblks_fsb = imap.br_blockcount) == 0) {
 			/*
@@ -999,6 +949,5 @@ error_on_bmapi_transaction:
 	xfs_bmap_cancel(&free_list);
 	xfs_trans_cancel(tp, (XFS_TRANS_RELEASE_LOG_RES | XFS_TRANS_ABORT));
 	xfs_iunlock(ip, XFS_ILOCK_EXCL);
-error0:
 	return XFS_ERROR(error);
 }

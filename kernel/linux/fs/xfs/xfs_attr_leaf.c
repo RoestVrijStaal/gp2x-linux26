@@ -89,9 +89,46 @@ STATIC void xfs_attr_leaf_moveents(xfs_attr_leafblock_t *src_leaf,
 					 int dst_start, int move_count,
 					 xfs_mount_t *mp);
 STATIC int xfs_attr_leaf_entsize(xfs_attr_leafblock_t *leaf, int index);
-STATIC int xfs_attr_put_listent(xfs_attr_list_context_t *context,
-			     attrnames_t *, char *name, int namelen,
-			     int valuelen);
+
+/*========================================================================
+ * Namespace helper routines
+ *========================================================================*/
+
+STATIC_INLINE attrnames_t *
+xfs_attr_flags_namesp(int flags)
+{
+	return ((flags & XFS_ATTR_SECURE) ? &attr_secure:
+		  ((flags & XFS_ATTR_ROOT) ? &attr_trusted : &attr_user));
+}
+
+/*
+ * If namespace bits don't match return 0.
+ * If all match then return 1.
+ */
+STATIC_INLINE int
+xfs_attr_namesp_match(int arg_flags, int ondisk_flags)
+{
+	return XFS_ATTR_NSP_ONDISK(ondisk_flags) == XFS_ATTR_NSP_ARGS_TO_ONDISK(arg_flags);
+}
+
+/*
+ * If namespace bits don't match and we don't have an override for it
+ * then return 0.
+ * If all match or are overridable then return 1.
+ */
+STATIC_INLINE int
+xfs_attr_namesp_match_overrides(int arg_flags, int ondisk_flags)
+{
+	if (((arg_flags & ATTR_SECURE) == 0) !=
+	    ((ondisk_flags & XFS_ATTR_SECURE) == 0) &&
+	    !(arg_flags & ATTR_KERNORMALS))
+		return 0;
+	if (((arg_flags & ATTR_ROOT) == 0) !=
+	    ((ondisk_flags & XFS_ATTR_ROOT) == 0) &&
+	    !(arg_flags & ATTR_KERNROOTLS))
+		return 0;
+	return 1;
+}
 
 
 /*========================================================================
@@ -113,6 +150,7 @@ xfs_attr_shortform_bytesfit(xfs_inode_t *dp, int bytes)
 	int offset;
 	int minforkoff;	/* lower limit on valid forkoff locations */
 	int maxforkoff;	/* upper limit on valid forkoff locations */
+	int dsize;	
 	xfs_mount_t *mp = dp->i_mount;
 
 	offset = (XFS_LITINO(mp) - bytes) >> 3; /* rounded down */
@@ -132,8 +170,43 @@ xfs_attr_shortform_bytesfit(xfs_inode_t *dp, int bytes)
 		return 0;
 	}
 
-	/* data fork btree root can have at least this many key/ptr pairs */
-	minforkoff = MAX(dp->i_df.if_bytes, XFS_BMDR_SPACE_CALC(MINDBTPTRS));
+	dsize = dp->i_df.if_bytes;
+	
+	switch (dp->i_d.di_format) {
+	case XFS_DINODE_FMT_EXTENTS:
+		/* 
+		 * If there is no attr fork and the data fork is extents, 
+		 * determine if creating the default attr fork will result 
+		 * in the extents form migrating to btree. If so, the 
+		 * minimum offset only needs to be the space required for 
+		 * the btree root.
+		 */ 
+		if (!dp->i_d.di_forkoff && dp->i_df.if_bytes > mp->m_attroffset)
+			dsize = XFS_BMDR_SPACE_CALC(MINDBTPTRS);
+		break;
+		
+	case XFS_DINODE_FMT_BTREE:
+		/*
+		 * If have data btree then keep forkoff if we have one,
+		 * otherwise we are adding a new attr, so then we set 
+		 * minforkoff to where the btree root can finish so we have 
+		 * plenty of room for attrs
+		 */
+		if (dp->i_d.di_forkoff) {
+			if (offset < dp->i_d.di_forkoff) 
+				return 0;
+			else 
+				return dp->i_d.di_forkoff;
+		} else
+			dsize = XFS_BMAP_BROOT_SPACE(dp->i_df.if_broot);
+		break;
+	}
+	
+	/* 
+	 * A data fork btree root must have space for at least 
+	 * MINDBTPTRS key/ptr pairs if the data fork is small or empty.
+	 */
+	minforkoff = MAX(dsize, XFS_BMDR_SPACE_CALC(MINDBTPTRS));
 	minforkoff = roundup(minforkoff, 8) >> 3;
 
 	/* attr fork btree root can have at least this many key/ptr pairs */
@@ -228,11 +301,7 @@ xfs_attr_shortform_add(xfs_da_args_t *args, int forkoff)
 			continue;
 		if (memcmp(args->name, sfe->nameval, args->namelen) != 0)
 			continue;
-		if (((args->flags & ATTR_SECURE) != 0) !=
-		    ((sfe->flags & XFS_ATTR_SECURE) != 0))
-			continue;
-		if (((args->flags & ATTR_ROOT) != 0) !=
-		    ((sfe->flags & XFS_ATTR_ROOT) != 0))
+		if (!xfs_attr_namesp_match(args->flags, sfe->flags))
 			continue;
 		ASSERT(0);
 #endif
@@ -246,8 +315,7 @@ xfs_attr_shortform_add(xfs_da_args_t *args, int forkoff)
 
 	sfe->namelen = args->namelen;
 	sfe->valuelen = args->valuelen;
-	sfe->flags = (args->flags & ATTR_SECURE) ? XFS_ATTR_SECURE :
-			((args->flags & ATTR_ROOT) ? XFS_ATTR_ROOT : 0);
+	sfe->flags = XFS_ATTR_NSP_ARGS_TO_ONDISK(args->flags);
 	memcpy(sfe->nameval, args->name, args->namelen);
 	memcpy(&sfe->nameval[args->namelen], args->value, args->valuelen);
 	sf->hdr.count++;
@@ -282,11 +350,7 @@ xfs_attr_shortform_remove(xfs_da_args_t *args)
 			continue;
 		if (memcmp(sfe->nameval, args->name, args->namelen) != 0)
 			continue;
-		if (((args->flags & ATTR_SECURE) != 0) !=
-		    ((sfe->flags & XFS_ATTR_SECURE) != 0))
-			continue;
-		if (((args->flags & ATTR_ROOT) != 0) !=
-		    ((sfe->flags & XFS_ATTR_ROOT) != 0))
+		if (!xfs_attr_namesp_match(args->flags, sfe->flags))
 			continue;
 		break;
 	}
@@ -308,7 +372,8 @@ xfs_attr_shortform_remove(xfs_da_args_t *args)
 	 */
 	totsize -= size;
 	if (totsize == sizeof(xfs_attr_sf_hdr_t) && !args->addname &&
-	    (mp->m_flags & XFS_MOUNT_ATTR2)) {
+	    (mp->m_flags & XFS_MOUNT_ATTR2) && 
+	    (dp->i_d.di_format != XFS_DINODE_FMT_BTREE)) {
 		/*
 		 * Last attribute now removed, revert to original
 		 * inode format making all literal area available
@@ -327,7 +392,8 @@ xfs_attr_shortform_remove(xfs_da_args_t *args)
 		dp->i_d.di_forkoff = xfs_attr_shortform_bytesfit(dp, totsize);
 		ASSERT(dp->i_d.di_forkoff);
 		ASSERT(totsize > sizeof(xfs_attr_sf_hdr_t) || args->addname ||
-			!(mp->m_flags & XFS_MOUNT_ATTR2));
+			!(mp->m_flags & XFS_MOUNT_ATTR2) ||
+			dp->i_d.di_format == XFS_DINODE_FMT_BTREE);
 		dp->i_afp->if_ext_max =
 			XFS_IFORK_ASIZE(dp) / (uint)sizeof(xfs_bmbt_rec_t);
 		dp->i_df.if_ext_max =
@@ -363,11 +429,7 @@ xfs_attr_shortform_lookup(xfs_da_args_t *args)
 			continue;
 		if (memcmp(args->name, sfe->nameval, args->namelen) != 0)
 			continue;
-		if (((args->flags & ATTR_SECURE) != 0) !=
-		    ((sfe->flags & XFS_ATTR_SECURE) != 0))
-			continue;
-		if (((args->flags & ATTR_ROOT) != 0) !=
-		    ((sfe->flags & XFS_ATTR_ROOT) != 0))
+		if (!xfs_attr_namesp_match(args->flags, sfe->flags))
 			continue;
 		return(XFS_ERROR(EEXIST));
 	}
@@ -394,11 +456,7 @@ xfs_attr_shortform_getvalue(xfs_da_args_t *args)
 			continue;
 		if (memcmp(args->name, sfe->nameval, args->namelen) != 0)
 			continue;
-		if (((args->flags & ATTR_SECURE) != 0) !=
-		    ((sfe->flags & XFS_ATTR_SECURE) != 0))
-			continue;
-		if (((args->flags & ATTR_ROOT) != 0) !=
-		    ((sfe->flags & XFS_ATTR_ROOT) != 0))
+		if (!xfs_attr_namesp_match(args->flags, sfe->flags))
 			continue;
 		if (args->flags & ATTR_KERNOVAL) {
 			args->valuelen = sfe->valuelen;
@@ -485,8 +543,7 @@ xfs_attr_shortform_to_leaf(xfs_da_args_t *args)
 		nargs.valuelen = sfe->valuelen;
 		nargs.hashval = xfs_da_hashname((char *)sfe->nameval,
 						sfe->namelen);
-		nargs.flags = (sfe->flags & XFS_ATTR_SECURE) ? ATTR_SECURE :
-				((sfe->flags & XFS_ATTR_ROOT) ? ATTR_ROOT : 0);
+		nargs.flags = XFS_ATTR_NSP_ONDISK_TO_ARGS(sfe->flags);
 		error = xfs_attr_leaf_lookup_int(bp, &nargs); /* set a->index */
 		ASSERT(error == ENOATTR);
 		error = xfs_attr_leaf_add(bp, &nargs);
@@ -520,6 +577,10 @@ xfs_attr_shortform_compare(const void *a, const void *b)
 	}
 }
 
+
+#define XFS_ISRESET_CURSOR(cursor) \
+	(!((cursor)->initted) && !((cursor)->hashval) && \
+	 !((cursor)->blkno) && !((cursor)->offset))
 /*
  * Copy out entries of shortform attribute lists for attr_list().
  * Shortform attribute lists are not stored in hashval sorted order.
@@ -537,6 +598,7 @@ xfs_attr_shortform_list(xfs_attr_list_context_t *context)
 	xfs_attr_sf_entry_t *sfe;
 	xfs_inode_t *dp;
 	int sbsize, nsbuf, count, i;
+	int error;
 
 	ASSERT(context != NULL);
 	dp = context->dp;
@@ -552,45 +614,50 @@ xfs_attr_shortform_list(xfs_attr_list_context_t *context)
 	xfs_attr_trace_l_c("sf start", context);
 
 	/*
-	 * If the buffer is large enough, do not bother with sorting.
+	 * If the buffer is large enough and the cursor is at the start,
+	 * do not bother with sorting since we will return everything in
+	 * one buffer and another call using the cursor won't need to be
+	 * made.
 	 * Note the generous fudge factor of 16 overhead bytes per entry.
+	 * If bufsize is zero then put_listent must be a search function
+	 * and can just scan through what we have.
 	 */
-	if ((dp->i_afp->if_bytes + sf->hdr.count * 16) < context->bufsize) {
+	if (context->bufsize == 0 ||
+	    (XFS_ISRESET_CURSOR(cursor) &&
+             (dp->i_afp->if_bytes + sf->hdr.count * 16) < context->bufsize)) {
 		for (i = 0, sfe = &sf->list[0]; i < sf->hdr.count; i++) {
 			attrnames_t	*namesp;
 
-			if (((context->flags & ATTR_SECURE) != 0) !=
-			    ((sfe->flags & XFS_ATTR_SECURE) != 0) &&
-			    !(context->flags & ATTR_KERNORMALS)) {
+			if (!xfs_attr_namesp_match_overrides(context->flags, sfe->flags)) {
 				sfe = XFS_ATTR_SF_NEXTENTRY(sfe);
 				continue;
 			}
-			if (((context->flags & ATTR_ROOT) != 0) !=
-			    ((sfe->flags & XFS_ATTR_ROOT) != 0) &&
-			    !(context->flags & ATTR_KERNROOTLS)) {
-				sfe = XFS_ATTR_SF_NEXTENTRY(sfe);
-				continue;
-			}
-			namesp = (sfe->flags & XFS_ATTR_SECURE) ? &attr_secure:
-				((sfe->flags & XFS_ATTR_ROOT) ? &attr_trusted :
-				  &attr_user);
-			if (context->flags & ATTR_KERNOVAL) {
-				ASSERT(context->flags & ATTR_KERNAMELS);
-				context->count += namesp->attr_namelen +
-					sfe->namelen + 1;
-			}
-			else {
-				if (xfs_attr_put_listent(context, namesp,
-						   (char *)sfe->nameval,
-						   (int)sfe->namelen,
-						   (int)sfe->valuelen))
-					break;
-			}
+			namesp = xfs_attr_flags_namesp(sfe->flags);
+			error = context->put_listent(context,
+					   namesp,
+					   (char *)sfe->nameval,
+					   (int)sfe->namelen,
+					   (int)sfe->valuelen,
+					   (char*)&sfe->nameval[sfe->namelen]);
+
+			/*
+			 * Either search callback finished early or
+			 * didn't fit it all in the buffer after all.
+			 */
+			if (context->seen_enough)
+				break;
+
+			if (error)
+				return error;
 			sfe = XFS_ATTR_SF_NEXTENTRY(sfe);
 		}
 		xfs_attr_trace_l_c("sf big-gulp", context);
 		return(0);
 	}
+
+	/* do no more for a search callback */
+	if (context->bufsize == 0)
+		return 0;
 
 	/*
 	 * It didn't all fit, so we have to sort everything on hashval.
@@ -614,15 +681,7 @@ xfs_attr_shortform_list(xfs_attr_list_context_t *context)
 			kmem_free(sbuf, sbsize);
 			return XFS_ERROR(EFSCORRUPTED);
 		}
-		if (((context->flags & ATTR_SECURE) != 0) !=
-		    ((sfe->flags & XFS_ATTR_SECURE) != 0) &&
-		    !(context->flags & ATTR_KERNORMALS)) {
-			sfe = XFS_ATTR_SF_NEXTENTRY(sfe);
-			continue;
-		}
-		if (((context->flags & ATTR_ROOT) != 0) !=
-		    ((sfe->flags & XFS_ATTR_ROOT) != 0) &&
-		    !(context->flags & ATTR_KERNROOTLS)) {
+		if (!xfs_attr_namesp_match_overrides(context->flags, sfe->flags)) {
 			sfe = XFS_ATTR_SF_NEXTENTRY(sfe);
 			continue;
 		}
@@ -671,24 +730,22 @@ xfs_attr_shortform_list(xfs_attr_list_context_t *context)
 	for ( ; i < nsbuf; i++, sbp++) {
 		attrnames_t	*namesp;
 
-		namesp = (sbp->flags & XFS_ATTR_SECURE) ? &attr_secure :
-			((sbp->flags & XFS_ATTR_ROOT) ? &attr_trusted :
-			  &attr_user);
+		namesp = xfs_attr_flags_namesp(sbp->flags);
 
 		if (cursor->hashval != sbp->hash) {
 			cursor->hashval = sbp->hash;
 			cursor->offset = 0;
 		}
-		if (context->flags & ATTR_KERNOVAL) {
-			ASSERT(context->flags & ATTR_KERNAMELS);
-			context->count += namesp->attr_namelen +
-						sbp->namelen + 1;
-		} else {
-			if (xfs_attr_put_listent(context, namesp,
-					sbp->name, sbp->namelen,
-					sbp->valuelen))
-				break;
-		}
+		error = context->put_listent(context,
+					namesp,
+					sbp->name,
+					sbp->namelen,
+					sbp->valuelen,
+					&sbp->name[sbp->namelen]);
+		if (error)
+			return error;
+		if (context->seen_enough)
+			break;
 		cursor->offset++;
 	}
 
@@ -729,6 +786,7 @@ xfs_attr_shortform_allfit(xfs_dabuf_t *bp, xfs_inode_t *dp)
 				+ be16_to_cpu(name_loc->valuelen);
 	}
 	if ((dp->i_mount->m_flags & XFS_MOUNT_ATTR2) &&
+	    (dp->i_d.di_format != XFS_DINODE_FMT_BTREE) &&
 	    (bytes == sizeof(struct xfs_attr_sf_hdr)))
 		return(-1);
 	return(xfs_attr_shortform_bytesfit(dp, bytes));
@@ -767,6 +825,7 @@ xfs_attr_leaf_to_shortform(xfs_dabuf_t *bp, xfs_da_args_t *args, int forkoff)
 
 	if (forkoff == -1) {
 		ASSERT(dp->i_mount->m_flags & XFS_MOUNT_ATTR2);
+		ASSERT(dp->i_d.di_format != XFS_DINODE_FMT_BTREE);
 
 		/*
 		 * Last attribute was removed, revert to original
@@ -810,8 +869,7 @@ xfs_attr_leaf_to_shortform(xfs_dabuf_t *bp, xfs_da_args_t *args, int forkoff)
 		nargs.value = (char *)&name_loc->nameval[nargs.namelen];
 		nargs.valuelen = be16_to_cpu(name_loc->valuelen);
 		nargs.hashval = be32_to_cpu(entry->hashval);
-		nargs.flags = (entry->flags & XFS_ATTR_SECURE) ? ATTR_SECURE :
-			      ((entry->flags & XFS_ATTR_ROOT) ? ATTR_ROOT : 0);
+		nargs.flags = XFS_ATTR_NSP_ONDISK_TO_ARGS(entry->flags);
 		xfs_attr_shortform_add(&nargs, forkoff);
 	}
 	error = 0;
@@ -1098,8 +1156,7 @@ xfs_attr_leaf_add_work(xfs_dabuf_t *bp, xfs_da_args_t *args, int mapindex)
 				     be16_to_cpu(map->size));
 	entry->hashval = cpu_to_be32(args->hashval);
 	entry->flags = tmp ? XFS_ATTR_LOCAL : 0;
-	entry->flags |= (args->flags & ATTR_SECURE) ? XFS_ATTR_SECURE :
-			((args->flags & ATTR_ROOT) ? XFS_ATTR_ROOT : 0);
+	entry->flags |= XFS_ATTR_NSP_ARGS_TO_ONDISK(args->flags);
 	if (args->rename) {
 		entry->flags |= XFS_ATTR_INCOMPLETE;
 		if ((args->blkno2 == args->blkno) &&
@@ -1926,7 +1983,7 @@ xfs_attr_leaf_lookup_int(xfs_dabuf_t *bp, xfs_da_args_t *args)
 		else
 			break;
 	}
-	ASSERT((probe >= 0) && 
+	ASSERT((probe >= 0) &&
 	       (!leaf->hdr.count
 	       || (probe < be16_to_cpu(leaf->hdr.count))));
 	ASSERT((span <= 4) || (be32_to_cpu(entry->hashval) == hashval));
@@ -1971,14 +2028,9 @@ xfs_attr_leaf_lookup_int(xfs_dabuf_t *bp, xfs_da_args_t *args)
 			name_loc = XFS_ATTR_LEAF_NAME_LOCAL(leaf, probe);
 			if (name_loc->namelen != args->namelen)
 				continue;
-			if (memcmp(args->name, (char *)name_loc->nameval,
-					     args->namelen) != 0)
+			if (memcmp(args->name, (char *)name_loc->nameval, args->namelen) != 0)
 				continue;
-			if (((args->flags & ATTR_SECURE) != 0) !=
-			    ((entry->flags & XFS_ATTR_SECURE) != 0))
-				continue;
-			if (((args->flags & ATTR_ROOT) != 0) !=
-			    ((entry->flags & XFS_ATTR_ROOT) != 0))
+			if (!xfs_attr_namesp_match(args->flags, entry->flags))
 				continue;
 			args->index = probe;
 			return(XFS_ERROR(EEXIST));
@@ -1989,11 +2041,7 @@ xfs_attr_leaf_lookup_int(xfs_dabuf_t *bp, xfs_da_args_t *args)
 			if (memcmp(args->name, (char *)name_rmt->name,
 					     args->namelen) != 0)
 				continue;
-			if (((args->flags & ATTR_SECURE) != 0) !=
-			    ((entry->flags & XFS_ATTR_SECURE) != 0))
-				continue;
-			if (((args->flags & ATTR_ROOT) != 0) !=
-			    ((entry->flags & XFS_ATTR_ROOT) != 0))
+			if (!xfs_attr_namesp_match(args->flags, entry->flags))
 				continue;
 			args->index = probe;
 			args->rmtblkno = be32_to_cpu(name_rmt->valueblk);
@@ -2312,8 +2360,6 @@ xfs_attr_leaf_list_int(xfs_dabuf_t *bp, xfs_attr_list_context_t *context)
 	attrlist_cursor_kern_t *cursor;
 	xfs_attr_leafblock_t *leaf;
 	xfs_attr_leaf_entry_t *entry;
-	xfs_attr_leaf_name_local_t *name_loc;
-	xfs_attr_leaf_name_remote_t *name_rmt;
 	int retval, i;
 
 	ASSERT(bp != NULL);
@@ -2355,9 +2401,8 @@ xfs_attr_leaf_list_int(xfs_dabuf_t *bp, xfs_attr_list_context_t *context)
 	 * We have found our place, start copying out the new attributes.
 	 */
 	retval = 0;
-	for (  ; (i < be16_to_cpu(leaf->hdr.count))
-	     && (retval == 0); entry++, i++) {
-		attrnames_t	*namesp;
+	for (  ; (i < be16_to_cpu(leaf->hdr.count)); entry++, i++) {
+		attrnames_t *namesp;
 
 		if (be32_to_cpu(entry->hashval) != cursor->hashval) {
 			cursor->hashval = be32_to_cpu(entry->hashval);
@@ -2366,115 +2411,69 @@ xfs_attr_leaf_list_int(xfs_dabuf_t *bp, xfs_attr_list_context_t *context)
 
 		if (entry->flags & XFS_ATTR_INCOMPLETE)
 			continue;		/* skip incomplete entries */
-		if (((context->flags & ATTR_SECURE) != 0) !=
-		    ((entry->flags & XFS_ATTR_SECURE) != 0) &&
-		    !(context->flags & ATTR_KERNORMALS))
-			continue;		/* skip non-matching entries */
-		if (((context->flags & ATTR_ROOT) != 0) !=
-		    ((entry->flags & XFS_ATTR_ROOT) != 0) &&
-		    !(context->flags & ATTR_KERNROOTLS))
-			continue;		/* skip non-matching entries */
+		if (!xfs_attr_namesp_match_overrides(context->flags, entry->flags))
+			continue;
 
-		namesp = (entry->flags & XFS_ATTR_SECURE) ? &attr_secure :
-			((entry->flags & XFS_ATTR_ROOT) ? &attr_trusted :
-			  &attr_user);
+		namesp = xfs_attr_flags_namesp(entry->flags);
 
 		if (entry->flags & XFS_ATTR_LOCAL) {
-			name_loc = XFS_ATTR_LEAF_NAME_LOCAL(leaf, i);
-			if (context->flags & ATTR_KERNOVAL) {
-				ASSERT(context->flags & ATTR_KERNAMELS);
-				context->count += namesp->attr_namelen +
-						(int)name_loc->namelen + 1;
-			} else {
-				retval = xfs_attr_put_listent(context, namesp,
-					(char *)name_loc->nameval,
-					(int)name_loc->namelen,
-					be16_to_cpu(name_loc->valuelen));
-			}
+			xfs_attr_leaf_name_local_t *name_loc =
+				XFS_ATTR_LEAF_NAME_LOCAL(leaf, i);
+
+			retval = context->put_listent(context,
+						namesp,
+						(char *)name_loc->nameval,
+						(int)name_loc->namelen,
+						be16_to_cpu(name_loc->valuelen),
+						(char *)&name_loc->nameval[name_loc->namelen]);
+			if (retval)
+				return retval;
 		} else {
-			name_rmt = XFS_ATTR_LEAF_NAME_REMOTE(leaf, i);
-			if (context->flags & ATTR_KERNOVAL) {
-				ASSERT(context->flags & ATTR_KERNAMELS);
-				context->count += namesp->attr_namelen +
-						(int)name_rmt->namelen + 1;
-			} else {
-				retval = xfs_attr_put_listent(context, namesp,
-					(char *)name_rmt->name,
-					(int)name_rmt->namelen,
-					be32_to_cpu(name_rmt->valuelen));
+			xfs_attr_leaf_name_remote_t *name_rmt =
+				XFS_ATTR_LEAF_NAME_REMOTE(leaf, i);
+
+			int valuelen = be32_to_cpu(name_rmt->valuelen);
+
+			if (context->put_value) {
+				xfs_da_args_t args;
+
+				memset((char *)&args, 0, sizeof(args));
+				args.dp = context->dp;
+				args.whichfork = XFS_ATTR_FORK;
+				args.valuelen = valuelen;
+				args.value = kmem_alloc(valuelen, KM_SLEEP);
+				args.rmtblkno = be32_to_cpu(name_rmt->valueblk);
+				args.rmtblkcnt = XFS_B_TO_FSB(args.dp->i_mount, valuelen);
+				retval = xfs_attr_rmtval_get(&args);
+				if (retval)
+					return retval;
+				retval = context->put_listent(context,
+						namesp,
+						(char *)name_rmt->name,
+						(int)name_rmt->namelen,
+						valuelen,
+						(char*)args.value);
+				kmem_free(args.value, valuelen);
 			}
+			else {
+				retval = context->put_listent(context,
+						namesp,
+						(char *)name_rmt->name,
+						(int)name_rmt->namelen,
+						valuelen,
+						NULL);
+			}
+			if (retval)
+				return retval;
 		}
-		if (retval == 0) {
-			cursor->offset++;
-		}
+		if (context->seen_enough)
+			break;
+		cursor->offset++;
 	}
 	xfs_attr_trace_l_cl("blk end", context, leaf);
 	return(retval);
 }
 
-#define	ATTR_ENTBASESIZE		/* minimum bytes used by an attr */ \
-	(((struct attrlist_ent *) 0)->a_name - (char *) 0)
-#define	ATTR_ENTSIZE(namelen)		/* actual bytes used by an attr */ \
-	((ATTR_ENTBASESIZE + (namelen) + 1 + sizeof(u_int32_t)-1) \
-	 & ~(sizeof(u_int32_t)-1))
-
-/*
- * Format an attribute and copy it out to the user's buffer.
- * Take care to check values and protect against them changing later,
- * we may be reading them directly out of a user buffer.
- */
-/*ARGSUSED*/
-STATIC int
-xfs_attr_put_listent(xfs_attr_list_context_t *context,
-		     attrnames_t *namesp, char *name, int namelen, int valuelen)
-{
-	attrlist_ent_t *aep;
-	int arraytop;
-
-	ASSERT(!(context->flags & ATTR_KERNOVAL));
-	if (context->flags & ATTR_KERNAMELS) {
-		char *offset;
-
-		ASSERT(context->count >= 0);
-
-		arraytop = context->count + namesp->attr_namelen + namelen + 1;
-		if (arraytop > context->firstu) {
-			context->count = -1;	/* insufficient space */
-			return(1);
-		}
-		offset = (char *)context->alist + context->count;
-		strncpy(offset, namesp->attr_name, namesp->attr_namelen);
-		offset += namesp->attr_namelen;
-		strncpy(offset, name, namelen);			/* real name */
-		offset += namelen;
-		*offset = '\0';
-		context->count += namesp->attr_namelen + namelen + 1;
-		return(0);
-	}
-
-	ASSERT(context->count >= 0);
-	ASSERT(context->count < (ATTR_MAX_VALUELEN/8));
-	ASSERT(context->firstu >= sizeof(*context->alist));
-	ASSERT(context->firstu <= context->bufsize);
-
-	arraytop = sizeof(*context->alist) +
-			context->count * sizeof(context->alist->al_offset[0]);
-	context->firstu -= ATTR_ENTSIZE(namelen);
-	if (context->firstu < arraytop) {
-		xfs_attr_trace_l_c("buffer full", context);
-		context->alist->al_more = 1;
-		return(1);
-	}
-
-	aep = (attrlist_ent_t *)&(((char *)context->alist)[ context->firstu ]);
-	aep->a_valuelen = valuelen;
-	memcpy(aep->a_name, name, namelen);
-	aep->a_name[ namelen ] = 0;
-	context->alist->al_offset[ context->count++ ] = context->firstu;
-	context->alist->al_count = context->count;
-	xfs_attr_trace_l_c("add", context);
-	return(0);
-}
 
 /*========================================================================
  * Manage the INCOMPLETE flag in a leaf entry
@@ -3054,7 +3053,7 @@ xfs_attr_rolltrans(xfs_trans_t **transp, xfs_inode_t *dp)
 	 * is in progress. The caller takes the responsibility to cancel
 	 * the duplicate transaction that gets returned.
 	 */
-	if ((error = xfs_trans_commit(trans, 0, NULL)))
+	if ((error = xfs_trans_commit(trans, 0)))
 		return (error);
 
 	trans = *transp;
