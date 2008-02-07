@@ -3,7 +3,7 @@
  *		devices like TTY. It interfaces between a raw TTY and the
  *		kernel's AX.25 protocol layers.
  *
- * Authors:	Andreas Könsgen <ajk@iehk.rwth-aachen.de>
+ * Authors:	Andreas KÃ¶nsgen <ajk@iehk.rwth-aachen.de>
  *              Ralf Baechle DL5RB <ralf@linux-mips.org>
  *
  * Quite a lot of stuff "stolen" by Joerg Reuter from slip.c, written by
@@ -288,10 +288,11 @@ static int sp_close(struct net_device *dev)
 
 /* Return the frame type ID */
 static int sp_header(struct sk_buff *skb, struct net_device *dev,
-	unsigned short type, void *daddr, void *saddr, unsigned len)
+		     unsigned short type, const void *daddr,
+		     const void *saddr, unsigned len)
 {
 #ifdef CONFIG_INET
-	if (type != htons(ETH_P_AX25))
+	if (type != ETH_P_AX25)
 		return ax25_hard_header(skb, dev, type, daddr, saddr, len);
 #endif
 	return 0;
@@ -323,34 +324,33 @@ static int sp_rebuild_header(struct sk_buff *skb)
 #endif
 }
 
+static const struct header_ops sp_header_ops = {
+	.create		= sp_header,
+	.rebuild	= sp_rebuild_header,
+};
+
 static void sp_setup(struct net_device *dev)
 {
-	static char ax25_bcast[AX25_ADDR_LEN] =
-		{'Q'<<1,'S'<<1,'T'<<1,' '<<1,' '<<1,' '<<1,'0'<<1};
-	static char ax25_test[AX25_ADDR_LEN] =
-		{'L'<<1,'I'<<1,'N'<<1,'U'<<1,'X'<<1,' '<<1,'1'<<1};
-
 	/* Finish setting up the DEVICE info. */
 	dev->mtu		= SIXP_MTU;
 	dev->hard_start_xmit	= sp_xmit;
 	dev->open		= sp_open_dev;
 	dev->destructor		= free_netdev;
 	dev->stop		= sp_close;
-	dev->hard_header	= sp_header;
+
 	dev->get_stats	        = sp_get_stats;
 	dev->set_mac_address    = sp_set_mac_address;
 	dev->hard_header_len	= AX25_MAX_HEADER_LEN;
+	dev->header_ops 	= &sp_header_ops;
+
 	dev->addr_len		= AX25_ADDR_LEN;
 	dev->type		= ARPHRD_AX25;
 	dev->tx_queue_len	= 10;
-	dev->rebuild_header	= sp_rebuild_header;
 	dev->tx_timeout		= NULL;
 
 	/* Only activated in AX.25 mode */
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr, ax25_test, AX25_ADDR_LEN);
-
-	SET_MODULE_OWNER(dev);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr, &ax25_defaddr, AX25_ADDR_LEN);
 
 	dev->flags		= 0;
 }
@@ -762,26 +762,20 @@ static int sixpack_ioctl(struct tty_struct *tty, struct file *file,
 
 		if (copy_from_user(&addr,
 		                   (void __user *) arg, AX25_ADDR_LEN)) {
-			err = -EFAULT;
+				err = -EFAULT;
+				break;
+			}
+
+			netif_tx_lock_bh(dev);
+			memcpy(dev->dev_addr, &addr, AX25_ADDR_LEN);
+			netif_tx_unlock_bh(dev);
+
+			err = 0;
 			break;
 		}
 
-		netif_tx_lock_bh(dev);
-		memcpy(dev->dev_addr, &addr, AX25_ADDR_LEN);
-		netif_tx_unlock_bh(dev);
-
-		err = 0;
-		break;
-	}
-
-	/* Allow stty to read, but not set, the serial port */
-	case TCGETS:
-	case TCGETA:
-		err = n_tty_ioctl(tty, (struct file *) file, cmd, arg);
-		break;
-
 	default:
-		err = -ENOIOCTLCMD;
+		err = tty_mode_ioctl(tty, file, cmd, arg);
 	}
 
 	sp_put(sp);
@@ -914,7 +908,7 @@ static void decode_prio_command(struct sixpack *sp, unsigned char cmd)
 					printk(KERN_DEBUG "6pack: protocol violation\n");
 				else
 					sp->status = 0;
-				cmd &= !SIXP_RX_DCD_MASK;
+				cmd &= ~SIXP_RX_DCD_MASK;
 		}
 		sp->status = cmd & SIXP_PRIO_DATA_MASK;
 	} else { /* output watchdog char if idle */

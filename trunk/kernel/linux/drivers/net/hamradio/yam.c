@@ -50,6 +50,7 @@
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/bitops.h>
+#include <linux/random.h>
 #include <asm/io.h>
 #include <asm/system.h>
 #include <linux/interrupt.h>
@@ -64,6 +65,7 @@
 #include <linux/kernel.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <net/net_namespace.h>
 
 #include <asm/uaccess.h>
 #include <linux/init.h>
@@ -155,11 +157,6 @@ struct yam_mcs {
 static struct net_device *yam_devs[NR_PORTS];
 
 static struct yam_mcs *yam_data;
-
-static char ax25_bcast[7] =
-{'Q' << 1, 'S' << 1, 'T' << 1, ' ' << 1, ' ' << 1, ' ' << 1, '0' << 1};
-static char ax25_test[7] =
-{'L' << 1, 'I' << 1, 'N' << 1, 'U' << 1, 'X' << 1, ' ' << 1, '1' << 1};
 
 static DEFINE_TIMER(yam_timer, NULL, 0, 0);
 
@@ -571,14 +568,6 @@ static void yam_start_tx(struct net_device *dev, struct yam_port *yp)
 	ptt_on(dev);
 }
 
-static unsigned short random_seed;
-
-static inline unsigned short random_num(void)
-{
-	random_seed = 28629 * random_seed + 157;
-	return random_seed;
-}
-
 static void yam_arbitrate(struct net_device *dev)
 {
 	struct yam_port *yp = netdev_priv(dev);
@@ -605,7 +594,7 @@ static void yam_arbitrate(struct net_device *dev)
 	yp->slotcnt = yp->slot / 10;
 
 	/* is random > persist ? */
-	if ((random_num() % 256) > yp->pers)
+	if ((random32() % 256) > yp->pers)
 		return;
 
 	yam_start_tx(dev, yp);
@@ -650,7 +639,9 @@ static void yam_tx_byte(struct net_device *dev, struct yam_port *yp)
         			dev_kfree_skb_any(skb);
 				break;
 			}
-			memcpy(yp->tx_buf, skb->data + 1, yp->tx_len);
+			skb_copy_from_linear_data_offset(skb, 1,
+							 yp->tx_buf,
+							 yp->tx_len);
 			dev_kfree_skb_any(skb);
 			yp->tx_count = 0;
 			yp->tx_crcl = 0x21;
@@ -702,7 +693,7 @@ static void yam_tx_byte(struct net_device *dev, struct yam_port *yp)
 * ISR routine
 ************************************************************************************/
 
-static irqreturn_t yam_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t yam_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev;
 	struct yam_port *yp;
@@ -809,7 +800,7 @@ static int yam_info_open(struct inode *inode, struct file *file)
 	return seq_open(file, &yam_seqops);
 }
 
-static struct file_operations yam_info_fops = {
+static const struct file_operations yam_info_fops = {
 	.owner = THIS_MODULE,
 	.open = yam_info_open,
 	.read = seq_read,
@@ -1106,8 +1097,7 @@ static void yam_setup(struct net_device *dev)
 
 	skb_queue_head_init(&yp->send_queue);
 
-	dev->hard_header = ax25_hard_header;
-	dev->rebuild_header = ax25_rebuild_header;
+	dev->header_ops = &ax25_header_ops;
 
 	dev->set_mac_address = yam_set_mac_address;
 
@@ -1115,8 +1105,8 @@ static void yam_setup(struct net_device *dev)
 	dev->hard_header_len = AX25_MAX_HEADER_LEN;
 	dev->mtu = AX25_MTU;
 	dev->addr_len = AX25_ADDR_LEN;
-	memcpy(dev->broadcast, ax25_bcast, AX25_ADDR_LEN);
-	memcpy(dev->dev_addr, ax25_test, AX25_ADDR_LEN);
+	memcpy(dev->broadcast, &ax25_bcast, AX25_ADDR_LEN);
+	memcpy(dev->dev_addr, &ax25_defaddr, AX25_ADDR_LEN);
 }
 
 static int __init yam_init_driver(void)
@@ -1152,7 +1142,7 @@ static int __init yam_init_driver(void)
 	yam_timer.expires = jiffies + HZ / 100;
 	add_timer(&yam_timer);
 
-	proc_net_fops_create("yam", S_IRUGO, &yam_info_fops);
+	proc_net_fops_create(&init_net, "yam", S_IRUGO, &yam_info_fops);
 	return 0;
  error:
 	while (--i >= 0) {
@@ -1184,7 +1174,7 @@ static void __exit yam_cleanup_driver(void)
 		kfree(p);
 	}
 
-	proc_net_remove("yam");
+	proc_net_remove(&init_net, "yam");
 }
 
 /* --------------------------------------------------------------------- */
