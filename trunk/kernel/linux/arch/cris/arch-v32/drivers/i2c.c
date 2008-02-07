@@ -275,7 +275,7 @@ i2c_getack(void)
 		ack = 0;
 	i2c_delay(CLOCK_HIGH_TIME/2);
 	if(!ack){
-		if(!i2c_getbit()) /* receiver pulld SDA low */
+		if(!i2c_getbit()) /* receiver pulled SDA low */
 			ack = 1;
 		i2c_delay(CLOCK_HIGH_TIME/2);
 	}
@@ -573,11 +573,11 @@ i2c_ioctl(struct inode *inode, struct file *file,
 	return 0;
 }
 
-static struct file_operations i2c_fops = {
-	owner:    THIS_MODULE,
-	ioctl:    i2c_ioctl,
-	open:     i2c_open,
-	release:  i2c_release,
+static const struct file_operations i2c_fops = {
+	.owner =    THIS_MODULE,
+	.ioctl =    i2c_ioctl,
+	.open =     i2c_open,
+	.release =  i2c_release,
 };
 
 int __init

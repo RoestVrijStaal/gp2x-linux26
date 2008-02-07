@@ -297,8 +297,10 @@ gpio_poll(struct file *file,
 		data = *R_PORT_PB_DATA;
 	else if (priv->minor == GPIO_MINOR_G)
 		data = *R_PORT_G_DATA;
-	else
+	else {
+		spin_unlock(&gpio_lock);
 		return 0;
+	}
 	
 	if ((data & priv->highalarm) ||
 	    (~data & priv->lowalarm)) {
@@ -381,18 +383,21 @@ static ssize_t gpio_write(struct file * file, const char * buf, size_t count,
 
 	ssize_t retval = count;
 	if (priv->minor !=GPIO_MINOR_A && priv->minor != GPIO_MINOR_B) {
-		return -EFAULT;
+		retval = -EFAULT;
+		goto out;
 	}
     
 	if (!access_ok(VERIFY_READ, buf, count)) {
-		return -EFAULT;
+		retval = -EFAULT;
+		goto out;
 	}
 	clk_mask = priv->clk_mask;
 	data_mask = priv->data_mask;
 	/* It must have been configured using the IO_CFG_WRITE_MODE */
 	/* Perhaps a better error code? */
 	if (clk_mask == 0 || data_mask == 0) {
-		return -EPERM;
+		retval = -EPERM;
+		goto out;
 	}
 	write_msb = priv->write_msb;
 	D(printk("gpio_write: %lu to data 0x%02X clk 0x%02X msb: %i\n",count, data_mask, clk_mask, write_msb));
@@ -425,6 +430,7 @@ static ssize_t gpio_write(struct file * file, const char * buf, size_t count,
 			}
 		}
 	}
+out:
 	spin_unlock(&gpio_lock);
 	return retval;
 }
@@ -440,7 +446,7 @@ gpio_open(struct inode *inode, struct file *filp)
 	if (p > GPIO_MINOR_LAST)
 		return -EINVAL;
 
-	priv = (struct gpio_private *)kmalloc(sizeof(struct gpio_private), 
+	priv = kmalloc(sizeof(struct gpio_private),
 					      GFP_KERNEL);
 
 	if (!priv)
@@ -506,6 +512,7 @@ gpio_release(struct inode *inode, struct file *filp)
 	while (p) {
 		if (p->highalarm | p->lowalarm) {
 			gpio_some_alarms = 1;
+			spin_unlock(&gpio_lock);
 			return 0;
 		}
 		p = p->next;
@@ -838,7 +845,7 @@ gpio_leds_ioctl(unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-struct file_operations gpio_fops = {
+const struct file_operations gpio_fops = {
 	.owner       = THIS_MODULE,
 	.poll        = gpio_poll,
 	.ioctl       = gpio_ioctl,

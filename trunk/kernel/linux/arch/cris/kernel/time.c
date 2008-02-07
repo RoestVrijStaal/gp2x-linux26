@@ -37,7 +37,6 @@ int have_rtc;  /* used to remember if we have an RTC or not */;
 
 #define TICK_SIZE tick
 
-extern unsigned long wall_jiffies;
 extern unsigned long loops_per_jiffy; /* init/main.c */
 unsigned long loops_per_usec;
 
@@ -56,13 +55,7 @@ void do_gettimeofday(struct timeval *tv)
 	unsigned long flags;
 	signed long usec, sec;
 	local_irq_save(flags);
-	local_irq_disable();
 	usec = do_gettimeoffset();
-	{
-		unsigned long lost = jiffies - wall_jiffies;
-		if (lost)
-			usec += lost * (1000000 / HZ);
-	}
 
         /*
 	 * If time_adjust is negative then NTP is slowing the clock
@@ -103,7 +96,6 @@ int do_settimeofday(struct timespec *tv)
 	 * made, and then undo it!
 	 */
 	nsec -= do_gettimeoffset() * NSEC_PER_USEC;
-	nsec -= (jiffies - wall_jiffies) * TICK_NSEC;
 
 	wtm_sec  = wall_to_monotonic.tv_sec + (xtime.tv_sec - sec);
 	wtm_nsec = wall_to_monotonic.tv_nsec + (xtime.tv_nsec - nsec);
@@ -179,10 +171,6 @@ get_cmos_time(void)
 	mon = CMOS_READ(RTC_MONTH);
 	year = CMOS_READ(RTC_YEAR);
 
-	printk(KERN_DEBUG
-	       "rtc: sec 0x%x min 0x%x hour 0x%x day 0x%x mon 0x%x year 0x%x\n",
-	       sec, min, hour, day, mon, year);
-
 	BCD_TO_BIN(sec);
 	BCD_TO_BIN(min);
 	BCD_TO_BIN(hour);
@@ -215,21 +203,13 @@ void
 cris_do_profile(struct pt_regs* regs)
 {
 
-#if CONFIG_SYSTEM_PROFILER
+#ifdef CONFIG_SYSTEM_PROFILER
         cris_profile_sample(regs);
 #endif
 
-#if CONFIG_PROFILING
-        profile_tick(CPU_PROFILING, regs);
+#ifdef CONFIG_PROFILING
+        profile_tick(CPU_PROFILING);
 #endif
-}
-
-/*
- * Scheduler clock - returns current time in nanosec units.
- */
-unsigned long long sched_clock(void)
-{
-	return (unsigned long long)jiffies * (1000000000 / HZ);
 }
 
 static int

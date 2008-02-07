@@ -33,7 +33,7 @@
 *!
 *! Revision 1.2  2002/11/19 14:35:24  starvik
 *! Changes from linux 2.4
-*! Changed struct initializer syntax to the currently prefered notation
+*! Changed struct initializer syntax to the currently preferred notation
 *!
 *! Revision 1.1  2001/12/17 13:59:27  bjornw
 *! Initial revision
@@ -959,7 +959,7 @@ stub_is_stopped(int sigval)
 
 	/* Send register contents. We probably only need to send the
 	 * PC, frame pointer and stack pointer here. Other registers will be
-	 * explicitely asked for. But for now, send all. 
+	 * explicitly asked for. But for now, send all.
 	 */
 	
 	for (regno = R0; regno <= USP; regno++) {

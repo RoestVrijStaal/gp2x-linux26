@@ -30,8 +30,8 @@ do {						\
  * The TLB can host up to 256 different mm contexts at the same time. The running
  * context is found in the PID register. Each TLB entry contains a page_id that
  * has to match the PID register to give a hit. page_id_map keeps track of which
- * mm's is assigned to which page_id's, making sure it's known when to
- * invalidate TLB entries.
+ * mm is assigned to which page_id, making sure it's known when to invalidate TLB
+ * entries.
  *
  * The last page_id is never running, it is used as an invalid page_id so that
  * it's possible to make TLB entries that will nerver match.
@@ -54,8 +54,7 @@ __flush_tlb_all(void)
 	 * Mask with 0xf so similar TLB entries aren't written in the same 4-way
 	 * entry group.
 	 */
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 
 	for (mmu = 1; mmu <= 2; mmu++) {
 		SUPP_BANK_SEL(mmu); /* Select the MMU */
@@ -92,8 +91,7 @@ __flush_tlb_mm(struct mm_struct *mm)
 		return;
 
 	/* Mark the TLB entries that match the page_id as invalid. */
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 
 	for (mmu = 1; mmu <= 2; mmu++) {
 		SUPP_BANK_SEL(mmu);
@@ -140,8 +138,7 @@ __flush_tlb_page(struct vm_area_struct *vma, unsigned long addr)
 	 * Invalidate those TLB entries that match both the mm context and the
 	 * requested virtual address.
 	 */
-	local_save_flags(flags);
-	local_irq_disable();
+	local_irq_save(flags);
 
 	for (mmu = 1; mmu <= 2; mmu++) {
 		SUPP_BANK_SEL(mmu);
@@ -191,7 +188,7 @@ switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	spin_unlock(&mmu_context_lock);
 
 	/*
-	 * Remember the pgd for the fault handlers. Keep a seperate copy of it
+	 * Remember the pgd for the fault handlers. Keep a separate copy of it
 	 * because current and active_mm might be invalid at points where
 	 * there's still a need to derefer the pgd.
 	 */

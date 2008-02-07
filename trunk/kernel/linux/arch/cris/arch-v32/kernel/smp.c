@@ -28,6 +28,7 @@ spinlock_t cris_atomic_locks[] = { [0 ... LOCK_COUNT - 1] = SPIN_LOCK_UNLOCKED};
 
 /* CPU masks */
 cpumask_t cpu_online_map = CPU_MASK_NONE;
+EXPORT_SYMBOL(cpu_online_map);
 cpumask_t phys_cpu_present_map = CPU_MASK_NONE;
 EXPORT_SYMBOL(phys_cpu_present_map);
 
@@ -62,8 +63,12 @@ static unsigned long irq_regs[NR_CPUS] =
 
 static irqreturn_t crisv32_ipi_interrupt(int irq, void *dev_id, struct pt_regs *regs);
 static int send_ipi(int vector, int wait, cpumask_t cpu_mask);
-static struct irqaction irq_ipi  = { crisv32_ipi_interrupt, IRQF_DISABLED,
-                                     CPU_MASK_NONE, "ipi", NULL, NULL};
+static struct irqaction irq_ipi  = {
+	.handler = crisv32_ipi_interrupt,
+	.flags = IRQF_DISABLED,
+	.mask = CPU_MASK_NONE,
+	.name = "ipi",
+};
 
 extern void cris_mmu_init(void);
 extern void cris_timer_init(void);
@@ -137,7 +142,7 @@ smp_boot_one_cpu(int cpuid)
 	return -1;
 }
 
-/* Secondary CPUs starts uing C here. Here we need to setup CPU
+/* Secondary CPUs starts using C here. Here we need to setup CPU
  * specific stuff such as the local timer and the MMU. */
 void __init smp_callin(void)
 {
@@ -194,7 +199,7 @@ int setup_profiling_timer(unsigned int multiplier)
  */
 unsigned long cache_decay_ticks = 1;
 
-int __devinit __cpu_up(unsigned int cpu)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	smp_boot_one_cpu(cpu);
 	return cpu_online(cpu) ? 0 : -ENOSYS;

@@ -2,6 +2,7 @@ config ETRAX_ETHERNET
 	bool "Ethernet support"
 	depends on ETRAX_ARCH_V10
 	select NET_ETHERNET
+	select MII
 	help
 	  This option enables the ETRAX 100LX built-in 10/100Mbit Ethernet
 	  controller.
@@ -541,44 +542,6 @@ config ETRAX_RS485_DISABLE_RECEIVER
 	  loopback.  Not all products are able to do this in software only.
 	  Axis 2400/2401 must disable receiver.
 
-config ETRAX_IDE
-	bool "ATA/IDE support"
-	select IDE
-	select BLK_DEV_IDE
-	select BLK_DEV_IDEDISK
-	select BLK_DEV_IDECD
-	select BLK_DEV_IDEDMA
-	help
-	  Enable this to get support for ATA/IDE.
-	  You can't use paralell ports or SCSI ports
-	  at the same time.
-
-
-config ETRAX_IDE_DELAY
-	int "Delay for drives to regain consciousness"
-	depends on ETRAX_IDE
-	default 15
-	help
-	  Number of seconds to wait for IDE drives to spin up after an IDE
-	  reset.
-choice
-	prompt "IDE reset pin"
-	depends on ETRAX_IDE
-	default ETRAX_IDE_PB7_RESET
-
-config ETRAX_IDE_PB7_RESET
-	bool "Port_PB_Bit_7"
-	help
-	  IDE reset on pin 7 on port B
-
-config ETRAX_IDE_G27_RESET
-	bool "Port_G_Bit_27"
-	help
-	  IDE reset on pin 27 on port G
-
-endchoice
-
-
 config ETRAX_USB_HOST
 	bool "USB host"
 	select USB
@@ -604,8 +567,6 @@ config ETRAX_AXISFLASHMAP
 	select MTD
 	select MTD_CFI
 	select MTD_CFI_AMDSTD
-	select MTD_OBSOLETE_CHIPS
-	select MTD_AMDSTD
 	select MTD_CHAR
 	select MTD_BLOCK
 	select MTD_PARTITIONS
@@ -744,7 +705,7 @@ config ETRAX_PA_CHANGEABLE_BITS
 	default "FF"
 	help
 	  This is a bitmask with information of what bits in PA that a user
-	  can change change the value on using ioctl's.
+	  can change the value on using ioctl's.
 	  Bit set = changeable.
 	  You probably want 00 here.
 
@@ -839,7 +800,7 @@ config ETRAX_DS1302_TRICKLE_CHARGE
 	default "0"
 	help
 	  This controls the initial value of the trickle charge register.
-	  0 = disabled (use this if you are unsure or have a non rechargable battery)
+	  0 = disabled (use this if you are unsure or have a non rechargeable battery)
 	  Otherwise the following values can be OR:ed together to control the
 	  charge current:
 	  1 = 2kohm, 2 = 4kohm, 3 = 4kohm
