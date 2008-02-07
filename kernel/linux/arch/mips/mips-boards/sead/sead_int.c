@@ -21,7 +21,7 @@
  * Sead board.
  */
 #include <linux/init.h>
-#include <linux/irq.h>
+#include <linux/interrupt.h>
 
 #include <asm/irq_cpu.h>
 #include <asm/mipsregs.h>
@@ -31,7 +31,7 @@
 
 static inline int clz(unsigned long x)
 {
-	__asm__ (
+	__asm__(
 	"	.set	push					\n"
 	"	.set	mips32					\n"
 	"	clz	%0, %1					\n"
@@ -98,7 +98,7 @@ static inline unsigned int irq_ffs(unsigned int pending)
  * then we just return, if multiple IRQs are pending then we will just take
  * another exception, big deal.
  */
-asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
+asmlinkage void plat_irq_dispatch(void)
 {
 	unsigned int pending = read_c0_cause() & read_c0_status() & ST0_IM;
 	int irq;
@@ -106,12 +106,12 @@ asmlinkage void plat_irq_dispatch(struct pt_regs *regs)
 	irq = irq_ffs(pending);
 
 	if (irq >= 0)
-		do_IRQ(MIPSCPU_INT_BASE + irq, regs);
+		do_IRQ(MIPS_CPU_IRQ_BASE + irq);
 	else
-		spurious_interrupt(regs);
+		spurious_interrupt();
 }
 
 void __init arch_init_irq(void)
 {
-	mips_cpu_irq_init(MIPSCPU_INT_BASE);
+	mips_cpu_irq_init();
 }

@@ -184,7 +184,7 @@ static dbdev_tab_t dbdev_tab[] = {
 static chan_tab_t *chan_tab_ptr[NUM_DBDMA_CHANS];
 
 static dbdev_tab_t *
-find_dbdev_id (u32 id)
+find_dbdev_id(u32 id)
 {
 	int i;
 	dbdev_tab_t *p;
@@ -213,7 +213,7 @@ au1xxx_ddma_add_device(dbdev_tab_t *dev)
 	if ( NULL != p )
 	{
 		memcpy(p, dev, sizeof(dbdev_tab_t));
-		p->dev_id = DSCR_DEV2CUSTOM_ID(new_id,dev->dev_id);
+		p->dev_id = DSCR_DEV2CUSTOM_ID(new_id, dev->dev_id);
 		ret = p->dev_id;
 		new_id++;
 #if 0
@@ -230,7 +230,7 @@ EXPORT_SYMBOL(au1xxx_ddma_add_device);
 */
 u32
 au1xxx_dbdma_chan_alloc(u32 srcid, u32 destid,
-       void (*callback)(int, void *, struct pt_regs *), void *callparam)
+       void (*callback)(int, void *), void *callparam)
 {
 	unsigned long   flags;
 	u32		used, chan, rv;
@@ -248,8 +248,10 @@ au1xxx_dbdma_chan_alloc(u32 srcid, u32 destid,
 		au1xxx_dbdma_init();
 	dbdma_initialized = 1;
 
-	if ((stp = find_dbdev_id(srcid)) == NULL) return 0;
-	if ((dtp = find_dbdev_id(destid)) == NULL) return 0;
+	if ((stp = find_dbdev_id(srcid)) == NULL)
+		return 0;
+	if ((dtp = find_dbdev_id(destid)) == NULL)
+		return 0;
 
 	used = 0;
 	rv = 0;
@@ -669,7 +671,7 @@ _au1xxx_dbdma_put_dest(u32 chanid, void *buf, int nbytes, u32 flags)
 	 * parts. If it is fixedin the future, these dma_cache_inv will just
 	 * be nothing more than empty macros. See io.h.
 	 * */
-	dma_cache_inv((unsigned long)buf,nbytes);
+	dma_cache_inv((unsigned long)buf, nbytes);
 	dp->dscr_cmd0 |= DSCR_CMD0_V;	/* Let it rip */
 	au_sync();
 	dma_cache_wback_inv((unsigned long)dp, sizeof(dp));
@@ -847,7 +849,7 @@ au1xxx_dbdma_chan_free(u32 chanid)
 EXPORT_SYMBOL(au1xxx_dbdma_chan_free);
 
 static irqreturn_t
-dbdma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+dbdma_interrupt(int irq, void *dev_id)
 {
 	u32 intstat;
 	u32 chan_index;
@@ -857,7 +859,7 @@ dbdma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 
 	intstat = dbdma_gptr->ddma_intstat;
 	au_sync();
-	chan_index = au_ffs(intstat) - 1;
+	chan_index = __ffs(intstat);
 
 	ctp = chan_tab_ptr[chan_index];
 	cp = ctp->chan_ptr;
@@ -869,7 +871,7 @@ dbdma_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	au_sync();
 
 	if (ctp->chan_callback)
-		(ctp->chan_callback)(irq, ctp->chan_callparam, regs);
+		(ctp->chan_callback)(irq, ctp->chan_callparam);
 
 	ctp->cur_ptr = phys_to_virt(DSCR_GET_NXTPTR(dp->dscr_nxtptr));
 	return IRQ_RETVAL(1);

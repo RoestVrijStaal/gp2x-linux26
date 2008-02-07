@@ -92,7 +92,6 @@ struct elf_prpsinfo32
 	char	pr_psargs[ELF_PRARGSZ];	/* initial part of arg list */
 };
 
-#define elf_addr_t	u32
 #define elf_caddr_t	u32
 #define init_elf_binfmt init_elf32_binfmt
 
@@ -111,7 +110,7 @@ jiffies_to_compat_timeval(unsigned long jiffies, struct compat_timeval *value)
 }
 
 #undef ELF_CORE_COPY_REGS
-#define ELF_CORE_COPY_REGS(_dest,_regs) elf32_core_copy_regs(_dest,_regs);
+#define ELF_CORE_COPY_REGS(_dest, _regs) elf32_core_copy_regs(_dest, _regs);
 
 void elf32_core_copy_regs(elf_gregset_t grp, struct pt_regs *regs)
 {

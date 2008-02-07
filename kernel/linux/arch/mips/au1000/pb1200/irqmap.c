@@ -36,8 +36,8 @@
 #include <linux/slab.h>
 #include <linux/random.h>
 #include <linux/delay.h>
+#include <linux/bitops.h>
 
-#include <asm/bitops.h>
 #include <asm/bootinfo.h>
 #include <asm/io.h>
 #include <asm/mipsregs.h>
@@ -54,7 +54,7 @@
 #define PB1200_INT_END DB1200_INT_END
 #endif
 
-au1xxx_irq_map_t __initdata au1xxx_irq_map[] = {
+struct au1xxx_irqmap __initdata au1xxx_irq_map[] = {
 	{ AU1000_GPIO_7, INTC_INT_LOW_LEVEL, 0 }, // This is exteranl interrupt cascade
 };
 
@@ -65,7 +65,7 @@ int __initdata au1xxx_nr_irqs = ARRAY_SIZE(au1xxx_irq_map);
  */
 static volatile int pb1200_cascade_en=0;
 
-irqreturn_t pb1200_cascade_handler( int irq, void *dev_id, struct pt_regs *regs)
+irqreturn_t pb1200_cascade_handler( int irq, void *dev_id)
 {
 	unsigned short bisr = bcsr->int_status;
 	int extirq_nr = 0;
@@ -74,10 +74,11 @@ irqreturn_t pb1200_cascade_handler( int irq, void *dev_id, struct pt_regs *regs)
 	bcsr->int_status = bisr;
 	for( ; bisr; bisr &= (bisr-1) )
 	{
-		extirq_nr = (PB1200_INT_BEGIN-1) + au_ffs(bisr);
+		extirq_nr = PB1200_INT_BEGIN + __ffs(bisr);
 		/* Ack and dispatch IRQ */
-		do_IRQ(extirq_nr,regs);
+		do_IRQ(extirq_nr);
 	}
+
 	return IRQ_RETVAL(1);
 }
 
@@ -93,16 +94,62 @@ inline void pb1200_disable_irq(unsigned int irq_nr)
 	bcsr->intclr = 1<<(irq_nr - PB1200_INT_BEGIN);
 }
 
-static unsigned int pb1200_startup_irq( unsigned int irq_nr )
+static unsigned int pb1200_setup_cascade(void)
 {
-	if (++pb1200_cascade_en == 1)
-	{
-		request_irq(AU1000_GPIO_7, &pb1200_cascade_handler,
-			0, "Pb1200 Cascade", (void *)&pb1200_cascade_handler );
+	int err;
+
+	err = request_irq(AU1000_GPIO_7, &pb1200_cascade_handler,
+			  0, "Pb1200 Cascade", &pb1200_cascade_handler);
+	if (err)
+		return err;
+
+	return 0;
+}
+
+static unsigned int pb1200_startup_irq(unsigned int irq)
+{
+	if (++pb1200_cascade_en == 1) {
+		int res;
+
+		res = pb1200_setup_cascade();
+		if (res)
+			return res;
+	}
+
+	pb1200_enable_irq(irq);
+
+	return 0;
+}
+
+static void pb1200_shutdown_irq(unsigned int irq)
+{
+	pb1200_disable_irq(irq);
+	if (--pb1200_cascade_en == 0)
+		free_irq(AU1000_GPIO_7, &pb1200_cascade_handler);
+}
+
+static struct irq_chip external_irq_type = {
 #ifdef CONFIG_MIPS_PB1200
-    /* We have a problem with CPLD rev3. Enable a workaround */
-	if( ((bcsr->whoami & BCSR_WHOAMI_CPLD)>>4) <= 3)
-	{
+	.name = "Pb1200 Ext",
+#endif
+#ifdef CONFIG_MIPS_DB1200
+	.name = "Db1200 Ext",
+#endif
+	.startup  = pb1200_startup_irq,
+	.shutdown = pb1200_shutdown_irq,
+	.ack      = pb1200_disable_irq,
+	.mask     = pb1200_disable_irq,
+	.mask_ack = pb1200_disable_irq,
+	.unmask   = pb1200_enable_irq,
+};
+
+void _board_init_irq(void)
+{
+	unsigned int irq;
+
+#ifdef CONFIG_MIPS_PB1200
+	/* We have a problem with CPLD rev3. Enable a workaround */
+	if (((bcsr->whoami & BCSR_WHOAMI_CPLD) >> 4) <= 3) {
 		printk("\nWARNING!!!\n");
 		printk("\nWARNING!!!\n");
 		printk("\nWARNING!!!\n");
@@ -118,64 +165,18 @@ static unsigned int pb1200_startup_irq( unsigned int irq_nr )
 		printk("\nWARNING!!!\n");
 		printk("\nWARNING!!!\n");
 		printk("\nWARNING!!!\n");
-		while(1);
+		panic("Game over.  Your score is 0.");
 	}
 #endif
-	}
-	pb1200_enable_irq(irq_nr);
-	return 0;
-}
 
-static void pb1200_shutdown_irq( unsigned int irq_nr )
-{
-	pb1200_disable_irq(irq_nr);
-	if (--pb1200_cascade_en == 0)
-	{
-		free_irq(AU1000_GPIO_7,&pb1200_cascade_handler );
-	}
-	return;
-}
-
-static inline void pb1200_mask_and_ack_irq(unsigned int irq_nr)
-{
-	pb1200_disable_irq( irq_nr );
-}
-
-static void pb1200_end_irq(unsigned int irq_nr)
-{
-	if (!(irq_desc[irq_nr].status & (IRQ_DISABLED|IRQ_INPROGRESS))) {
-		pb1200_enable_irq(irq_nr);
-	}
-}
-
-static struct irq_chip external_irq_type =
-{
-#ifdef CONFIG_MIPS_PB1200
-	"Pb1200 Ext",
-#endif
-#ifdef CONFIG_MIPS_DB1200
-	"Db1200 Ext",
-#endif
-	pb1200_startup_irq,
-	pb1200_shutdown_irq,
-	pb1200_enable_irq,
-	pb1200_disable_irq,
-	pb1200_mask_and_ack_irq,
-	pb1200_end_irq,
-	NULL
-};
-
-void _board_init_irq(void)
-{
-	int irq_nr;
-
-	for (irq_nr = PB1200_INT_BEGIN; irq_nr <= PB1200_INT_END; irq_nr++)
-	{
-		irq_desc[irq_nr].chip = &external_irq_type;
-		pb1200_disable_irq(irq_nr);
+	for (irq = PB1200_INT_BEGIN; irq <= PB1200_INT_END; irq++) {
+		set_irq_chip_and_handler(irq, &external_irq_type,
+					 handle_level_irq);
+		pb1200_disable_irq(irq);
 	}
 
-	/* GPIO_7 can not be hooked here, so it is hooked upon first
-	request of any source attached to the cascade */
+	/*
+	 * GPIO_7 can not be hooked here, so it is hooked upon first
+	 * request of any source attached to the cascade
+	 */
 }
-

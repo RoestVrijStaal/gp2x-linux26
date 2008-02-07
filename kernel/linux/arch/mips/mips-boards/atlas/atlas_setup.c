@@ -22,6 +22,7 @@
 #include <linux/tty.h>
 #include <linux/serial.h>
 #include <linux/serial_core.h>
+#include <linux/serial_8250.h>
 
 #include <asm/cpu.h>
 #include <asm/bootinfo.h>
@@ -34,8 +35,6 @@
 #include <asm/traps.h>
 
 extern void mips_reboot_setup(void);
-extern void mips_time_init(void);
-extern unsigned long mips_rtc_get_time(void);
 
 #ifdef CONFIG_KGDB
 extern void kgdb_config(void);
@@ -48,21 +47,20 @@ const char *get_system_type(void)
 	return "MIPS Atlas";
 }
 
+const char display_string[] = "        LINUX ON ATLAS       ";
+
 void __init plat_mem_setup(void)
 {
 	mips_pcibios_init();
 
 	ioport_resource.end = 0x7fffffff;
 
-	serial_init ();
+	serial_init();
 
 #ifdef CONFIG_KGDB
 	kgdb_config();
 #endif
 	mips_reboot_setup();
-
-	board_time_init = mips_time_init;
-	rtc_mips_get_time = mips_rtc_get_time;
 }
 
 static void __init serial_init(void)
@@ -77,7 +75,7 @@ static void __init serial_init(void)
 #else
 	s.iobase = ATLAS_UART_REGS_BASE+3;
 #endif
-	s.irq = ATLASINT_UART;
+	s.irq = ATLAS_INT_UART;
 	s.uartclk = ATLAS_BASE_BAUD * 16;
 	s.flags = UPF_BOOT_AUTOCONF | UPF_SKIP_TEST | UPF_AUTO_IRQ;
 	s.iotype = UPIO_PORT;

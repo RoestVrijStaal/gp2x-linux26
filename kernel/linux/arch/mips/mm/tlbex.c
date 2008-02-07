@@ -35,26 +35,41 @@
 #include <asm/smp.h>
 #include <asm/war.h>
 
-static __init int __attribute__((unused)) r45k_bvahwbug(void)
+static inline int r45k_bvahwbug(void)
 {
 	/* XXX: We should probe for the presence of this bug, but we don't. */
 	return 0;
 }
 
-static __init int __attribute__((unused)) r4k_250MHZhwbug(void)
+static inline int r4k_250MHZhwbug(void)
 {
 	/* XXX: We should probe for the presence of this bug, but we don't. */
 	return 0;
 }
 
-static __init int __attribute__((unused)) bcm1250_m3_war(void)
+static inline int __maybe_unused bcm1250_m3_war(void)
 {
 	return BCM1250_M3_WAR;
 }
 
-static __init int __attribute__((unused)) r10000_llsc_war(void)
+static inline int __maybe_unused r10000_llsc_war(void)
 {
 	return R10000_LLSC_WAR;
+}
+
+/*
+ * Found by experiment: At least some revisions of the 4kc throw under
+ * some circumstances a machine check exception, triggered by invalid
+ * values in the index register.  Delaying the tlbp instruction until
+ * after the next branch,  plus adding an additional nop in front of
+ * tlbwi/tlbwr avoids the invalid index register values. Nobody knows
+ * why; it's not an issue caused by the core RTL.
+ *
+ */
+static __init int __attribute__((unused)) m4kc_tlbp_war(void)
+{
+	return (current_cpu_data.processor_id & 0xffff00) ==
+	       (PRID_COMP_MIPS | PRID_IMP_4KC);
 }
 
 /*
@@ -78,7 +93,7 @@ enum fields
 	SET = 0x200
 };
 
-#define OP_MASK		0x2f
+#define OP_MASK		0x3f
 #define OP_SH		26
 #define RS_MASK		0x1f
 #define RS_SH		21
@@ -92,7 +107,7 @@ enum fields
 #define IMM_SH		0
 #define JIMM_MASK	0x3ffffff
 #define JIMM_SH		0
-#define FUNC_MASK	0x2f
+#define FUNC_MASK	0x3f
 #define FUNC_SH		0
 #define SET_MASK	0x7
 #define SET_SH		0
@@ -102,7 +117,7 @@ enum opcode {
 	insn_addu, insn_addiu, insn_and, insn_andi, insn_beq,
 	insn_beql, insn_bgez, insn_bgezl, insn_bltz, insn_bltzl,
 	insn_bne, insn_daddu, insn_daddiu, insn_dmfc0, insn_dmtc0,
-	insn_dsll, insn_dsll32, insn_dsra, insn_dsrl,
+	insn_dsll, insn_dsll32, insn_dsra, insn_dsrl, insn_dsrl32,
 	insn_dsubu, insn_eret, insn_j, insn_jal, insn_jr, insn_ld,
 	insn_ll, insn_lld, insn_lui, insn_lw, insn_mfc0, insn_mtc0,
 	insn_ori, insn_rfe, insn_sc, insn_scd, insn_sd, insn_sll,
@@ -126,52 +141,53 @@ struct insn {
 	 | (f) << FUNC_SH)
 
 static __initdata struct insn insn_table[] = {
-	{ insn_addiu, M(addiu_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_addu, M(spec_op,0,0,0,0,addu_op), RS | RT | RD },
-	{ insn_and, M(spec_op,0,0,0,0,and_op), RS | RT | RD },
-	{ insn_andi, M(andi_op,0,0,0,0,0), RS | RT | UIMM },
-	{ insn_beq, M(beq_op,0,0,0,0,0), RS | RT | BIMM },
-	{ insn_beql, M(beql_op,0,0,0,0,0), RS | RT | BIMM },
-	{ insn_bgez, M(bcond_op,0,bgez_op,0,0,0), RS | BIMM },
-	{ insn_bgezl, M(bcond_op,0,bgezl_op,0,0,0), RS | BIMM },
-	{ insn_bltz, M(bcond_op,0,bltz_op,0,0,0), RS | BIMM },
-	{ insn_bltzl, M(bcond_op,0,bltzl_op,0,0,0), RS | BIMM },
-	{ insn_bne, M(bne_op,0,0,0,0,0), RS | RT | BIMM },
-	{ insn_daddiu, M(daddiu_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_daddu, M(spec_op,0,0,0,0,daddu_op), RS | RT | RD },
-	{ insn_dmfc0, M(cop0_op,dmfc_op,0,0,0,0), RT | RD | SET},
-	{ insn_dmtc0, M(cop0_op,dmtc_op,0,0,0,0), RT | RD | SET},
-	{ insn_dsll, M(spec_op,0,0,0,0,dsll_op), RT | RD | RE },
-	{ insn_dsll32, M(spec_op,0,0,0,0,dsll32_op), RT | RD | RE },
-	{ insn_dsra, M(spec_op,0,0,0,0,dsra_op), RT | RD | RE },
-	{ insn_dsrl, M(spec_op,0,0,0,0,dsrl_op), RT | RD | RE },
-	{ insn_dsubu, M(spec_op,0,0,0,0,dsubu_op), RS | RT | RD },
-	{ insn_eret, M(cop0_op,cop_op,0,0,0,eret_op), 0 },
-	{ insn_j, M(j_op,0,0,0,0,0), JIMM },
-	{ insn_jal, M(jal_op,0,0,0,0,0), JIMM },
-	{ insn_jr, M(spec_op,0,0,0,0,jr_op), RS },
-	{ insn_ld, M(ld_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_ll, M(ll_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_lld, M(lld_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_lui, M(lui_op,0,0,0,0,0), RT | SIMM },
-	{ insn_lw, M(lw_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_mfc0, M(cop0_op,mfc_op,0,0,0,0), RT | RD | SET},
-	{ insn_mtc0, M(cop0_op,mtc_op,0,0,0,0), RT | RD | SET},
-	{ insn_ori, M(ori_op,0,0,0,0,0), RS | RT | UIMM },
-	{ insn_rfe, M(cop0_op,cop_op,0,0,0,rfe_op), 0 },
-	{ insn_sc, M(sc_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_scd, M(scd_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_sd, M(sd_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_sll, M(spec_op,0,0,0,0,sll_op), RT | RD | RE },
-	{ insn_sra, M(spec_op,0,0,0,0,sra_op), RT | RD | RE },
-	{ insn_srl, M(spec_op,0,0,0,0,srl_op), RT | RD | RE },
-	{ insn_subu, M(spec_op,0,0,0,0,subu_op), RS | RT | RD },
-	{ insn_sw, M(sw_op,0,0,0,0,0), RS | RT | SIMM },
-	{ insn_tlbp, M(cop0_op,cop_op,0,0,0,tlbp_op), 0 },
-	{ insn_tlbwi, M(cop0_op,cop_op,0,0,0,tlbwi_op), 0 },
-	{ insn_tlbwr, M(cop0_op,cop_op,0,0,0,tlbwr_op), 0 },
-	{ insn_xor, M(spec_op,0,0,0,0,xor_op), RS | RT | RD },
-	{ insn_xori, M(xori_op,0,0,0,0,0), RS | RT | UIMM },
+	{ insn_addiu, M(addiu_op, 0, 0, 0, 0, 0), RS | RT | SIMM },
+	{ insn_addu, M(spec_op, 0, 0, 0, 0, addu_op), RS | RT | RD },
+	{ insn_and, M(spec_op, 0, 0, 0, 0, and_op), RS | RT | RD },
+	{ insn_andi, M(andi_op, 0, 0, 0, 0, 0), RS | RT | UIMM },
+	{ insn_beq, M(beq_op, 0, 0, 0, 0, 0), RS | RT | BIMM },
+	{ insn_beql, M(beql_op, 0, 0, 0, 0, 0), RS | RT | BIMM },
+	{ insn_bgez, M(bcond_op, 0, bgez_op, 0, 0, 0), RS | BIMM },
+	{ insn_bgezl, M(bcond_op, 0, bgezl_op, 0, 0, 0), RS | BIMM },
+	{ insn_bltz, M(bcond_op, 0, bltz_op, 0, 0, 0), RS | BIMM },
+	{ insn_bltzl, M(bcond_op, 0, bltzl_op, 0, 0, 0), RS | BIMM },
+	{ insn_bne, M(bne_op, 0, 0, 0, 0, 0), RS | RT | BIMM },
+	{ insn_daddiu, M(daddiu_op, 0, 0, 0, 0, 0), RS | RT | SIMM },
+	{ insn_daddu, M(spec_op, 0, 0, 0, 0, daddu_op), RS | RT | RD },
+	{ insn_dmfc0, M(cop0_op, dmfc_op, 0, 0, 0, 0), RT | RD | SET},
+	{ insn_dmtc0, M(cop0_op, dmtc_op, 0, 0, 0, 0), RT | RD | SET},
+	{ insn_dsll, M(spec_op, 0, 0, 0, 0, dsll_op), RT | RD | RE },
+	{ insn_dsll32, M(spec_op, 0, 0, 0, 0, dsll32_op), RT | RD | RE },
+	{ insn_dsra, M(spec_op, 0, 0, 0, 0, dsra_op), RT | RD | RE },
+	{ insn_dsrl, M(spec_op, 0, 0, 0, 0, dsrl_op), RT | RD | RE },
+	{ insn_dsrl32, M(spec_op, 0, 0, 0, 0, dsrl32_op), RT | RD | RE },
+	{ insn_dsubu, M(spec_op, 0, 0, 0, 0, dsubu_op), RS | RT | RD },
+	{ insn_eret,  M(cop0_op, cop_op, 0, 0, 0, eret_op),  0 },
+	{ insn_j,  M(j_op, 0, 0, 0, 0, 0),  JIMM },
+	{ insn_jal,  M(jal_op, 0, 0, 0, 0, 0),  JIMM },
+	{ insn_jr,  M(spec_op, 0, 0, 0, 0, jr_op),  RS },
+	{ insn_ld,  M(ld_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_ll,  M(ll_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_lld,  M(lld_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_lui,  M(lui_op, 0, 0, 0, 0, 0),  RT | SIMM },
+	{ insn_lw,  M(lw_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_mfc0,  M(cop0_op, mfc_op, 0, 0, 0, 0),  RT | RD | SET},
+	{ insn_mtc0,  M(cop0_op, mtc_op, 0, 0, 0, 0),  RT | RD | SET},
+	{ insn_ori,  M(ori_op, 0, 0, 0, 0, 0),  RS | RT | UIMM },
+	{ insn_rfe,  M(cop0_op, cop_op, 0, 0, 0, rfe_op),  0 },
+	{ insn_sc,  M(sc_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_scd,  M(scd_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_sd,  M(sd_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_sll,  M(spec_op, 0, 0, 0, 0, sll_op),  RT | RD | RE },
+	{ insn_sra,  M(spec_op, 0, 0, 0, 0, sra_op),  RT | RD | RE },
+	{ insn_srl,  M(spec_op, 0, 0, 0, 0, srl_op),  RT | RD | RE },
+	{ insn_subu,  M(spec_op, 0, 0, 0, 0, subu_op),  RS | RT | RD },
+	{ insn_sw,  M(sw_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
+	{ insn_tlbp,  M(cop0_op, cop_op, 0, 0, 0, tlbp_op),  0 },
+	{ insn_tlbwi,  M(cop0_op, cop_op, 0, 0, 0, tlbwi_op),  0 },
+	{ insn_tlbwr,  M(cop0_op, cop_op, 0, 0, 0, tlbwr_op),  0 },
+	{ insn_xor,  M(spec_op, 0, 0, 0, 0, xor_op),  RS | RT | RD },
+	{ insn_xori,  M(xori_op, 0, 0, 0, 0, 0),  RS | RT | UIMM },
 	{ insn_invalid, 0, 0 }
 };
 
@@ -385,6 +401,7 @@ I_u2u1u3(_dsll);
 I_u2u1u3(_dsll32);
 I_u2u1u3(_dsra);
 I_u2u1u3(_dsrl);
+I_u2u1u3(_dsrl32);
 I_u3u1u2(_dsubu);
 I_0(_eret);
 I_u1(_j);
@@ -421,6 +438,9 @@ enum label_id {
 	label_invalid,
 	label_second_part,
 	label_leave,
+#ifdef MODULE_START
+	label_module_alloc,
+#endif
 	label_vmalloc,
 	label_vmalloc_done,
 	label_tlbw_hazard,
@@ -453,6 +473,9 @@ static __init void build_label(struct label **lab, u32 *addr,
 
 L_LA(_second_part)
 L_LA(_leave)
+#ifdef MODULE_START
+L_LA(_module_alloc)
+#endif
 L_LA(_vmalloc)
 L_LA(_vmalloc_done)
 L_LA(_tlbw_hazard)
@@ -503,18 +526,18 @@ L_LA(_r3000_write_probe_fail)
 #define i_ehb(buf) i_sll(buf, 0, 0, 3)
 
 #ifdef CONFIG_64BIT
-static __init int __attribute__((unused)) in_compat_space_p(long addr)
+static __init int __maybe_unused in_compat_space_p(long addr)
 {
 	/* Is this address in 32bit compat space? */
 	return (((addr) & 0xffffffff00000000L) == 0xffffffff00000000L);
 }
 
-static __init int __attribute__((unused)) rel_highest(long val)
+static __init int __maybe_unused rel_highest(long val)
 {
 	return ((((val + 0x800080008000L) >> 48) & 0xffff) ^ 0x8000) - 0x8000;
 }
 
-static __init int __attribute__((unused)) rel_higher(long val)
+static __init int __maybe_unused rel_higher(long val)
 {
 	return ((((val + 0x80008000L) >> 32) & 0xffff) ^ 0x8000) - 0x8000;
 }
@@ -548,8 +571,8 @@ static __init void i_LA_mostly(u32 **buf, unsigned int rs, long addr)
 		i_lui(buf, rs, rel_hi(addr));
 }
 
-static __init void __attribute__((unused)) i_LA(u32 **buf, unsigned int rs,
-						long addr)
+static __init void __maybe_unused i_LA(u32 **buf, unsigned int rs,
+					     long addr)
 {
 	i_LA_mostly(buf, rs, addr);
 	if (rel_lo(addr))
@@ -628,8 +651,8 @@ static __init void copy_handler(struct reloc *rel, struct label *lab,
 	move_labels(lab, first, end, off);
 }
 
-static __init int __attribute__((unused)) insn_has_bdelay(struct reloc *rel,
-							  u32 *addr)
+static __init int __maybe_unused insn_has_bdelay(struct reloc *rel,
+						       u32 *addr)
 {
 	for (; rel->lab != label_invalid; rel++) {
 		if (rel->addr == addr
@@ -642,15 +665,15 @@ static __init int __attribute__((unused)) insn_has_bdelay(struct reloc *rel,
 }
 
 /* convenience functions for labeled branches */
-static void __init __attribute__((unused))
+static void __init __maybe_unused
 	il_bltz(u32 **p, struct reloc **r, unsigned int reg, enum label_id l)
 {
 	r_mips_pc16(r, *p, l);
 	i_bltz(p, reg, 0);
 }
 
-static void __init __attribute__((unused)) il_b(u32 **p, struct reloc **r,
-					 enum label_id l)
+static void __init __maybe_unused il_b(u32 **p, struct reloc **r,
+					     enum label_id l)
 {
 	r_mips_pc16(r, *p, l);
 	i_b(p, 0);
@@ -663,7 +686,7 @@ static void __init il_beqz(u32 **p, struct reloc **r, unsigned int reg,
 	i_beqz(p, reg, 0);
 }
 
-static void __init __attribute__((unused))
+static void __init __maybe_unused
 il_beqzl(u32 **p, struct reloc **r, unsigned int reg, enum label_id l)
 {
 	r_mips_pc16(r, *p, l);
@@ -682,6 +705,13 @@ static void __init il_bgezl(u32 **p, struct reloc **r, unsigned int reg,
 {
 	r_mips_pc16(r, *p, l);
 	i_bgezl(p, reg, 0);
+}
+
+static void __init __maybe_unused
+il_bgez(u32 **p, struct reloc **r, unsigned int reg, enum label_id l)
+{
+	r_mips_pc16(r, *p, l);
+	i_bgez(p, reg, 0);
 }
 
 /* The only general purpose registers allowed in TLB handlers. */
@@ -795,9 +825,9 @@ static __initdata u32 final_handler[64];
  *
  * As if we MIPS hackers wouldn't know how to nop pipelines happy ...
  */
-static __init void __attribute__((unused)) build_tlb_probe_entry(u32 **p)
+static __init void __maybe_unused build_tlb_probe_entry(u32 **p)
 {
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	/* Found by experiment: R4600 v2.0 needs this, too.  */
 	case CPU_R4600:
 	case CPU_R5000:
@@ -830,7 +860,7 @@ static __init void build_tlb_write_entry(u32 **p, struct label **l,
 	case tlb_indexed: tlbw = i_tlbwi; break;
 	}
 
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_R4000PC:
 	case CPU_R4000SC:
 	case CPU_R4000MC:
@@ -878,6 +908,11 @@ static __init void build_tlb_write_entry(u32 **p, struct label **l,
 	case CPU_4KSC:
 	case CPU_20KC:
 	case CPU_25KF:
+	case CPU_BCM3302:
+	case CPU_BCM4710:
+	case CPU_LOONGSON2:
+		if (m4kc_tlbp_war())
+			i_nop(p);
 		tlbw(p);
 		break;
 
@@ -968,7 +1003,11 @@ build_get_pmde64(u32 **p, struct label **l, struct reloc **r,
 	 * The vmalloc handling is not in the hotpath.
 	 */
 	i_dmfc0(p, tmp, C0_BADVADDR);
+#ifdef MODULE_START
+	il_bltz(p, r, tmp, label_module_alloc);
+#else
 	il_bltz(p, r, tmp, label_vmalloc);
+#endif
 	/* No i_nop needed here, since the next insn doesn't touch TMP. */
 
 #ifdef CONFIG_SMP
@@ -996,7 +1035,12 @@ build_get_pmde64(u32 **p, struct label **l, struct reloc **r,
 #endif
 
 	l_vmalloc_done(l, *p);
-	i_dsrl(p, tmp, tmp, PGDIR_SHIFT-3); /* get pgd offset in bytes */
+
+	if (PGDIR_SHIFT - 3 < 32)		/* get pgd offset in bytes */
+		i_dsrl(p, tmp, tmp, PGDIR_SHIFT-3);
+	else
+		i_dsrl32(p, tmp, tmp, PGDIR_SHIFT - 3 - 32);
+
 	i_andi(p, tmp, tmp, (PTRS_PER_PGD - 1)<<3);
 	i_daddu(p, ptr, ptr, tmp); /* add in pgd offset */
 	i_dmfc0(p, tmp, C0_BADVADDR); /* get faulting address */
@@ -1016,8 +1060,46 @@ build_get_pgd_vmalloc64(u32 **p, struct label **l, struct reloc **r,
 {
 	long swpd = (long)swapper_pg_dir;
 
+#ifdef MODULE_START
+	long modd = (long)module_pg_dir;
+
+	l_module_alloc(l, *p);
+	/*
+	 * Assumption:
+	 * VMALLOC_START >= 0xc000000000000000UL
+	 * MODULE_START >= 0xe000000000000000UL
+	 */
+	i_SLL(p, ptr, bvaddr, 2);
+	il_bgez(p, r, ptr, label_vmalloc);
+
+	if (in_compat_space_p(MODULE_START) && !rel_lo(MODULE_START)) {
+		i_lui(p, ptr, rel_hi(MODULE_START)); /* delay slot */
+	} else {
+		/* unlikely configuration */
+		i_nop(p); /* delay slot */
+		i_LA(p, ptr, MODULE_START);
+	}
+	i_dsubu(p, bvaddr, bvaddr, ptr);
+
+	if (in_compat_space_p(modd) && !rel_lo(modd)) {
+		il_b(p, r, label_vmalloc_done);
+		i_lui(p, ptr, rel_hi(modd));
+	} else {
+		i_LA_mostly(p, ptr, modd);
+		il_b(p, r, label_vmalloc_done);
+		i_daddiu(p, ptr, ptr, rel_lo(modd));
+	}
+
+	l_vmalloc(l, *p);
+	if (in_compat_space_p(MODULE_START) && !rel_lo(MODULE_START) &&
+	    MODULE_START << 32 == VMALLOC_START)
+		i_dsll32(p, ptr, ptr, 0);	/* typical case */
+	else
+		i_LA(p, ptr, VMALLOC_START);
+#else
 	l_vmalloc(l, *p);
 	i_LA(p, ptr, VMALLOC_START);
+#endif
 	i_dsubu(p, bvaddr, bvaddr, ptr);
 
 	if (in_compat_space_p(swpd) && !rel_lo(swpd)) {
@@ -1036,7 +1118,7 @@ build_get_pgd_vmalloc64(u32 **p, struct label **l, struct reloc **r,
  * TMP and PTR are scratch.
  * TMP will be clobbered, PTR will hold the pgd entry.
  */
-static __init void __attribute__((unused))
+static __init void __maybe_unused
 build_get_pgde32(u32 **p, unsigned int tmp, unsigned int ptr)
 {
 	long pgdc = (long)pgd_current;
@@ -1073,10 +1155,10 @@ build_get_pgde32(u32 **p, unsigned int tmp, unsigned int ptr)
 
 static __init void build_adjust_context(u32 **p, unsigned int ctx)
 {
-	unsigned int shift = 4 - (PTE_T_LOG2 + 1);
+	unsigned int shift = 4 - (PTE_T_LOG2 + 1) + PAGE_SHIFT - 12;
 	unsigned int mask = (PTRS_PER_PTE / 2 - 1) << (PTE_T_LOG2 + 1);
 
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_VR41XX:
 	case CPU_VR4111:
 	case CPU_VR4121:
@@ -1106,7 +1188,7 @@ static __init void build_get_ptep(u32 **p, unsigned int tmp, unsigned int ptr)
 	 * in a different cacheline or a load instruction, probably any
 	 * memory reference, is between them.
 	 */
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_NEVADA:
 		i_LW(p, ptr, 0, ptr);
 		GET_CONTEXT(p, tmp); /* get context reg */
@@ -1211,10 +1293,11 @@ static void __init build_r4000_tlb_refill_handler(void)
 	 * Overflow check: For the 64bit handler, we need at least one
 	 * free instruction slot for the wrap-around branch. In worst
 	 * case, if the intended insertion point is a delay slot, we
-	 * need three, with the the second nop'ed and the third being
+	 * need three, with the second nop'ed and the third being
 	 * unused.
 	 */
-#ifdef CONFIG_32BIT
+	/* Loongson2 ebase is different than r4k, we have more space */
+#if defined(CONFIG_32BIT) || defined(CONFIG_CPU_LOONGSON2)
 	if ((p - tlb_handler) > 64)
 		panic("TLB refill handler space exceeded");
 #else
@@ -1227,7 +1310,7 @@ static void __init build_r4000_tlb_refill_handler(void)
 	/*
 	 * Now fold the handler in the TLB refill handler space.
 	 */
-#ifdef CONFIG_32BIT
+#if defined(CONFIG_32BIT) || defined(CONFIG_CPU_LOONGSON2)
 	f = final_handler;
 	/* Simplest case, just copy the handler. */
 	copy_handler(relocs, labels, tlb_handler, p, f);
@@ -1274,7 +1357,7 @@ static void __init build_r4000_tlb_refill_handler(void)
 		final_len);
 
 	f = final_handler;
-#ifdef CONFIG_64BIT
+#if defined(CONFIG_64BIT) && !defined(CONFIG_CPU_LOONGSON2)
 	if (final_len > 32)
 		final_len = 64;
 	else
@@ -1641,7 +1724,8 @@ build_r4000_tlbchange_handler_head(u32 **p, struct label **l,
 	l_smp_pgtable_change(l, *p);
 # endif
 	iPTE_LW(p, l, pte, ptr); /* get even pte */
-	build_tlb_probe_entry(p);
+	if (!m4kc_tlbp_war())
+		build_tlb_probe_entry(p);
 }
 
 static void __init
@@ -1683,6 +1767,8 @@ static void __init build_r4000_tlb_load_handler(void)
 
 	build_r4000_tlbchange_handler_head(&p, &l, &r, K0, K1);
 	build_pte_present(&p, &l, &r, K0, K1, label_nopage_tlbl);
+	if (m4kc_tlbp_war())
+		build_tlb_probe_entry(&p);
 	build_make_valid(&p, &r, K0, K1);
 	build_r4000_tlbchange_handler_tail(&p, &l, &r, K0, K1);
 
@@ -1717,6 +1803,8 @@ static void __init build_r4000_tlb_store_handler(void)
 
 	build_r4000_tlbchange_handler_head(&p, &l, &r, K0, K1);
 	build_pte_writable(&p, &l, &r, K0, K1, label_nopage_tlbs);
+	if (m4kc_tlbp_war())
+		build_tlb_probe_entry(&p);
 	build_make_write(&p, &r, K0, K1);
 	build_r4000_tlbchange_handler_tail(&p, &l, &r, K0, K1);
 
@@ -1751,6 +1839,8 @@ static void __init build_r4000_tlb_modify_handler(void)
 
 	build_r4000_tlbchange_handler_head(&p, &l, &r, K0, K1);
 	build_pte_modifiable(&p, &l, &r, K0, K1, label_nopage_tlbm);
+	if (m4kc_tlbp_war())
+		build_tlb_probe_entry(&p);
 	/* Present and writable bits set, set accessed and dirty bits. */
 	build_make_write(&p, &r, K0, K1);
 	build_r4000_tlbchange_handler_tail(&p, &l, &r, K0, K1);
@@ -1782,7 +1872,7 @@ void __init build_tlb_refill_handler(void)
 	 */
 	static int run_once = 0;
 
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_R2000:
 	case CPU_R3000:
 	case CPU_R3000A:

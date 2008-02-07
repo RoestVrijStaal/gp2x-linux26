@@ -1,8 +1,8 @@
 /*
  * BRIEF MODULE DESCRIPTION
- *	Alchemy/AMD Au1x00 pci support.
+ *	Alchemy/AMD Au1x00 PCI support.
  *
- * Copyright 2001,2002,2003 MontaVista Software Inc.
+ * Copyright 2001-2003, 2007 MontaVista Software Inc.
  * Author: MontaVista Software, Inc.
  *         	ppopov@mvista.com or source@mvista.com
  *
@@ -66,6 +66,8 @@ static unsigned long virt_io_addr;
 
 static int __init au1x_pci_setup(void)
 {
+	extern void au1x_pci_cfg_init(void);
+
 #if defined(CONFIG_SOC_AU1500) || defined(CONFIG_SOC_AU1550)
 	virt_io_addr = (unsigned long)ioremap(Au1500_PCI_IO_START,
 			Au1500_PCI_IO_END - Au1500_PCI_IO_START + 1);
@@ -74,20 +76,27 @@ static int __init au1x_pci_setup(void)
 		printk(KERN_ERR "Unable to ioremap pci space\n");
 		return 1;
 	}
+	au1x_controller.io_map_base = virt_io_addr;
 
 #ifdef CONFIG_DMA_NONCOHERENT
-	/*
-         *  Set the NC bit in controller for Au1500 pre-AC silicon
-	 */
-	u32 prid = read_c0_prid();
-	if ( (prid & 0xFF000000) == 0x01000000 && prid < 0x01030202) {
-	       au_writel( 1<<16 | au_readl(Au1500_PCI_CFG), Au1500_PCI_CFG);
-	       printk("Non-coherent PCI accesses enabled\n");
+	{
+		/*
+		 *  Set the NC bit in controller for Au1500 pre-AC silicon
+		 */
+		u32 prid = read_c0_prid();
+
+		if ((prid & 0xFF000000) == 0x01000000 && prid < 0x01030202) {
+		       au_writel((1 << 16) | au_readl(Au1500_PCI_CFG),
+			         Au1500_PCI_CFG);
+		       printk("Non-coherent PCI accesses enabled\n");
+		}
 	}
 #endif
 
 	set_io_port_base(virt_io_addr);
 #endif
+
+	au1x_pci_cfg_init();
 
 	register_pci_controller(&au1x_controller);
 	return 0;

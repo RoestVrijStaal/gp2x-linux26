@@ -3,12 +3,14 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (C) 2004, 2005 by Ralf Baechle
+ * Copyright (C) 2004, 05, 06 by Ralf Baechle
  * Copyright (C) 2005 by MIPS Technologies, Inc.
  */
+#include <linux/cpumask.h>
 #include <linux/oprofile.h>
 #include <linux/interrupt.h>
 #include <linux/smp.h>
+#include <asm/irq_regs.h>
 
 #include "op_impl.h"
 
@@ -17,7 +19,7 @@
 #define M_PERFCTL_SUPERVISOR		(1UL      <<  2)
 #define M_PERFCTL_USER			(1UL      <<  3)
 #define M_PERFCTL_INTERRUPT_ENABLE	(1UL      <<  4)
-#define M_PERFCTL_EVENT(event)		((event)  << 5)
+#define M_PERFCTL_EVENT(event)		(((event) & 0x3f)  << 5)
 #define M_PERFCTL_VPEID(vpe)		((vpe)    << 16)
 #define M_PERFCTL_MT_EN(filter)		((filter) << 20)
 #define    M_TC_EN_ALL			M_PERFCTL_MT_EN(0)
@@ -30,16 +32,52 @@
 #define M_COUNTER_OVERFLOW		(1UL      << 31)
 
 #ifdef CONFIG_MIPS_MT_SMP
-#define WHAT	(M_TC_EN_VPE | M_PERFCTL_VPEID(smp_processor_id()))
+#define WHAT		(M_TC_EN_VPE | M_PERFCTL_VPEID(smp_processor_id()))
+#define vpe_id()	smp_processor_id()
+
+/*
+ * The number of bits to shift to convert between counters per core and
+ * counters per VPE.  There is no reasonable interface atm to obtain the
+ * number of VPEs used by Linux and in the 34K this number is fixed to two
+ * anyways so we hardcore a few things here for the moment.  The way it's
+ * done here will ensure that oprofile VSMP kernel will run right on a lesser
+ * core like a 24K also or with maxcpus=1.
+ */
+static inline unsigned int vpe_shift(void)
+{
+	if (num_possible_cpus() > 1)
+		return 1;
+
+	return 0;
+}
+
 #else
-#define WHAT	0
+
+#define WHAT		0
+#define vpe_id()	0
+
+static inline unsigned int vpe_shift(void)
+{
+	return 0;
+}
+
 #endif
+
+static inline unsigned int counters_total_to_per_cpu(unsigned int counters)
+{
+	return counters >> vpe_shift();
+}
+
+static inline unsigned int counters_per_cpu_to_total(unsigned int counters)
+{
+	return counters << vpe_shift();
+}
 
 #define __define_perf_accessors(r, n, np)				\
 									\
 static inline unsigned int r_c0_ ## r ## n(void)			\
 {									\
-	unsigned int cpu = smp_processor_id();				\
+	unsigned int cpu = vpe_id();					\
 									\
 	switch (cpu) {							\
 	case 0:								\
@@ -54,7 +92,7 @@ static inline unsigned int r_c0_ ## r ## n(void)			\
 									\
 static inline void w_c0_ ## r ## n(unsigned int value)			\
 {									\
-	unsigned int cpu = smp_processor_id();				\
+	unsigned int cpu = vpe_id();					\
 									\
 	switch (cpu) {							\
 	case 0:								\
@@ -71,13 +109,13 @@ static inline void w_c0_ ## r ## n(unsigned int value)			\
 
 __define_perf_accessors(perfcntr, 0, 2)
 __define_perf_accessors(perfcntr, 1, 3)
-__define_perf_accessors(perfcntr, 2, 2)
-__define_perf_accessors(perfcntr, 3, 2)
+__define_perf_accessors(perfcntr, 2, 0)
+__define_perf_accessors(perfcntr, 3, 1)
 
 __define_perf_accessors(perfctrl, 0, 2)
 __define_perf_accessors(perfctrl, 1, 3)
-__define_perf_accessors(perfctrl, 2, 2)
-__define_perf_accessors(perfctrl, 3, 2)
+__define_perf_accessors(perfctrl, 2, 0)
+__define_perf_accessors(perfctrl, 3, 1)
 
 struct op_mips_model op_model_mipsxx_ops;
 
@@ -94,7 +132,6 @@ static void mipsxx_reg_setup(struct op_counter_config *ctr)
 	int i;
 
 	/* Compute the performance counter control word.  */
-	/* For now count kernel and user mode */
 	for (i = 0; i < counters; i++) {
 		reg.control[i] = 0;
 		reg.counter[i] = 0;
@@ -116,7 +153,7 @@ static void mipsxx_reg_setup(struct op_counter_config *ctr)
 
 /* Program all of the registers in preparation for enabling profiling.  */
 
-static void mipsxx_cpu_setup (void *args)
+static void mipsxx_cpu_setup(void *args)
 {
 	unsigned int counters = op_model_mipsxx_ops.num_counters;
 
@@ -170,12 +207,15 @@ static void mipsxx_cpu_stop(void *args)
 	}
 }
 
-static int mipsxx_perfcount_handler(struct pt_regs *regs)
+static int mipsxx_perfcount_handler(void)
 {
 	unsigned int counters = op_model_mipsxx_ops.num_counters;
 	unsigned int control;
 	unsigned int counter;
-	int handled = 0;
+	int handled = IRQ_NONE;
+
+	if (cpu_has_mips_r2 && !(read_c0_cause() & (1 << 26)))
+		return handled;
 
 	switch (counters) {
 #define HANDLE_COUNTER(n)						\
@@ -184,9 +224,9 @@ static int mipsxx_perfcount_handler(struct pt_regs *regs)
 		counter = r_c0_perfcntr ## n();				\
 		if ((control & M_PERFCTL_INTERRUPT_ENABLE) &&		\
 		    (counter & M_COUNTER_OVERFLOW)) {			\
-			oprofile_add_sample(regs, n);			\
+			oprofile_add_sample(get_irq_regs(), n);		\
 			w_c0_perfcntr ## n(reg.counter[n]);		\
-			handled = 1;					\
+			handled = IRQ_HANDLED;				\
 		}
 	HANDLE_COUNTER(3)
 	HANDLE_COUNTER(2)
@@ -215,12 +255,21 @@ static inline int __n_counters(void)
 
 static inline int n_counters(void)
 {
-	int counters = __n_counters();
+	int counters;
 
-#ifndef CONFIG_SMP
-	if (current_cpu_data.cputype == CPU_34K)
-		return counters >> 1;
-#endif
+	switch (current_cpu_type()) {
+	case CPU_R10000:
+		counters = 2;
+		break;
+
+	case CPU_R12000:
+	case CPU_R14000:
+		counters = 4;
+		break;
+
+	default:
+		counters = __n_counters();
+	}
 
 	return counters;
 }
@@ -255,8 +304,10 @@ static int __init mipsxx_init(void)
 
 	reset_counters(counters);
 
+	counters = counters_total_to_per_cpu(counters);
+
 	op_model_mipsxx_ops.num_counters = counters;
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_20KC:
 		op_model_mipsxx_ops.cpu_type = "mips/20K";
 		break;
@@ -281,6 +332,18 @@ static int __init mipsxx_init(void)
 		op_model_mipsxx_ops.cpu_type = "mips/5K";
 		break;
 
+	case CPU_R10000:
+		if ((current_cpu_data.processor_id & 0xff) == 0x20)
+			op_model_mipsxx_ops.cpu_type = "mips/r10000-v2.x";
+		else
+			op_model_mipsxx_ops.cpu_type = "mips/r10000";
+		break;
+
+	case CPU_R12000:
+	case CPU_R14000:
+		op_model_mipsxx_ops.cpu_type = "mips/r12000";
+		break;
+
 	case CPU_SB1:
 	case CPU_SB1A:
 		op_model_mipsxx_ops.cpu_type = "mips/sb1";
@@ -299,7 +362,10 @@ static int __init mipsxx_init(void)
 
 static void mipsxx_exit(void)
 {
-	reset_counters(op_model_mipsxx_ops.num_counters);
+	int counters = op_model_mipsxx_ops.num_counters;
+
+	counters = counters_per_cpu_to_total(counters);
+	reset_counters(counters);
 
 	perf_irq = null_perf_irq;
 }

@@ -41,7 +41,6 @@
 
 #include <asm/compiler.h>
 #include <asm/mipsregs.h>
-#include <asm/ptrace.h>
 #include <asm/time.h>
 #include <asm/div64.h>
 #include <asm/mach-au1x00/au1000.h>
@@ -54,68 +53,21 @@ static unsigned long r4k_cur;    /* What counter should be at next timer irq */
 int	no_au1xxx_32khz;
 extern int allow_au1k_wait; /* default off for CP0 Counter */
 
-/* Cycle counter value at the previous timer interrupt.. */
-static unsigned int timerhi = 0, timerlo = 0;
-
 #ifdef CONFIG_PM
 #if HZ < 100 || HZ > 1000
 #error "unsupported HZ value! Must be in [100,1000]"
 #endif
 #define MATCH20_INC (328*100/HZ) /* magic number 328 is for HZ=100... */
-extern void startup_match20_interrupt(irqreturn_t (*handler)(int, void *, struct pt_regs *));
+extern void startup_match20_interrupt(irq_handler_t handler);
 static unsigned long last_pc0, last_match20;
 #endif
 
 static DEFINE_SPINLOCK(time_lock);
 
-static inline void ack_r4ktimer(unsigned long newval)
-{
-	write_c0_compare(newval);
-}
-
-/*
- * There are a lot of conceptually broken versions of the MIPS timer interrupt
- * handler floating around.  This one is rather different, but the algorithm
- * is provably more robust.
- */
 unsigned long wtimer;
-void mips_timer_interrupt(struct pt_regs *regs)
-{
-	int irq = 63;
-	unsigned long count;
-
-	irq_enter();
-	kstat_this_cpu.irqs[irq]++;
-
-	if (r4k_offset == 0)
-		goto null;
-
-	do {
-		count = read_c0_count();
-		timerhi += (count < timerlo);   /* Wrap around */
-		timerlo = count;
-
-		kstat_this_cpu.irqs[irq]++;
-		do_timer(regs);
-#ifndef CONFIG_SMP
-		update_process_times(user_mode(regs));
-#endif
-		r4k_cur += r4k_offset;
-		ack_r4ktimer(r4k_cur);
-
-	} while (((unsigned long)read_c0_count()
-	         - r4k_cur) < 0x7fffffff);
-
-	irq_exit();
-	return;
-
-null:
-	ack_r4ktimer(0);
-	irq_exit();
-}
 
 #ifdef CONFIG_PM
-irqreturn_t counter0_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t counter0_irq(int irq, void *dev_id)
 {
 	unsigned long pc0;
 	int time_elapsed;
@@ -137,9 +89,9 @@ irqreturn_t counter0_irq(int irq, void *dev_id, struct pt_regs *regs)
 	}
 
 	while (time_elapsed > 0) {
-		do_timer(regs);
+		do_timer(1);
 #ifndef CONFIG_SMP
-		update_process_times(user_mode(regs));
+		update_process_times(user_mode(get_irq_regs()));
 #endif
 		time_elapsed -= MATCH20_INC;
 		last_match20 += MATCH20_INC;
@@ -156,14 +108,21 @@ irqreturn_t counter0_irq(int irq, void *dev_id, struct pt_regs *regs)
 
 	if (jiffie_drift >= 999) {
 		jiffie_drift -= 999;
-		do_timer(regs); /* increment jiffies by one */
+		do_timer(1); /* increment jiffies by one */
 #ifndef CONFIG_SMP
-		update_process_times(user_mode(regs));
+		update_process_times(user_mode(get_irq_regs()));
 #endif
 	}
 
 	return IRQ_HANDLED;
 }
+
+struct irqaction counter0_action = {
+	.handler	= counter0_irq,
+	.flags		= IRQF_DISABLED,
+	.name		= "alchemy-toy",
+	.dev_id		= NULL,
+};
 
 /* When we wakeup from sleep, we have to "catch up" on all of the
  * timer ticks we have missed.
@@ -211,11 +170,7 @@ wakeup_counter0_set(int ticks)
 /* I haven't found anyone that doesn't use a 12 MHz source clock,
  * but just in case.....
  */
-#ifdef CONFIG_AU1000_SRC_CLK
-#define AU1000_SRC_CLK	CONFIG_AU1000_SRC_CLK
-#else
 #define AU1000_SRC_CLK	12000000
-#endif
 
 /*
  * We read the real processor speed from the PLL.  This is important
@@ -231,7 +186,6 @@ wakeup_counter0_set(int ticks)
  */
 unsigned long cal_r4koff(void)
 {
-	unsigned long count;
 	unsigned long cpu_speed;
 	unsigned long flags;
 	unsigned long counter;
@@ -253,37 +207,11 @@ unsigned long cal_r4koff(void)
 		while (au_readl(SYS_COUNTER_CNTRL) & SYS_CNTRL_T1S);
 
 		while (au_readl(SYS_COUNTER_CNTRL) & SYS_CNTRL_C1S);
-		au_writel (0, SYS_TOYWRITE);
+		au_writel(0, SYS_TOYWRITE);
 		while (au_readl(SYS_COUNTER_CNTRL) & SYS_CNTRL_C1S);
 
-#if defined(CONFIG_AU1000_USE32K)
-		{
-			unsigned long start, end;
-
-			start = au_readl(SYS_RTCREAD);
-			start += 2;
-			/* wait for the beginning of a new tick
-			*/
-			while (au_readl(SYS_RTCREAD) < start);
-
-			/* Start r4k counter.
-			*/
-			write_c0_count(0);
-
-			/* Wait 0.5 seconds.
-			*/
-			end = start + (32768 / trim_divide)/2;
-
-			while (end > au_readl(SYS_RTCREAD));
-
-			count = read_c0_count();
-			cpu_speed = count * 2;
-		}
-#else
 		cpu_speed = (au_readl(SYS_CPUPLL) & 0x0000003f) *
 			AU1000_SRC_CLK;
-		count = cpu_speed / 2;
-#endif
 	}
 	else {
 		/* The 32KHz oscillator isn't running, so assume there
@@ -291,99 +219,16 @@ unsigned long cal_r4koff(void)
 		 * NOTE: some old silicon doesn't allow reading the PLL.
 		 */
 		cpu_speed = (au_readl(SYS_CPUPLL) & 0x0000003f) * AU1000_SRC_CLK;
-		count = cpu_speed / 2;
 		no_au1xxx_32khz = 1;
 	}
-	mips_hpt_frequency = count;
+	mips_hpt_frequency = cpu_speed;
 	// Equation: Baudrate = CPU / (SD * 2 * CLKDIV * 16)
 	set_au1x00_uart_baud_base(cpu_speed / (2 * ((int)(au_readl(SYS_POWERCTRL)&0x03) + 2) * 16));
 	spin_unlock_irqrestore(&time_lock, flags);
 	return (cpu_speed / HZ);
 }
 
-/* This is for machines which generate the exact clock. */
-#define USECS_PER_JIFFY (1000000/HZ)
-#define USECS_PER_JIFFY_FRAC (0x100000000LL*1000000/HZ&0xffffffff)
-
-static unsigned long
-div64_32(unsigned long v1, unsigned long v2, unsigned long v3)
-{
-	unsigned long r0;
-	do_div64_32(r0, v1, v2, v3);
-	return r0;
-}
-
-static unsigned long do_fast_cp0_gettimeoffset(void)
-{
-	u32 count;
-	unsigned long res, tmp;
-	unsigned long r0;
-
-	/* Last jiffy when do_fast_gettimeoffset() was called. */
-	static unsigned long last_jiffies=0;
-	unsigned long quotient;
-
-	/*
-	 * Cached "1/(clocks per usec)*2^32" value.
-	 * It has to be recalculated once each jiffy.
-	 */
-	static unsigned long cached_quotient=0;
-
-	tmp = jiffies;
-
-	quotient = cached_quotient;
-
-	if (tmp && last_jiffies != tmp) {
-		last_jiffies = tmp;
-		if (last_jiffies != 0) {
-			r0 = div64_32(timerhi, timerlo, tmp);
-			quotient = div64_32(USECS_PER_JIFFY, USECS_PER_JIFFY_FRAC, r0);
-			cached_quotient = quotient;
-		}
-	}
-
-	/* Get last timer tick in absolute kernel time */
-	count = read_c0_count();
-
-	/* .. relative to previous jiffy (32 bits is enough) */
-	count -= timerlo;
-
-	__asm__("multu\t%1,%2\n\t"
-		"mfhi\t%0"
-		: "=r" (res)
-		: "r" (count), "r" (quotient)
-		: "hi", "lo", GCC_REG_ACCUM);
-
-	/*
-	 * Due to possible jiffies inconsistencies, we need to check
-	 * the result so that we'll get a timer that is monotonic.
-	 */
-	if (res >= USECS_PER_JIFFY)
-		res = USECS_PER_JIFFY-1;
-
-	return res;
-}
-
-#ifdef CONFIG_PM
-static unsigned long do_fast_pm_gettimeoffset(void)
-{
-	unsigned long pc0;
-	unsigned long offset;
-
-	pc0 = au_readl(SYS_TOYREAD);
-	au_sync();
-	offset = pc0 - last_pc0;
-	if (offset > 2*MATCH20_INC) {
-		printk("huge offset %x, last_pc0 %x last_match20 %x pc0 %x\n",
-				(unsigned)offset, (unsigned)last_pc0,
-				(unsigned)last_match20, (unsigned)pc0);
-	}
-	offset = (unsigned long)((offset * 305) / 10);
-	return offset;
-}
-#endif
-
-void __init plat_timer_setup(struct irqaction *irq)
+void __init plat_time_init(void)
 {
 	unsigned int est_freq;
 
@@ -417,16 +262,10 @@ void __init plat_timer_setup(struct irqaction *irq)
 	 * we do this.
 	 */
 	if (no_au1xxx_32khz) {
-		unsigned int c0_status;
-
 		printk("WARNING: no 32KHz clock found.\n");
-		do_gettimeoffset = do_fast_cp0_gettimeoffset;
 
-		/* Ensure we get CPO_COUNTER interrupts.
-		*/
-		c0_status = read_c0_status();
-		c0_status |= IE_IRQ5;
-		write_c0_status(c0_status);
+		/* Ensure we get CPO_COUNTER interrupts.  */
+		set_c0_status(IE_IRQ5);
 	}
 	else {
 		while (au_readl(SYS_COUNTER_CNTRL) & SYS_CNTRL_C0S);
@@ -443,24 +282,12 @@ void __init plat_timer_setup(struct irqaction *irq)
 		au_writel(last_match20 + MATCH20_INC, SYS_TOYMATCH2);
 		au_sync();
 		while (au_readl(SYS_COUNTER_CNTRL) & SYS_CNTRL_M20);
-		startup_match20_interrupt(counter0_irq);
-
-		do_gettimeoffset = do_fast_pm_gettimeoffset;
+		setup_irq(AU1000_TOY_MATCH2_INT, &counter0_action);
 
 		/* We can use the real 'wait' instruction.
 		*/
 		allow_au1k_wait = 1;
 	}
 
-#else
-	/* We have to do this here instead of in timer_init because
-	 * the generic code in arch/mips/kernel/time.c will write
-	 * over our function pointer.
-	 */
-	do_gettimeoffset = do_fast_cp0_gettimeoffset;
 #endif
-}
-
-void __init au1xxx_time_init(void)
-{
 }

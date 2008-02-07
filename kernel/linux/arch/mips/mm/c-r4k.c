@@ -7,8 +7,11 @@
  * Copyright (C) 1997, 1998, 1999, 2000, 2001, 2002 Ralf Baechle (ralf@gnu.org)
  * Copyright (C) 1999, 2000 Silicon Graphics, Inc.
  */
+#include <linux/hardirq.h>
 #include <linux/init.h>
+#include <linux/highmem.h>
 #include <linux/kernel.h>
+#include <linux/linkage.h>
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/bitops.h>
@@ -23,6 +26,7 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/r4kcache.h>
+#include <asm/sections.h>
 #include <asm/system.h>
 #include <asm/mmu_context.h>
 #include <asm/war.h>
@@ -89,7 +93,7 @@ static inline void r4k_blast_dcache_page_dc32(unsigned long addr)
 	blast_dcache32_page(addr);
 }
 
-static inline void r4k_blast_dcache_page_setup(void)
+static void __init r4k_blast_dcache_page_setup(void)
 {
 	unsigned long  dc_lsize = cpu_dcache_line_size();
 
@@ -103,7 +107,7 @@ static inline void r4k_blast_dcache_page_setup(void)
 
 static void (* r4k_blast_dcache_page_indexed)(unsigned long addr);
 
-static inline void r4k_blast_dcache_page_indexed_setup(void)
+static void __init r4k_blast_dcache_page_indexed_setup(void)
 {
 	unsigned long dc_lsize = cpu_dcache_line_size();
 
@@ -117,7 +121,7 @@ static inline void r4k_blast_dcache_page_indexed_setup(void)
 
 static void (* r4k_blast_dcache)(void);
 
-static inline void r4k_blast_dcache_setup(void)
+static void __init r4k_blast_dcache_setup(void)
 {
 	unsigned long dc_lsize = cpu_dcache_line_size();
 
@@ -161,12 +165,12 @@ static inline void tx49_blast_icache32(void)
 	/* I'm in even chunk.  blast odd chunks */
 	for (ws = 0; ws < ws_end; ws += ws_inc)
 		for (addr = start + 0x400; addr < end; addr += 0x400 * 2)
-			cache32_unroll32(addr|ws,Index_Invalidate_I);
+			cache32_unroll32(addr|ws, Index_Invalidate_I);
 	CACHE32_UNROLL32_ALIGN;
 	/* I'm in odd chunk.  blast even chunks */
 	for (ws = 0; ws < ws_end; ws += ws_inc)
 		for (addr = start; addr < end; addr += 0x400 * 2)
-			cache32_unroll32(addr|ws,Index_Invalidate_I);
+			cache32_unroll32(addr|ws, Index_Invalidate_I);
 }
 
 static inline void blast_icache32_r4600_v1_page_indexed(unsigned long page)
@@ -192,17 +196,17 @@ static inline void tx49_blast_icache32_page_indexed(unsigned long page)
 	/* I'm in even chunk.  blast odd chunks */
 	for (ws = 0; ws < ws_end; ws += ws_inc)
 		for (addr = start + 0x400; addr < end; addr += 0x400 * 2)
-			cache32_unroll32(addr|ws,Index_Invalidate_I);
+			cache32_unroll32(addr|ws, Index_Invalidate_I);
 	CACHE32_UNROLL32_ALIGN;
 	/* I'm in odd chunk.  blast even chunks */
 	for (ws = 0; ws < ws_end; ws += ws_inc)
 		for (addr = start; addr < end; addr += 0x400 * 2)
-			cache32_unroll32(addr|ws,Index_Invalidate_I);
+			cache32_unroll32(addr|ws, Index_Invalidate_I);
 }
 
 static void (* r4k_blast_icache_page)(unsigned long addr);
 
-static inline void r4k_blast_icache_page_setup(void)
+static void __init r4k_blast_icache_page_setup(void)
 {
 	unsigned long ic_lsize = cpu_icache_line_size();
 
@@ -219,7 +223,7 @@ static inline void r4k_blast_icache_page_setup(void)
 
 static void (* r4k_blast_icache_page_indexed)(unsigned long addr);
 
-static inline void r4k_blast_icache_page_indexed_setup(void)
+static void __init r4k_blast_icache_page_indexed_setup(void)
 {
 	unsigned long ic_lsize = cpu_icache_line_size();
 
@@ -243,7 +247,7 @@ static inline void r4k_blast_icache_page_indexed_setup(void)
 
 static void (* r4k_blast_icache)(void);
 
-static inline void r4k_blast_icache_setup(void)
+static void __init r4k_blast_icache_setup(void)
 {
 	unsigned long ic_lsize = cpu_icache_line_size();
 
@@ -264,7 +268,7 @@ static inline void r4k_blast_icache_setup(void)
 
 static void (* r4k_blast_scache_page)(unsigned long addr);
 
-static inline void r4k_blast_scache_page_setup(void)
+static void __init r4k_blast_scache_page_setup(void)
 {
 	unsigned long sc_lsize = cpu_scache_line_size();
 
@@ -282,7 +286,7 @@ static inline void r4k_blast_scache_page_setup(void)
 
 static void (* r4k_blast_scache_page_indexed)(unsigned long addr);
 
-static inline void r4k_blast_scache_page_indexed_setup(void)
+static void __init r4k_blast_scache_page_indexed_setup(void)
 {
 	unsigned long sc_lsize = cpu_scache_line_size();
 
@@ -300,7 +304,7 @@ static inline void r4k_blast_scache_page_indexed_setup(void)
 
 static void (* r4k_blast_scache)(void);
 
-static inline void r4k_blast_scache_setup(void)
+static void __init r4k_blast_scache_setup(void)
 {
 	unsigned long sc_lsize = cpu_scache_line_size();
 
@@ -316,30 +320,16 @@ static inline void r4k_blast_scache_setup(void)
 		r4k_blast_scache = blast_scache128;
 }
 
-/*
- * This is former mm's flush_cache_all() which really should be
- * flush_cache_vunmap these days ...
- */
-static inline void local_r4k_flush_cache_all(void * args)
-{
-	r4k_blast_dcache();
-	r4k_blast_icache();
-}
-
-static void r4k_flush_cache_all(void)
-{
-	if (!cpu_has_dc_aliases)
-		return;
-
-	r4k_on_each_cpu(local_r4k_flush_cache_all, NULL, 1, 1);
-}
-
 static inline void local_r4k___flush_cache_all(void * args)
 {
+#if defined(CONFIG_CPU_LOONGSON2)
+	r4k_blast_scache();
+	return;
+#endif
 	r4k_blast_dcache();
 	r4k_blast_icache();
 
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_R4000SC:
 	case CPU_R4000MC:
 	case CPU_R4400SC:
@@ -356,24 +346,37 @@ static void r4k___flush_cache_all(void)
 	r4k_on_each_cpu(local_r4k___flush_cache_all, NULL, 1, 1);
 }
 
+static inline int has_valid_asid(const struct mm_struct *mm)
+{
+#if defined(CONFIG_MIPS_MT_SMP) || defined(CONFIG_MIPS_MT_SMTC)
+	int i;
+
+	for_each_online_cpu(i)
+		if (cpu_context(i, mm))
+			return 1;
+
+	return 0;
+#else
+	return cpu_context(smp_processor_id(), mm);
+#endif
+}
+
 static inline void local_r4k_flush_cache_range(void * args)
 {
 	struct vm_area_struct *vma = args;
-	int exec;
 
-	if (!(cpu_context(smp_processor_id(), vma->vm_mm)))
+	if (!(has_valid_asid(vma->vm_mm)))
 		return;
 
-	exec = vma->vm_flags & VM_EXEC;
-	if (cpu_has_dc_aliases || exec)
-		r4k_blast_dcache();
-	if (exec)
-		r4k_blast_icache();
+	r4k_blast_dcache();
 }
 
 static void r4k_flush_cache_range(struct vm_area_struct *vma,
 	unsigned long start, unsigned long end)
 {
+	if (!cpu_has_dc_aliases)
+		return;
+
 	r4k_on_each_cpu(local_r4k_flush_cache_range, vma, 1, 1);
 }
 
@@ -381,21 +384,24 @@ static inline void local_r4k_flush_cache_mm(void * args)
 {
 	struct mm_struct *mm = args;
 
-	if (!cpu_context(smp_processor_id(), mm))
+	if (!has_valid_asid(mm))
 		return;
-
-	r4k_blast_dcache();
-	r4k_blast_icache();
 
 	/*
 	 * Kludge alert.  For obscure reasons R4000SC and R4400SC go nuts if we
 	 * only flush the primary caches but R10000 and R12000 behave sane ...
+	 * R4000SC and R4400SC indexed S-cache ops also invalidate primary
+	 * caches, so we can bail out early.
 	 */
-	if (current_cpu_data.cputype == CPU_R4000SC ||
-	    current_cpu_data.cputype == CPU_R4000MC ||
-	    current_cpu_data.cputype == CPU_R4400SC ||
-	    current_cpu_data.cputype == CPU_R4400MC)
+	if (current_cpu_type() == CPU_R4000SC ||
+	    current_cpu_type() == CPU_R4000MC ||
+	    current_cpu_type() == CPU_R4400SC ||
+	    current_cpu_type() == CPU_R4400MC) {
 		r4k_blast_scache();
+		return;
+	}
+
+	r4k_blast_dcache();
 }
 
 static void r4k_flush_cache_mm(struct mm_struct *mm)
@@ -417,19 +423,20 @@ static inline void local_r4k_flush_cache_page(void *args)
 	struct flush_cache_page_args *fcp_args = args;
 	struct vm_area_struct *vma = fcp_args->vma;
 	unsigned long addr = fcp_args->addr;
-	unsigned long paddr = fcp_args->pfn << PAGE_SHIFT;
+	struct page *page = pfn_to_page(fcp_args->pfn);
 	int exec = vma->vm_flags & VM_EXEC;
 	struct mm_struct *mm = vma->vm_mm;
 	pgd_t *pgdp;
 	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
+	void *vaddr;
 
 	/*
 	 * If ownes no valid ASID yet, cannot possibly have gotten
 	 * this page into the cache.
 	 */
-	if (cpu_context(smp_processor_id(), mm) == 0)
+	if (!has_valid_asid(mm))
 		return;
 
 	addr &= PAGE_MASK;
@@ -445,43 +452,40 @@ static inline void local_r4k_flush_cache_page(void *args)
 	if (!(pte_val(*ptep) & _PAGE_PRESENT))
 		return;
 
-	/*
-	 * Doing flushes for another ASID than the current one is
-	 * too difficult since stupid R4k caches do a TLB translation
-	 * for every cache flush operation.  So we do indexed flushes
-	 * in that case, which doesn't overly flush the cache too much.
-	 */
-	if ((mm == current->active_mm) && (pte_val(*ptep) & _PAGE_VALID)) {
-		if (cpu_has_dc_aliases || (exec && !cpu_has_ic_fills_f_dc)) {
-			r4k_blast_dcache_page(addr);
-			if (exec && !cpu_icache_snoops_remote_store)
-				r4k_blast_scache_page(addr);
-		}
-		if (exec)
-			r4k_blast_icache_page(addr);
-
-		return;
+	if ((mm == current->active_mm) && (pte_val(*ptep) & _PAGE_VALID))
+		vaddr = NULL;
+	else {
+		/*
+		 * Use kmap_coherent or kmap_atomic to do flushes for
+		 * another ASID than the current one.
+		 */
+		if (cpu_has_dc_aliases)
+			vaddr = kmap_coherent(page, addr);
+		else
+			vaddr = kmap_atomic(page, KM_USER0);
+		addr = (unsigned long)vaddr;
 	}
 
-	/*
-	 * Do indexed flush, too much work to get the (possible) TLB refills
-	 * to work correctly.
-	 */
 	if (cpu_has_dc_aliases || (exec && !cpu_has_ic_fills_f_dc)) {
-		r4k_blast_dcache_page_indexed(cpu_has_pindexed_dcache ?
-					      paddr : addr);
-		if (exec && !cpu_icache_snoops_remote_store) {
-			r4k_blast_scache_page_indexed(paddr);
-		}
+		r4k_blast_dcache_page(addr);
+		if (exec && !cpu_icache_snoops_remote_store)
+			r4k_blast_scache_page(addr);
 	}
 	if (exec) {
-		if (cpu_has_vtag_icache) {
+		if (vaddr && cpu_has_vtag_icache && mm == current->active_mm) {
 			int cpu = smp_processor_id();
 
 			if (cpu_context(cpu, mm) != 0)
 				drop_mmu_context(mm, cpu);
 		} else
-			r4k_blast_icache_page_indexed(addr);
+			r4k_blast_icache_page(addr);
+	}
+
+	if (vaddr) {
+		if (cpu_has_dc_aliases)
+			kunmap_coherent();
+		else
+			kunmap_atomic(vaddr, KM_USER0);
 	}
 }
 
@@ -504,7 +508,11 @@ static inline void local_r4k_flush_data_cache_page(void * addr)
 
 static void r4k_flush_data_cache_page(unsigned long addr)
 {
-	r4k_on_each_cpu(local_r4k_flush_data_cache_page, (void *) addr, 1, 1);
+	if (in_atomic())
+		local_r4k_flush_data_cache_page((void *)addr);
+	else
+		r4k_on_each_cpu(local_r4k_flush_data_cache_page, (void *) addr,
+			        1, 1);
 }
 
 struct flush_icache_range_args {
@@ -550,82 +558,6 @@ static void r4k_flush_icache_range(unsigned long start, unsigned long end)
 	r4k_on_each_cpu(local_r4k_flush_icache_range, &args, 1, 1);
 	instruction_hazard();
 }
-
-/*
- * Ok, this seriously sucks.  We use them to flush a user page but don't
- * know the virtual address, so we have to blast away the whole icache
- * which is significantly more expensive than the real thing.  Otoh we at
- * least know the kernel address of the page so we can flush it
- * selectivly.
- */
-
-struct flush_icache_page_args {
-	struct vm_area_struct *vma;
-	struct page *page;
-};
-
-static inline void local_r4k_flush_icache_page(void *args)
-{
-	struct flush_icache_page_args *fip_args = args;
-	struct vm_area_struct *vma = fip_args->vma;
-	struct page *page = fip_args->page;
-
-	/*
-	 * Tricky ...  Because we don't know the virtual address we've got the
-	 * choice of either invalidating the entire primary and secondary
-	 * caches or invalidating the secondary caches also.  With the subset
-	 * enforcment on R4000SC, R4400SC, R10000 and R12000 invalidating the
-	 * secondary cache will result in any entries in the primary caches
-	 * also getting invalidated which hopefully is a bit more economical.
-	 */
-	if (cpu_has_inclusive_pcaches) {
-		unsigned long addr = (unsigned long) page_address(page);
-
-		r4k_blast_scache_page(addr);
-		ClearPageDcacheDirty(page);
-
-		return;
-	}
-
-	if (!cpu_has_ic_fills_f_dc) {
-		unsigned long addr = (unsigned long) page_address(page);
-		r4k_blast_dcache_page(addr);
-		if (!cpu_icache_snoops_remote_store)
-			r4k_blast_scache_page(addr);
-		ClearPageDcacheDirty(page);
-	}
-
-	/*
-	 * We're not sure of the virtual address(es) involved here, so
-	 * we have to flush the entire I-cache.
-	 */
-	if (cpu_has_vtag_icache) {
-		int cpu = smp_processor_id();
-
-		if (cpu_context(cpu, vma->vm_mm) != 0)
-			drop_mmu_context(vma->vm_mm, cpu);
-	} else
-		r4k_blast_icache();
-}
-
-static void r4k_flush_icache_page(struct vm_area_struct *vma,
-	struct page *page)
-{
-	struct flush_icache_page_args args;
-
-	/*
-	 * If there's no context yet, or the page isn't executable, no I-cache
-	 * flush is needed.
-	 */
-	if (!(vma->vm_flags & VM_EXEC))
-		return;
-
-	args.vma = vma;
-	args.page = page;
-
-	r4k_on_each_cpu(local_r4k_flush_icache_page, &args, 1, 1);
-}
-
 
 #ifdef CONFIG_DMA_NONCOHERENT
 
@@ -924,6 +856,24 @@ static void __init probe_pcache(void)
 		c->options |= MIPS_CPU_PREFETCH;
 		break;
 
+	case CPU_LOONGSON2:
+		icache_size = 1 << (12 + ((config & CONF_IC) >> 9));
+		c->icache.linesz = 16 << ((config & CONF_IB) >> 5);
+		if (prid & 0x3)
+			c->icache.ways = 4;
+		else
+			c->icache.ways = 2;
+		c->icache.waybit = 0;
+
+		dcache_size = 1 << (12 + ((config & CONF_DC) >> 6));
+		c->dcache.linesz = 16 << ((config & CONF_DB) >> 4);
+		if (prid & 0x3)
+			c->dcache.ways = 4;
+		else
+			c->dcache.ways = 2;
+		c->dcache.waybit = 0;
+		break;
+
 	default:
 		if (!(config & MIPS_CONF_M))
 			panic("Don't know how to probe P-caches on this cpu.");
@@ -1001,12 +951,16 @@ static void __init probe_pcache(void)
 	switch (c->cputype) {
 	case CPU_20KC:
 	case CPU_25KF:
+	case CPU_SB1:
+	case CPU_SB1A:
 		c->dcache.flags |= MIPS_CACHE_PINDEX;
+		break;
+
 	case CPU_R10000:
 	case CPU_R12000:
 	case CPU_R14000:
-	case CPU_SB1:
 		break;
+
 	case CPU_24K:
 	case CPU_34K:
 	case CPU_74K:
@@ -1039,13 +993,25 @@ static void __init probe_pcache(void)
 		break;
 	}
 
+#ifdef  CONFIG_CPU_LOONGSON2
+	/*
+	 * LOONGSON2 has 4 way icache, but when using indexed cache op,
+	 * one op will act on all 4 ways
+	 */
+	c->icache.ways = 1;
+#endif
+
 	printk("Primary instruction cache %ldkB, %s, %s, linesize %d bytes.\n",
 	       icache_size >> 10,
-	       cpu_has_vtag_icache ? "virtually tagged" : "physically tagged",
+	       cpu_has_vtag_icache ? "VIVT" : "VIPT",
 	       way_string[c->icache.ways], c->icache.linesz);
 
-	printk("Primary data cache %ldkB, %s, linesize %d bytes.\n",
-	       dcache_size >> 10, way_string[c->dcache.ways], c->dcache.linesz);
+	printk("Primary data cache %ldkB, %s, %s, %s, linesize %d bytes\n",
+	       dcache_size >> 10, way_string[c->dcache.ways],
+	       (c->dcache.flags & MIPS_CACHE_PINDEX) ? "PIPT" : "VIPT",
+	       (c->dcache.flags & MIPS_CACHE_ALIASES) ?
+			"cache aliases" : "no aliases",
+	       c->dcache.linesz);
 }
 
 /*
@@ -1056,7 +1022,6 @@ static void __init probe_pcache(void)
  */
 static int __init probe_scache(void)
 {
-	extern unsigned long stext;
 	unsigned long flags, addr, begin, end, pow2;
 	unsigned int config = read_c0_config();
 	struct cpuinfo_mips *c = &current_cpu_data;
@@ -1065,7 +1030,7 @@ static int __init probe_scache(void)
 	if (config & CONF_SC)
 		return 0;
 
-	begin = (unsigned long) &stext;
+	begin = (unsigned long) &_stext;
 	begin &= ~((4 * 1024 * 1024) - 1);
 	end = begin + (4 * 1024 * 1024);
 
@@ -1111,6 +1076,24 @@ static int __init probe_scache(void)
 
 	return 1;
 }
+
+#if defined(CONFIG_CPU_LOONGSON2)
+static void __init loongson2_sc_init(void)
+{
+	struct cpuinfo_mips *c = &current_cpu_data;
+
+	scache_size = 512*1024;
+	c->scache.linesz = 32;
+	c->scache.ways = 4;
+	c->scache.waybit = 0;
+	c->scache.waysize = scache_size / (c->scache.ways);
+	c->scache.sets = scache_size / (c->scache.linesz * c->scache.ways);
+	pr_info("Unified secondary cache %ldkB %s, linesize %d bytes.\n",
+	       scache_size >> 10, way_string[c->scache.ways], c->scache.linesz);
+
+	c->options |= MIPS_CPU_INCLUSIVE_CACHES;
+}
+#endif
 
 extern int r5k_sc_init(void);
 extern int rm7k_sc_init(void);
@@ -1160,6 +1143,12 @@ static void __init setup_scache(void)
 		rm7k_sc_init();
 #endif
 		return;
+
+#if defined(CONFIG_CPU_LOONGSON2)
+	case CPU_LOONGSON2:
+		loongson2_sc_init();
+		return;
+#endif
 
 	default:
 		if (c->isa_level == MIPS_CPU_ISA_M32R1 ||
@@ -1221,7 +1210,7 @@ void au1x00_fixup_config_od(void)
 	}
 }
 
-static inline void coherency_setup(void)
+static void __init coherency_setup(void)
 {
 	change_c0_config(CONF_CM_CMASK, CONF_CM_DEFAULT);
 
@@ -1232,7 +1221,7 @@ static inline void coherency_setup(void)
 	 * this bit and; some wire it to zero, others like Toshiba had the
 	 * silly idea of putting something else there ...
 	 */
-	switch (current_cpu_data.cputype) {
+	switch (current_cpu_type()) {
 	case CPU_R4000PC:
 	case CPU_R4000SC:
 	case CPU_R4000MC:
@@ -1242,7 +1231,7 @@ static inline void coherency_setup(void)
 		clear_c0_config(CONF_CU);
 		break;
 	/*
-	 * We need to catch the ealry Alchemy SOCs with
+	 * We need to catch the early Alchemy SOCs with
 	 * the write-only co_config.od bit and set it back to one...
 	 */
 	case CPU_AU1000: /* rev. DA, HA, HB */
@@ -1257,11 +1246,20 @@ void __init r4k_cache_init(void)
 {
 	extern void build_clear_page(void);
 	extern void build_copy_page(void);
-	extern char except_vec2_generic;
+	extern char __weak except_vec2_generic;
+	extern char __weak except_vec2_sb1;
 	struct cpuinfo_mips *c = &current_cpu_data;
 
-	/* Default cache error handler for R4000 and R5000 family */
-	set_uncached_handler (0x100, &except_vec2_generic, 0x80);
+	switch (c->cputype) {
+	case CPU_SB1:
+	case CPU_SB1A:
+		set_uncached_handler(0x100, &except_vec2_sb1, 0x80);
+		break;
+
+	default:
+		set_uncached_handler(0x100, &except_vec2_generic, 0x80);
+		break;
+	}
 
 	probe_pcache();
 	setup_scache();
@@ -1287,11 +1285,10 @@ void __init r4k_cache_init(void)
 					PAGE_SIZE - 1);
 	else
 		shm_align_mask = PAGE_SIZE-1;
-	flush_cache_all		= r4k_flush_cache_all;
+	flush_cache_all		= cache_noop;
 	__flush_cache_all	= r4k___flush_cache_all;
 	flush_cache_mm		= r4k_flush_cache_mm;
 	flush_cache_page	= r4k_flush_cache_page;
-	flush_icache_page	= r4k_flush_icache_page;
 	flush_cache_range	= r4k_flush_cache_range;
 
 	flush_cache_sigtramp	= r4k_flush_cache_sigtramp;

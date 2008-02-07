@@ -16,8 +16,6 @@
 #include <asm/sn/intr.h>
 #include <asm/sn/sn0/hub.h>
 
-extern unsigned int allocate_irqno(void);
-
 /*
  * Max #PCI busses we can handle; ie, max #PCI bridges.
  */
@@ -136,7 +134,7 @@ int __init bridge_probe(nasid_t nasid, int widget_id, int masterwid)
  * A given PCI device, in general, should be able to intr any of the cpus
  * on any one of the hubs connected to its xbow.
  */
-int __devinit pcibios_map_irq(struct pci_dev *dev, u8 slot, u8 pin)
+int __devinit pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	struct bridge_controller *bc = BRIDGE_CONTROLLER(dev->bus);
 	int irq = bc->pci_int[slot];

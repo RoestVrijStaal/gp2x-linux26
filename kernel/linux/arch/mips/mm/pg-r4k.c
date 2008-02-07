@@ -209,7 +209,7 @@ static inline void build_cdex_p(void)
 	}
 
 	if (R4600_V2_HIT_CACHEOP_WAR && cpu_is_r4600_v2_x())
-		build_insn_word(0x3c01a000);	/* lui     $at, 0xa000  */
+		build_insn_word(0x8c200000);	/* lw      $zero, ($at) */
 
 	mi.c_format.opcode     = cache_op;
 	mi.c_format.rs         = 4;		/* $a0 */
@@ -243,11 +243,10 @@ static void __init __build_store_reg(int reg)
 
 static inline void build_store_reg(int reg)
 {
-	if (cpu_has_prefetch)
-		if (reg)
-			build_dst_pref(pref_offset_copy);
-		else
-			build_dst_pref(pref_offset_clear);
+	int pref_off = cpu_has_prefetch ?
+		(reg ? pref_offset_copy : pref_offset_clear) : 0;
+	if (pref_off)
+		build_dst_pref(pref_off);
 	else if (cpu_has_cache_cdex_s)
 		build_cdex_s();
 	else if (cpu_has_cache_cdex_p)
@@ -264,6 +263,20 @@ static inline void build_addiu_a2_a0(unsigned long offset)
 
 	mi.i_format.opcode     = cpu_has_64bit_gp_regs ? daddiu_op : addiu_op;
 	mi.i_format.rs         = 4;		/* $a0 */
+	mi.i_format.rt         = 6;		/* $a2 */
+	mi.i_format.simmediate = offset;
+
+	emit_instruction(mi);
+}
+
+static inline void build_addiu_a2(unsigned long offset)
+{
+	union mips_instruction mi;
+
+	BUG_ON(offset > 0x7fff);
+
+	mi.i_format.opcode     = cpu_has_64bit_gp_regs ? daddiu_op : addiu_op;
+	mi.i_format.rs         = 6;		/* $a2 */
 	mi.i_format.rt         = 6;		/* $a2 */
 	mi.i_format.simmediate = offset;
 
@@ -333,13 +346,15 @@ static inline void build_jr_ra(void)
 void __init build_clear_page(void)
 {
 	unsigned int loop_start;
+	unsigned long off;
+	int i;
 
 	epc = (unsigned int *) &clear_page_array;
 	instruction_pending = 0;
 	store_offset = 0;
 
 	if (cpu_has_prefetch) {
-		switch (current_cpu_data.cputype) {
+		switch (current_cpu_type()) {
 		case CPU_TX49XX:
 			/* TX49 supports only Pref_Load */
 			pref_offset_clear = 0;
@@ -369,7 +384,12 @@ void __init build_clear_page(void)
 		}
 	}
 
-	build_addiu_a2_a0(PAGE_SIZE - (cpu_has_prefetch ? pref_offset_clear : 0));
+        off = PAGE_SIZE - (cpu_has_prefetch ? pref_offset_clear : 0);
+	if (off > 0x7fff) {
+		build_addiu_a2_a0(off >> 1);
+		build_addiu_a2(off >> 1);
+	} else
+		build_addiu_a2_a0(off);
 
 	if (R4600_V2_HIT_CACHEOP_WAR && cpu_is_r4600_v2_x())
 		build_insn_word(0x3c01a000);	/* lui     $at, 0xa000  */
@@ -415,17 +435,33 @@ dest = label();
 	build_jr_ra();
 
 	BUG_ON(epc > clear_page_array + ARRAY_SIZE(clear_page_array));
+
+	pr_info("Synthesized clear page handler (%u instructions).\n",
+		(unsigned int)(epc - clear_page_array));
+
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (epc - clear_page_array); i++)
+		pr_debug("\t.word 0x%08x\n", clear_page_array[i]);
+	pr_debug("\t.set pop\n");
 }
 
 void __init build_copy_page(void)
 {
 	unsigned int loop_start;
+	unsigned long off;
+	int i;
 
 	epc = (unsigned int *) &copy_page_array;
 	store_offset = load_offset = 0;
 	instruction_pending = 0;
 
-	build_addiu_a2_a0(PAGE_SIZE - (cpu_has_prefetch ? pref_offset_copy : 0));
+	off = PAGE_SIZE - (cpu_has_prefetch ? pref_offset_copy : 0);
+	if (off > 0x7fff) {
+		build_addiu_a2_a0(off >> 1);
+		build_addiu_a2(off >> 1);
+	} else
+		build_addiu_a2_a0(off);
 
 	if (R4600_V2_HIT_CACHEOP_WAR && cpu_is_r4600_v2_x())
 		build_insn_word(0x3c01a000);	/* lui     $at, 0xa000  */
@@ -490,4 +526,13 @@ dest = label();
 	build_jr_ra();
 
 	BUG_ON(epc > copy_page_array + ARRAY_SIZE(copy_page_array));
+
+	pr_info("Synthesized copy page handler (%u instructions).\n",
+		(unsigned int)(epc - copy_page_array));
+
+	pr_debug("\t.set push\n");
+	pr_debug("\t.set noreorder\n");
+	for (i = 0; i < (epc - copy_page_array); i++)
+		pr_debug("\t.word 0x%08x\n", copy_page_array[i]);
+	pr_debug("\t.set pop\n");
 }
