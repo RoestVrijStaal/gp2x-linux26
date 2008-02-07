@@ -1,7 +1,6 @@
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/blkdev.h>
-#include <linux/sched.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 
@@ -24,7 +23,7 @@
 #define DMA(ptr) ((a2091_scsiregs *)((ptr)->base))
 #define HDATA(ptr) ((struct WD33C93_hostdata *)((ptr)->hostdata))
 
-static irqreturn_t a2091_intr (int irq, void *_instance, struct pt_regs *fp)
+static irqreturn_t a2091_intr (int irq, void *_instance)
 {
     unsigned long flags;
     unsigned int status;
@@ -40,7 +39,7 @@ static irqreturn_t a2091_intr (int irq, void *_instance, struct pt_regs *fp)
     return IRQ_HANDLED;
 }
 
-static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
+static int dma_setup(struct scsi_cmnd *cmd, int dir_in)
 {
     unsigned short cntr = CNTR_PDMD | CNTR_INTEN;
     unsigned long addr = virt_to_bus(cmd->SCp.ptr);
@@ -115,7 +114,7 @@ static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
     return 0;
 }
 
-static void dma_stop (struct Scsi_Host *instance, Scsi_Cmnd *SCpnt, 
+static void dma_stop(struct Scsi_Host *instance, struct scsi_cmnd *SCpnt,
 		      int status)
 {
     /* disable SCSI interrupts */
@@ -217,7 +216,7 @@ int __init a2091_detect(struct scsi_host_template *tpnt)
     return num_a2091;
 }
 
-static int a2091_bus_reset(Scsi_Cmnd *cmd)
+static int a2091_bus_reset(struct scsi_cmnd *cmd)
 {
 	/* FIXME perform bus-specific reset */
 

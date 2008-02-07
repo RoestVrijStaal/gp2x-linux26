@@ -72,12 +72,12 @@ static void dma_advance_sg(Scsi_Cmnd *);
 static int  oktagon_notify_reboot(struct notifier_block *this, unsigned long code, void *x);
 
 #ifdef USE_BOTTOM_HALF
-static void dma_commit(void *opaque);
+static void dma_commit(struct work_struct *unused);
 
 long oktag_to_io(long *paddr, long *addr, long len);
 long oktag_from_io(long *addr, long *paddr, long len);
 
-static DECLARE_WORK(tq_fake_dma, dma_commit, NULL);
+static DECLARE_WORK(tq_fake_dma, dma_commit);
 
 #define DMA_MAXTRANSFER 0x8000
 
@@ -133,7 +133,7 @@ int oktagon_esp_detect(struct scsi_host_template *tpnt)
 		eregs = (struct ESP_regs *)(address + OKTAGON_ESP_ADDR);
 
 		/* This line was 5 lines lower */
-		esp = esp_allocate(tpnt, (void *)board+OKTAGON_ESP_ADDR);
+		esp = esp_allocate(tpnt, (void *)board + OKTAGON_ESP_ADDR, 0);
 
 		/* we have to shift the registers only one bit for oktagon */
 		esp->shift = 1;
@@ -266,7 +266,7 @@ oktagon_notify_reboot(struct notifier_block *this, unsigned long code, void *x)
  */
  
  
-static void dma_commit(void *opaque)
+static void dma_commit(struct work_struct *unused)
 {
     long wait,len2,pos;
     struct NCR_ESP *esp;
@@ -550,8 +550,7 @@ void dma_mmu_get_scsi_one(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 
 void dma_mmu_get_scsi_sgl(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 {
-        sp->SCp.ptr = page_address(sp->SCp.buffer->page)+
-		      sp->SCp.buffer->offset;
+        sp->SCp.ptr = sg_virt(sp->SCp.buffer);
 }
 
 void dma_mmu_release_scsi_one(struct NCR_ESP *esp, Scsi_Cmnd *sp)
@@ -564,8 +563,7 @@ void dma_mmu_release_scsi_sgl(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 
 void dma_advance_sg(Scsi_Cmnd *sp)
 {
-	sp->SCp.ptr = page_address(sp->SCp.buffer->page)+
-		      sp->SCp.buffer->offset;
+	sp->SCp.ptr = sg_virt(sp->SCp.buffer);
 }
 
 

@@ -95,8 +95,10 @@ enum {
 /* The master ring of all esp hosts we are managing in this driver. */
 static struct NCR_ESP *espchain;
 int nesps = 0, esps_in_use = 0, esps_running = 0;
+EXPORT_SYMBOL(nesps);
+EXPORT_SYMBOL(esps_running);
 
-irqreturn_t esp_intr(int irq, void *dev_id, struct pt_regs *pregs);
+irqreturn_t esp_intr(int irq, void *dev_id);
 
 /* Debugging routines */
 static struct esp_cmdstrings {
@@ -524,16 +526,21 @@ void esp_bootup_reset(struct NCR_ESP *esp, struct ESP_regs *eregs)
 	/* Eat any bitrot in the chip and we are done... */
 	trash = esp_read(eregs->esp_intrpt);
 }
+EXPORT_SYMBOL(esp_bootup_reset);
 
 /* Allocate structure and insert basic data such as SCSI chip frequency
  * data and a pointer to the device
  */
-struct NCR_ESP* esp_allocate(struct scsi_host_template *tpnt, void *esp_dev)
+struct NCR_ESP* esp_allocate(struct scsi_host_template *tpnt, void *esp_dev,
+			     int hotplug)
 {
 	struct NCR_ESP *esp, *elink;
 	struct Scsi_Host *esp_host;
 
-	esp_host = scsi_register(tpnt, sizeof(struct NCR_ESP));
+	if (hotplug)
+		esp_host = scsi_host_alloc(tpnt, sizeof(struct NCR_ESP));
+	else
+		esp_host = scsi_register(tpnt, sizeof(struct NCR_ESP));
 	if(!esp_host)
 		panic("Cannot register ESP SCSI host");
 	esp = (struct NCR_ESP *) esp_host->hostdata;
@@ -768,6 +775,7 @@ const char *esp_info(struct Scsi_Host *host)
 		panic("Bogon ESP revision");
 	};
 }
+EXPORT_SYMBOL(esp_info);
 
 /* From Wolfgang Stanglmeier's NCR scsi driver. */
 struct info_str
@@ -898,6 +906,7 @@ int esp_proc_info(struct Scsi_Host *shost, char *buffer, char **start, off_t off
 		*start = buffer;
 	return esp_host_info(esp, buffer, offset, length);
 }
+EXPORT_SYMBOL(esp_proc_info);
 
 static void esp_get_dmabufs(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 {
@@ -918,7 +927,7 @@ static void esp_get_dmabufs(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 			esp->dma_mmu_get_scsi_sgl(esp, sp);
 		else
 			sp->SCp.ptr =
-				(char *) virt_to_phys((page_address(sp->SCp.buffer->page) + sp->SCp.buffer->offset));
+				(char *) virt_to_phys(sg_virt(sp->SCp.buffer));
 	}
 }
 
@@ -1376,7 +1385,7 @@ int esp_abort(Scsi_Cmnd *SCptr)
 				this->host_scribble = NULL;
 				esp_release_dmabufs(esp, this);
 				this->result = DID_ABORT << 16;
-				this->done(this);
+				this->scsi_done(this);
 				if(don)
 					esp->dma_ints_on(esp);
 				return SUCCESS;
@@ -1739,7 +1748,7 @@ static inline void advance_sg(struct NCR_ESP *esp, Scsi_Cmnd *sp)
 	if (esp->dma_advance_sg)
 		esp->dma_advance_sg (sp);
 	else
-		sp->SCp.ptr = (char *) virt_to_phys((page_address(sp->SCp.buffer->page) + sp->SCp.buffer->offset));
+		sp->SCp.ptr = (char *) virt_to_phys(sg_virt(sp->SCp.buffer));
 
 }
 
@@ -3531,9 +3540,10 @@ state_machine:
 	if(esp->dma_irq_exit)
 		esp->dma_irq_exit(esp);
 }
+EXPORT_SYMBOL(esp_handle);
 
 #ifndef CONFIG_SMP
-irqreturn_t esp_intr(int irq, void *dev_id, struct pt_regs *pregs)
+irqreturn_t esp_intr(int irq, void *dev_id)
 {
 	struct NCR_ESP *esp;
 	unsigned long flags;
@@ -3570,7 +3580,7 @@ repeat:
 }
 #else
 /* For SMP we only service one ESP on the list list at our IRQ level! */
-irqreturn_t esp_intr(int irq, void *dev_id, struct pt_regs *pregs)
+irqreturn_t esp_intr(int irq, void *dev_id)
 {
 	struct NCR_ESP *esp;
 	unsigned long flags;
@@ -3602,11 +3612,10 @@ out:
 int esp_slave_alloc(struct scsi_device *SDptr)
 {
 	struct esp_device *esp_dev =
-		kmalloc(sizeof(struct esp_device), GFP_ATOMIC);
+		kzalloc(sizeof(struct esp_device), GFP_ATOMIC);
 
 	if (!esp_dev)
 		return -ENOMEM;
-	memset(esp_dev, 0, sizeof(struct esp_device));
 	SDptr->hostdata = esp_dev;
 	return 0;
 }
@@ -3628,6 +3637,7 @@ void esp_release(void)
 	esps_in_use--;
 	esps_running = esps_in_use;
 }
+EXPORT_SYMBOL(esp_release);
 #endif
 
 EXPORT_SYMBOL(esp_abort);
