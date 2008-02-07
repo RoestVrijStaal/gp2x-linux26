@@ -38,9 +38,7 @@ static inline int next_SCp(struct scsi_pointer *SCp)
 	if (ret) {
 		SCp->buffer++;
 		SCp->buffers_residual--;
-		SCp->ptr = (char *)
-			 (page_address(SCp->buffer->page) +
-			  SCp->buffer->offset);
+		SCp->ptr = sg_virt(SCp->buffer);
 		SCp->this_residual = SCp->buffer->length;
 	} else {
 		SCp->ptr = NULL;
@@ -66,7 +64,7 @@ static inline void put_next_SCp_byte(struct scsi_pointer *SCp, unsigned char c)
 	SCp->this_residual -= 1;
 }
 
-static inline void init_SCp(Scsi_Cmnd *SCpnt)
+static inline void init_SCp(struct scsi_cmnd *SCpnt)
 {
 	memset(&SCpnt->SCp, 0, sizeof(struct scsi_pointer));
 
@@ -76,10 +74,9 @@ static inline void init_SCp(Scsi_Cmnd *SCpnt)
 
 		SCpnt->SCp.buffer = (struct scatterlist *) SCpnt->request_buffer;
 		SCpnt->SCp.buffers_residual = SCpnt->use_sg - 1;
-		SCpnt->SCp.ptr = (char *)
-			 (page_address(SCpnt->SCp.buffer->page) +
-			  SCpnt->SCp.buffer->offset);
+		SCpnt->SCp.ptr = sg_virt(SCpnt->SCp.buffer);
 		SCpnt->SCp.this_residual = SCpnt->SCp.buffer->length;
+		SCpnt->SCp.phase = SCpnt->request_bufflen;
 
 #ifdef BELT_AND_BRACES
 		/*
@@ -98,6 +95,7 @@ static inline void init_SCp(Scsi_Cmnd *SCpnt)
 	} else {
 		SCpnt->SCp.ptr = (unsigned char *)SCpnt->request_buffer;
 		SCpnt->SCp.this_residual = SCpnt->request_bufflen;
+		SCpnt->SCp.phase = SCpnt->request_bufflen;
 	}
 
 	/*
