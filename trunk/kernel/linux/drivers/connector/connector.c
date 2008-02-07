@@ -128,14 +128,14 @@ EXPORT_SYMBOL_GPL(cn_netlink_send);
  */
 static int cn_call_callback(struct cn_msg *msg, void (*destruct_data)(void *), void *data)
 {
-	struct cn_callback_entry *__cbq;
+	struct cn_callback_entry *__cbq, *__new_cbq;
 	struct cn_dev *dev = &cdev;
 	int err = -ENODEV;
 
 	spin_lock_bh(&dev->cbdev->queue_lock);
 	list_for_each_entry(__cbq, &dev->cbdev->queue_list, callback_entry) {
 		if (cn_cb_equal(&__cbq->id.id, &msg->id)) {
-			if (likely(!test_bit(0, &__cbq->work.pending) &&
+			if (likely(!work_pending(&__cbq->work) &&
 					__cbq->data.ddata == NULL)) {
 				__cbq->data.callback_priv = msg;
 
@@ -143,36 +143,34 @@ static int cn_call_callback(struct cn_msg *msg, void (*destruct_data)(void *), v
 				__cbq->data.destruct_data = destruct_data;
 
 				if (queue_work(dev->cbdev->cn_queue,
-						&__cbq->work))
+							&__cbq->work))
 					err = 0;
+				else
+					err = -EINVAL;
 			} else {
-				struct work_struct *w;
 				struct cn_callback_data *d;
 				
-				w = kzalloc(sizeof(*w) + sizeof(*d), GFP_ATOMIC);
-				if (w) {
-					d = (struct cn_callback_data *)(w+1);
-
+				err = -ENOMEM;
+				__new_cbq = kzalloc(sizeof(struct cn_callback_entry), GFP_ATOMIC);
+				if (__new_cbq) {
+					d = &__new_cbq->data;
 					d->callback_priv = msg;
 					d->callback = __cbq->data.callback;
 					d->ddata = data;
 					d->destruct_data = destruct_data;
-					d->free = w;
+					d->free = __new_cbq;
 
-					INIT_LIST_HEAD(&w->entry);
-					w->pending = 0;
-					w->func = &cn_queue_wrapper;
-					w->data = d;
-					init_timer(&w->timer);
-					
-					if (queue_work(dev->cbdev->cn_queue, w))
+					INIT_WORK(&__new_cbq->work,
+							&cn_queue_wrapper);
+
+					if (queue_work(dev->cbdev->cn_queue,
+						    &__new_cbq->work))
 						err = 0;
 					else {
-						kfree(w);
+						kfree(__new_cbq);
 						err = -EINVAL;
 					}
-				} else
-					err = -ENOMEM;
+				}
 			}
 			break;
 		}
@@ -216,13 +214,13 @@ static void cn_rx_skb(struct sk_buff *__skb)
 	skb = skb_get(__skb);
 
 	if (skb->len >= NLMSG_SPACE(0)) {
-		nlh = (struct nlmsghdr *)skb->data;
+		nlh = nlmsg_hdr(skb);
 
 		if (nlh->nlmsg_len < sizeof(struct cn_msg) ||
 		    skb->len < nlh->nlmsg_len ||
 		    nlh->nlmsg_len > CONNECTOR_MAX_MSG_SIZE) {
 			kfree_skb(skb);
-			goto out;
+			return;
 		}
 
 		len = NLMSG_ALIGN(nlh->nlmsg_len);
@@ -233,21 +231,6 @@ static void cn_rx_skb(struct sk_buff *__skb)
 		if (err < 0)
 			kfree_skb(skb);
 	}
-
-out:
-	kfree_skb(__skb);
-}
-
-/*
- * Netlink socket input callback - dequeues the skbs and calls the
- * main netlink receiving function.
- */
-static void cn_input(struct sock *sk, int len)
-{
-	struct sk_buff *skb;
-
-	while ((skb = skb_dequeue(&sk->sk_receive_queue)) != NULL)
-		cn_rx_skb(skb);
 }
 
 /*
@@ -446,13 +429,13 @@ static int __devinit cn_init(void)
 	struct cn_dev *dev = &cdev;
 	int err;
 
-	dev->input = cn_input;
+	dev->input = cn_rx_skb;
 	dev->id.idx = cn_idx;
 	dev->id.val = cn_val;
 
-	dev->nls = netlink_kernel_create(NETLINK_CONNECTOR,
+	dev->nls = netlink_kernel_create(&init_net, NETLINK_CONNECTOR,
 					 CN_NETLINK_USERS + 0xf,
-					 dev->input, THIS_MODULE);
+					 dev->input, NULL, THIS_MODULE);
 	if (!dev->nls)
 		return -EIO;
 
