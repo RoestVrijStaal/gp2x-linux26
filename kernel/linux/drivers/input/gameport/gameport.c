@@ -23,6 +23,7 @@
 #include <linux/kthread.h>
 #include <linux/sched.h>	/* HZ */
 #include <linux/mutex.h>
+#include <linux/freezer.h>
 
 /*#include <asm/io.h>*/
 
@@ -37,8 +38,6 @@ EXPORT_SYMBOL(gameport_unregister_driver);
 EXPORT_SYMBOL(gameport_open);
 EXPORT_SYMBOL(gameport_close);
 EXPORT_SYMBOL(gameport_rescan);
-EXPORT_SYMBOL(gameport_cooked_read);
-EXPORT_SYMBOL(gameport_set_name);
 EXPORT_SYMBOL(gameport_set_phys);
 EXPORT_SYMBOL(gameport_start_polling);
 EXPORT_SYMBOL(gameport_stop_polling);
@@ -135,7 +134,8 @@ static int gameport_measure_speed(struct gameport *gameport)
 	}
 
 	gameport_close(gameport);
-	return (cpu_data[raw_smp_processor_id()].loops_per_jiffy * (unsigned long)HZ / (1000 / 50)) / (tx < 1 ? 1 : tx);
+	return (cpu_data(raw_smp_processor_id()).loops_per_jiffy *
+		(unsigned long)HZ / (1000 / 50)) / (tx < 1 ? 1 : tx);
 
 #else
 
@@ -189,38 +189,40 @@ static void gameport_run_poll_handler(unsigned long d)
  * Basic gameport -> driver core mappings
  */
 
-static void gameport_bind_driver(struct gameport *gameport, struct gameport_driver *drv)
+static int gameport_bind_driver(struct gameport *gameport, struct gameport_driver *drv)
 {
-	down_write(&gameport_bus.subsys.rwsem);
+	int error;
 
 	gameport->dev.driver = &drv->driver;
 	if (drv->connect(gameport, drv)) {
 		gameport->dev.driver = NULL;
-		goto out;
+		return -ENODEV;
 	}
-	device_bind_driver(&gameport->dev);
-out:
-	up_write(&gameport_bus.subsys.rwsem);
-}
 
-static void gameport_release_driver(struct gameport *gameport)
-{
-	down_write(&gameport_bus.subsys.rwsem);
-	device_release_driver(&gameport->dev);
-	up_write(&gameport_bus.subsys.rwsem);
+	error = device_bind_driver(&gameport->dev);
+	if (error) {
+		printk(KERN_WARNING
+			"gameport: device_bind_driver() failed "
+			"for %s (%s) and %s, error: %d\n",
+			gameport->phys, gameport->name,
+			drv->description, error);
+		drv->disconnect(gameport);
+		gameport->dev.driver = NULL;
+		return error;
+	}
+
+	return 0;
 }
 
 static void gameport_find_driver(struct gameport *gameport)
 {
 	int error;
 
-	down_write(&gameport_bus.subsys.rwsem);
 	error = device_attach(&gameport->dev);
 	if (error < 0)
 		printk(KERN_WARNING
 			"gameport: device_attach() failed for %s (%s), error: %d\n",
 			gameport->phys, gameport->name, error);
-	up_write(&gameport_bus.subsys.rwsem);
 }
 
 
@@ -442,11 +444,11 @@ static struct gameport *gameport_get_pending_child(struct gameport *parent)
 
 static int gameport_thread(void *nothing)
 {
+	set_freezable();
 	do {
 		gameport_handle_event();
-		wait_event_interruptible(gameport_wait,
+		wait_event_freezable(gameport_wait,
 			kthread_should_stop() || !list_empty(&gameport_event_list));
-		try_to_freeze();
 	} while (!kthread_should_stop());
 
 	printk(KERN_DEBUG "gameport: kgameportd exiting\n");
@@ -468,13 +470,12 @@ static ssize_t gameport_rebind_driver(struct device *dev, struct device_attribut
 {
 	struct gameport *gameport = to_gameport_port(dev);
 	struct device_driver *drv;
-	int retval;
+	int error;
 
-	retval = mutex_lock_interruptible(&gameport_mutex);
-	if (retval)
-		return retval;
+	error = mutex_lock_interruptible(&gameport_mutex);
+	if (error)
+		return error;
 
-	retval = count;
 	if (!strncmp(buf, "none", count)) {
 		gameport_disconnect_port(gameport);
 	} else if (!strncmp(buf, "reconnect", count)) {
@@ -484,15 +485,15 @@ static ssize_t gameport_rebind_driver(struct device *dev, struct device_attribut
 		gameport_find_driver(gameport);
 	} else if ((drv = driver_find(buf, &gameport_bus)) != NULL) {
 		gameport_disconnect_port(gameport);
-		gameport_bind_driver(gameport, to_gameport_driver(drv));
+		error = gameport_bind_driver(gameport, to_gameport_driver(drv));
 		put_driver(drv);
 	} else {
-		retval = -EINVAL;
+		error = -EINVAL;
 	}
 
 	mutex_unlock(&gameport_mutex);
 
-	return retval;
+	return error ? error : count;
 }
 
 static struct device_attribute gameport_device_attrs[] = {
@@ -640,7 +641,7 @@ static void gameport_disconnect_port(struct gameport *gameport)
 		do {
 			parent = s->parent;
 
-			gameport_release_driver(s);
+			device_release_driver(&s->dev);
 			gameport_destroy_port(s);
 		} while ((s = parent) != gameport);
 	}
@@ -648,7 +649,7 @@ static void gameport_disconnect_port(struct gameport *gameport)
 	/*
 	 * Ok, no children left, now disconnect this port
 	 */
-	gameport_release_driver(gameport);
+	device_release_driver(&gameport->dev);
 }
 
 void gameport_rescan(struct gameport *gameport)
@@ -716,12 +717,6 @@ static int gameport_driver_remove(struct device *dev)
 	return 0;
 }
 
-static struct bus_type gameport_bus = {
-	.name	= "gameport",
-	.probe	= gameport_driver_probe,
-	.remove	= gameport_driver_remove,
-};
-
 static void gameport_add_driver(struct gameport_driver *drv)
 {
 	int error;
@@ -767,6 +762,15 @@ static int gameport_bus_match(struct device *dev, struct device_driver *drv)
 	return !gameport_drv->ignore;
 }
 
+static struct bus_type gameport_bus = {
+	.name		= "gameport",
+	.dev_attrs	= gameport_device_attrs,
+	.drv_attrs	= gameport_driver_attrs,
+	.match		= gameport_bus_match,
+	.probe		= gameport_driver_probe,
+	.remove		= gameport_driver_remove,
+};
+
 static void gameport_set_drv(struct gameport *gameport, struct gameport_driver *drv)
 {
 	mutex_lock(&gameport->drv_mutex);
@@ -776,7 +780,6 @@ static void gameport_set_drv(struct gameport *gameport, struct gameport_driver *
 
 int gameport_open(struct gameport *gameport, struct gameport_driver *drv, int mode)
 {
-
 	if (gameport->open) {
 		if (gameport->open(gameport, mode)) {
 			return -1;
@@ -804,9 +807,6 @@ static int __init gameport_init(void)
 {
 	int error;
 
-	gameport_bus.dev_attrs = gameport_device_attrs;
-	gameport_bus.drv_attrs = gameport_driver_attrs;
-	gameport_bus.match = gameport_bus_match;
 	error = bus_register(&gameport_bus);
 	if (error) {
 		printk(KERN_ERR "gameport: failed to register gameport bus, error: %d\n", error);
