@@ -17,8 +17,6 @@
  * device can't do DMA handshaking for some stupid reason. We don't need to do that.
  */
 
-#undef REALLY_SLOW_IO           /* most systems can safely undef this */
-
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/timer.h>
@@ -416,12 +414,6 @@ cris_ide_reset(unsigned val)
 #ifdef CONFIG_ETRAX_IDE_G27_RESET
 	REG_SHADOW_SET(R_PORT_G_DATA, port_g_data_shadow, 27, val);
 #endif
-#ifdef CONFIG_ETRAX_IDE_CSE1_16_RESET
-	REG_SHADOW_SET(port_cse1_addr, port_cse1_shadow, 16, val);
-#endif
-#ifdef CONFIG_ETRAX_IDE_CSP0_8_RESET
-	REG_SHADOW_SET(port_csp0_addr, port_csp0_shadow, 8, val);
-#endif
 #ifdef CONFIG_ETRAX_IDE_PB7_RESET
 	port_pb_dir_shadow = port_pb_dir_shadow |
 		IO_STATE(R_PORT_PB_DIR, dir7, output);
@@ -672,7 +664,6 @@ cris_ide_inb(unsigned long reg)
 	return (unsigned char)cris_ide_inw(reg);
 }
 
-static int cris_dma_check (ide_drive_t *drive);
 static int cris_dma_end (ide_drive_t *drive);
 static int cris_dma_setup (ide_drive_t *drive);
 static void cris_dma_exec_cmd (ide_drive_t *drive, u8 command);
@@ -682,10 +673,13 @@ static void cris_ide_input_data (ide_drive_t *drive, void *, unsigned int);
 static void cris_ide_output_data (ide_drive_t *drive, void *, unsigned int);
 static void cris_atapi_input_bytes(ide_drive_t *drive, void *, unsigned int);
 static void cris_atapi_output_bytes(ide_drive_t *drive, void *, unsigned int);
-static int cris_dma_off (ide_drive_t *drive);
 static int cris_dma_on (ide_drive_t *drive);
 
-static void tune_cris_ide(ide_drive_t *drive, u8 pio)
+static void cris_dma_off(ide_drive_t *drive)
+{
+}
+
+static void cris_set_pio_mode(ide_drive_t *drive, const u8 pio)
 {
 	int setup, strobe, hold;
 
@@ -723,14 +717,9 @@ static void tune_cris_ide(ide_drive_t *drive, u8 pio)
 	cris_ide_set_speed(TYPE_PIO, setup, strobe, hold);
 }
 
-static int speed_cris_ide(ide_drive_t *drive, u8 speed)
+static void cris_set_dma_mode(ide_drive_t *drive, const u8 speed)
 {
 	int cyc = 0, dvs = 0, strobe = 0, hold = 0;
-
-	if (speed >= XFER_PIO_0 && speed <= XFER_PIO_4) {
-		tune_cris_ide(drive, speed - XFER_PIO_0);
-		return 0;
-	}
 
 	switch(speed)
 	{
@@ -759,15 +748,13 @@ static int speed_cris_ide(ide_drive_t *drive, u8 speed)
 			hold = ATA_DMA2_HOLD;
 			break;
 		default:
-			return 0;
+			return;
 	}
 
 	if (speed >= XFER_UDMA_0)
 		cris_ide_set_speed(TYPE_UDMA, cyc, dvs, 0);
 	else
 		cris_ide_set_speed(TYPE_DMA, 0, strobe, hold);
-
-	return 0;
 }
 
 void __init
@@ -786,24 +773,24 @@ init_e100_ide (void)
 	/* the IDE control register is at ATA address 6, with CS1 active instead of CS0 */
 	ide_offsets[IDE_CONTROL_OFFSET] = cris_ide_reg_addr(6, 1, 0);
 
-	/* first fill in some stuff in the ide_hwifs fields */
+	for (h = 0; h < 4; h++) {
+		ide_hwif_t *hwif = NULL;
 
-	for(h = 0; h < MAX_HWIFS; h++) {
-		ide_hwif_t *hwif = &ide_hwifs[h];
 		ide_setup_ports(&hw, cris_ide_base_address(h),
 		                ide_offsets,
 		                0, 0, cris_ide_ack_intr,
 		                ide_default_irq(0));
-		ide_register_hw(&hw, &hwif);
-		hwif->mmio = 2;
+		ide_register_hw(&hw, NULL, 1, &hwif);
+		if (hwif == NULL)
+			continue;
+		hwif->mmio = 1;
 		hwif->chipset = ide_etrax100;
-		hwif->tuneproc = &tune_cris_ide;
-		hwif->speedproc = &speed_cris_ide;
+		hwif->set_pio_mode = &cris_set_pio_mode;
+		hwif->set_dma_mode = &cris_set_dma_mode;
 		hwif->ata_input_data = &cris_ide_input_data;
 		hwif->ata_output_data = &cris_ide_output_data;
 		hwif->atapi_input_bytes = &cris_atapi_input_bytes;
 		hwif->atapi_output_bytes = &cris_atapi_output_bytes;
-		hwif->ide_dma_check = &cris_dma_check;
 		hwif->ide_dma_end = &cris_dma_end;
 		hwif->dma_setup = &cris_dma_setup;
 		hwif->dma_exec_cmd = &cris_dma_exec_cmd;
@@ -814,13 +801,16 @@ init_e100_ide (void)
 		hwif->OUTBSYNC = &cris_ide_outbsync;
 		hwif->INB = &cris_ide_inb;
 		hwif->INW = &cris_ide_inw;
-		hwif->ide_dma_host_off = &cris_dma_off;
-		hwif->ide_dma_host_on = &cris_dma_on;
-		hwif->ide_dma_off_quietly = &cris_dma_off;
-		hwif->udma_four = 0;
+		hwif->dma_host_off = &cris_dma_off;
+		hwif->dma_host_on = &cris_dma_on;
+		hwif->dma_off_quietly = &cris_dma_off;
+		hwif->cbl = ATA_CBL_PATA40;
+		hwif->host_flags |= IDE_HFLAG_NO_ATAPI_DMA;
+		hwif->pio_mask = ATA_PIO4,
+		hwif->drives[0].autotune = 1;
+		hwif->drives[1].autotune = 1;
 		hwif->ultra_mask = cris_ultra_mask;
 		hwif->mwdma_mask = 0x07; /* Multiword DMA 0-2 */
-		hwif->swdma_mask = 0x07; /* Singleword DMA 0-2 */
 	}
 
 	/* Reset pulse */
@@ -833,11 +823,6 @@ init_e100_ide (void)
 	cris_ide_set_speed(TYPE_PIO, ATA_PIO4_SETUP, ATA_PIO4_STROBE, ATA_PIO4_HOLD);
 	cris_ide_set_speed(TYPE_DMA, 0, ATA_DMA2_STROBE, ATA_DMA2_HOLD);
 	cris_ide_set_speed(TYPE_UDMA, ATA_UDMA2_CYC, ATA_UDMA2_DVS, 0);
-}
-
-static int cris_dma_off (ide_drive_t *drive)
-{
-	return 0;
 }
 
 static int cris_dma_on (ide_drive_t *drive)
@@ -950,10 +935,11 @@ static int cris_ide_build_dmatable (ide_drive_t *drive)
 		 * than two possibly non-adjacent physical 4kB pages.
 		 */
 		/* group sequential buffers into one large buffer */
-		addr = page_to_phys(sg->page) + sg->offset;
+		addr = sg_phys(sg);
 		size = sg_dma_len(sg);
-		while (sg++, --i) {
-			if ((addr + size) != page_to_phys(sg->page) + sg->offset)
+		while (--i) {
+			sg = sg_next(sg);
+			if ((addr + size) != sg_phys(sg))
 				break;
 			size += sg_dma_len(sg);
 		}
@@ -1003,19 +989,6 @@ static int cris_ide_build_dmatable (ide_drive_t *drive)
 	return 1;	/* let the PIO routines handle this weirdness */
 }
 
-static int cris_config_drive_for_dma (ide_drive_t *drive)
-{
-	u8 speed = ide_dma_speed(drive, 1);
-
-	if (!speed)
-		return 0;
-
-	speed_cris_ide(drive, speed);
-	ide_config_drive_speed(drive, speed);
-
-	return ide_dma_enable(drive);
-}
-
 /*
  * cris_dma_intr() is the handler for disk read/write DMA interrupts
  */
@@ -1042,21 +1015,6 @@ static ide_startstop_t cris_dma_intr (ide_drive_t *drive)
  * Returns 1 if DMA read/write could not be started, in which case
  * the caller should revert to PIO for the current request.
  */
-
-static int cris_dma_check(ide_drive_t *drive)
-{
-	ide_hwif_t *hwif = drive->hwif;
-	struct hd_driveid* id = drive->id;
-
-	if (id && (id->capability & 1)) {
-		if (ide_use_dma(drive)) {
-			if (cris_config_drive_for_dma(drive))
-				return hwif->ide_dma_on(drive);
-		}
-	}
-
-	return hwif->ide_dma_off_quietly(drive);
-}
 
 static int cris_dma_end(ide_drive_t *drive)
 {
