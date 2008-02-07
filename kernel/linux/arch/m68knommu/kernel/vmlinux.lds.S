@@ -60,8 +60,9 @@ SECTIONS {
 #endif
 
 	.text : {
+		_text = .;
 		_stext = . ;
-        	*(.text)
+		TEXT_TEXT
 		SCHED_TEXT
         	*(.text.lock)
 
@@ -85,6 +86,16 @@ SECTIONS {
 		__start___ksymtab_gpl = .;
 		*(__ksymtab_gpl)
 		__stop___ksymtab_gpl = .;
+
+		/* Kernel symbol table: Normal unused symbols */
+		__start___ksymtab_unused = .;
+		*(__ksymtab_unused)
+		__stop___ksymtab_unused = .;
+
+		/* Kernel symbol table: GPL-only unused symbols */
+		__start___ksymtab_unused_gpl = .;
+		*(__ksymtab_unused_gpl)
+		__stop___ksymtab_unused_gpl = .;
 
 		/* Kernel symbol table: GPL-future symbols */
 		__start___ksymtab_gpl_future = .;
@@ -122,7 +133,7 @@ SECTIONS {
 	.data DATA_ADDR : {
 		. = ALIGN(4);
 		_sdata = . ;
-		*(.data)
+		DATA_DATA
 		. = ALIGN(8192) ;
 		*(.data.init_task)
 		_edata = . ;
@@ -140,13 +151,7 @@ SECTIONS {
 		*(.init.setup)
 		__setup_end = .;
 		__initcall_start = .;
-		*(.initcall1.init)
-		*(.initcall2.init)
-		*(.initcall3.init)
-		*(.initcall4.init)
-		*(.initcall5.init)
-		*(.initcall6.init)
-		*(.initcall7.init)
+		INITCALLS
 		__initcall_end = .;
 		__con_initcall_start = .;
 		*(.con_initcall.init)
@@ -154,10 +159,12 @@ SECTIONS {
 		__security_initcall_start = .;
 		*(.security_initcall.init)
 		__security_initcall_end = .;
+#ifdef CONFIG_BLK_DEV_INITRD
 		. = ALIGN(4);
 		__initramfs_start = .;
 		*(.init.ramfs)
 		__initramfs_end = .;
+#endif
 		. = ALIGN(4096);
 		__init_end = .;
 	} > INIT
