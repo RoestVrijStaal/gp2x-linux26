@@ -1,11 +1,12 @@
 /*
- *  linux/drivers/mmc/sdhci.h - Secure Digital Host Controller Interface driver
+ *  linux/drivers/mmc/host/sdhci.h - Secure Digital Host Controller Interface driver
  *
- *  Copyright (C) 2005 Pierre Ossman, All Rights Reserved.
+ *  Copyright (C) 2005-2007 Pierre Ossman, All Rights Reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
  */
 
 /*
@@ -70,6 +71,7 @@
 #define SDHCI_HOST_CONTROL 	0x28
 #define  SDHCI_CTRL_LED		0x01
 #define  SDHCI_CTRL_4BITBUS	0x02
+#define  SDHCI_CTRL_HISPD	0x04
 
 #define SDHCI_POWER_CONTROL	0x29
 #define  SDHCI_POWER_ON		0x01
@@ -79,7 +81,7 @@
 
 #define SDHCI_BLOCK_GAP_CONTROL	0x2A
 
-#define SDHCI_WALK_UP_CONTROL	0x2B
+#define SDHCI_WAKE_UP_CONTROL	0x2B
 
 #define SDHCI_CLOCK_CONTROL	0x2C
 #define  SDHCI_DIVIDER_SHIFT	8
@@ -105,6 +107,7 @@
 #define  SDHCI_INT_CARD_INSERT	0x00000040
 #define  SDHCI_INT_CARD_REMOVE	0x00000080
 #define  SDHCI_INT_CARD_INT	0x00000100
+#define  SDHCI_INT_ERROR	0x00008000
 #define  SDHCI_INT_TIMEOUT	0x00010000
 #define  SDHCI_INT_CRC		0x00020000
 #define  SDHCI_INT_END_BIT	0x00040000
@@ -137,6 +140,7 @@
 #define  SDHCI_CLOCK_BASE_SHIFT	8
 #define  SDHCI_MAX_BLOCK_MASK	0x00030000
 #define  SDHCI_MAX_BLOCK_SHIFT  16
+#define  SDHCI_CAN_DO_HISPD	0x00200000
 #define  SDHCI_CAN_DO_DMA	0x00400000
 #define  SDHCI_CAN_VDD_330	0x01000000
 #define  SDHCI_CAN_VDD_300	0x02000000
@@ -167,11 +171,11 @@ struct sdhci_host {
 	spinlock_t		lock;		/* Mutex */
 
 	int			flags;		/* Host attributes */
-#define SDHCI_USE_DMA		(1<<0)
+#define SDHCI_USE_DMA		(1<<0)		/* Host is DMA capable */
+#define SDHCI_REQ_USE_DMA	(1<<1)		/* Use DMA for this req. */
 
 	unsigned int		max_clk;	/* Max possible freq (MHz) */
 	unsigned int		timeout_clk;	/* Timeout freq (KHz) */
-	unsigned int		max_block;	/* Max block size (bytes) */
 
 	unsigned int		clock;		/* Current clock (MHz) */
 	unsigned short		power;		/* Current voltage */
@@ -179,14 +183,12 @@ struct sdhci_host {
 	struct mmc_request	*mrq;		/* Current request */
 	struct mmc_command	*cmd;		/* Current command */
 	struct mmc_data		*data;		/* Current data request */
+	int			data_early:1;	/* Data finished before cmd */
 
 	struct scatterlist	*cur_sg;	/* We're working on this */
-	char			*mapped_sg;	/* This is where it's mapped */
 	int			num_sg;		/* Entries left */
 	int			offset;		/* Offset into current sg */
 	int			remain;		/* Bytes left in current */
-
-	int			size;		/* Remaining bytes in transfer */
 
 	char			slot_descr[20];	/* Name for reservations */
 
