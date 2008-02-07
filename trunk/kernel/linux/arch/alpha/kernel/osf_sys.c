@@ -93,7 +93,6 @@ osf_set_program_attributes(unsigned long text_start, unsigned long text_len,
  * offset differences aren't the same as "d_reclen").
  */
 #define NAME_OFFSET	offsetof (struct osf_dirent, d_name)
-#define ROUND_UP(x)	(((x)+3) & ~3)
 
 struct osf_dirent {
 	unsigned int d_ino;
@@ -111,22 +110,26 @@ struct osf_dirent_callback {
 
 static int
 osf_filldir(void *__buf, const char *name, int namlen, loff_t offset,
-	    ino_t ino, unsigned int d_type)
+	    u64 ino, unsigned int d_type)
 {
 	struct osf_dirent __user *dirent;
 	struct osf_dirent_callback *buf = (struct osf_dirent_callback *) __buf;
-	unsigned int reclen = ROUND_UP(NAME_OFFSET + namlen + 1);
+	unsigned int reclen = ALIGN(NAME_OFFSET + namlen + 1, sizeof(u32));
+	unsigned int d_ino;
 
 	buf->error = -EINVAL;	/* only used if we fail */
 	if (reclen > buf->count)
 		return -EINVAL;
+	d_ino = ino;
+	if (sizeof(d_ino) < sizeof(ino) && d_ino != ino)
+		return -EOVERFLOW;
 	if (buf->basep) {
 		if (put_user(offset, buf->basep))
 			return -EFAULT;
 		buf->basep = NULL;
 	}
 	dirent = buf->dirent;
-	put_user(ino, &dirent->d_ino);
+	put_user(d_ino, &dirent->d_ino);
 	put_user(namlen, &dirent->d_namlen);
 	put_user(reclen, &dirent->d_reclen);
 	if (copy_to_user(dirent->d_name, name, namlen) ||
@@ -170,7 +173,6 @@ osf_getdirentries(unsigned int fd, struct osf_dirent __user *dirent,
 	return error;
 }
 
-#undef ROUND_UP
 #undef NAME_OFFSET
 
 asmlinkage unsigned long
@@ -273,7 +275,7 @@ osf_fstatfs(unsigned long fd, struct osf_statfs __user *buffer, unsigned long bu
 	retval = -EBADF;
 	file = fget(fd);
 	if (file) {
-		retval = do_osf_statfs(file->f_dentry, buffer, bufsiz);
+		retval = do_osf_statfs(file->f_path.dentry, buffer, bufsiz);
 		fput(file);
 	}
 	return retval;
@@ -402,15 +404,15 @@ osf_utsname(char __user *name)
 
 	down_read(&uts_sem);
 	error = -EFAULT;
-	if (copy_to_user(name + 0, system_utsname.sysname, 32))
+	if (copy_to_user(name + 0, utsname()->sysname, 32))
 		goto out;
-	if (copy_to_user(name + 32, system_utsname.nodename, 32))
+	if (copy_to_user(name + 32, utsname()->nodename, 32))
 		goto out;
-	if (copy_to_user(name + 64, system_utsname.release, 32))
+	if (copy_to_user(name + 64, utsname()->release, 32))
 		goto out;
-	if (copy_to_user(name + 96, system_utsname.version, 32))
+	if (copy_to_user(name + 96, utsname()->version, 32))
 		goto out;
-	if (copy_to_user(name + 128, system_utsname.machine, 32))
+	if (copy_to_user(name + 128, utsname()->machine, 32))
 		goto out;
 
 	error = 0;
@@ -449,8 +451,8 @@ osf_getdomainname(char __user *name, int namelen)
 
 	down_read(&uts_sem);
 	for (i = 0; i < len; ++i) {
-		__put_user(system_utsname.domainname[i], name + i);
-		if (system_utsname.domainname[i] == '\0')
+		__put_user(utsname()->domainname[i], name + i);
+		if (utsname()->domainname[i] == '\0')
 			break;
 	}
 	up_read(&uts_sem);
@@ -607,12 +609,12 @@ osf_sigstack(struct sigstack __user *uss, struct sigstack __user *uoss)
 asmlinkage long
 osf_sysinfo(int command, char __user *buf, long count)
 {
-	static char * sysinfo_table[] = {
-		system_utsname.sysname,
-		system_utsname.nodename,
-		system_utsname.release,
-		system_utsname.version,
-		system_utsname.machine,
+	char *sysinfo_table[] = {
+		utsname()->sysname,
+		utsname()->nodename,
+		utsname()->release,
+		utsname()->version,
+		utsname()->machine,
 		"alpha",	/* instruction set architecture */
 		"dummy",	/* hardware serial number */
 		"dummy",	/* hardware manufacturer */
@@ -713,7 +715,7 @@ osf_setsysinfo(unsigned long op, void __user *buffer, unsigned long nbytes,
 		/* 
 		 * Alpha Architecture Handbook 4.7.7.3:
 		 * To be fully IEEE compiant, we must track the current IEEE
-		 * exception state in software, because spurrious bits can be
+		 * exception state in software, because spurious bits can be
 		 * set in the trap shadow of a software-complete insn.
 		 */
 
@@ -951,15 +953,25 @@ osf_setitimer(int which, struct itimerval32 __user *in, struct itimerval32 __use
 asmlinkage int
 osf_utimes(char __user *filename, struct timeval32 __user *tvs)
 {
-	struct timeval ktvs[2];
+	struct timespec tv[2];
 
 	if (tvs) {
+		struct timeval ktvs[2];
 		if (get_tv32(&ktvs[0], &tvs[0]) ||
 		    get_tv32(&ktvs[1], &tvs[1]))
 			return -EFAULT;
+
+		if (ktvs[0].tv_usec < 0 || ktvs[0].tv_usec >= 1000000 ||
+		    ktvs[1].tv_usec < 0 || ktvs[1].tv_usec >= 1000000)
+			return -EINVAL;
+
+		tv[0].tv_sec = ktvs[0].tv_sec;
+		tv[0].tv_nsec = 1000 * ktvs[0].tv_usec;
+		tv[1].tv_sec = ktvs[1].tv_sec;
+		tv[1].tv_nsec = 1000 * ktvs[1].tv_usec;
 	}
 
-	return do_utimes(AT_FDCWD, filename, tvs ? ktvs : NULL);
+	return do_utimes(AT_FDCWD, filename, tvs ? tv : NULL, 0);
 }
 
 #define MAX_SELECT_SECONDS \
@@ -975,7 +987,7 @@ osf_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp,
 	long timeout;
 	int ret = -EINVAL;
 	struct fdtable *fdt;
-	int max_fdset;
+	int max_fds;
 
 	timeout = MAX_SCHEDULE_TIMEOUT;
 	if (tvp) {
@@ -999,9 +1011,9 @@ osf_select(int n, fd_set __user *inp, fd_set __user *outp, fd_set __user *exp,
 
 	rcu_read_lock();
 	fdt = files_fdtable(current->files);
-	max_fdset = fdt->max_fdset;
+	max_fds = fdt->max_fds;
 	rcu_read_unlock();
-	if (n < 0 || n > max_fdset)
+	if (n < 0 || n > max_fds)
 		goto out_nofds;
 
 	/*
@@ -1262,6 +1274,9 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 
 	if (len > limit)
 		return -ENOMEM;
+
+	if (flags & MAP_FIXED)
+		return addr;
 
 	/* First, see if the given suggestion fits.
 

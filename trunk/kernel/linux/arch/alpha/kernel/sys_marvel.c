@@ -22,6 +22,7 @@
 #include <asm/core_marvel.h>
 #include <asm/hwrpb.h>
 #include <asm/tlbflush.h>
+#include <asm/vga.h>
 
 #include "proto.h"
 #include "err_impl.h"
@@ -38,7 +39,7 @@
  * Interrupt handling.
  */
 static void 
-io7_device_interrupt(unsigned long vector, struct pt_regs * regs)
+io7_device_interrupt(unsigned long vector)
 {
 	unsigned int pid;
 	unsigned int irq;
@@ -64,7 +65,7 @@ io7_device_interrupt(unsigned long vector, struct pt_regs * regs)
 	irq &= MARVEL_IRQ_VEC_IRQ_MASK;		/* not too many bits */
 	irq |= pid << MARVEL_IRQ_VEC_PE_SHIFT;	/* merge the pid     */
 
-	handle_irq(irq, regs);
+	handle_irq(irq);
 }
 
 static volatile unsigned long *
@@ -412,17 +413,14 @@ marvel_init_pci(void)
 
 	pci_probe_only = 1;
 	common_init_pci();
-
-#ifdef CONFIG_VGA_HOSE
 	locate_and_init_vga(NULL);
-#endif
 
 	/* Clear any io7 errors.  */
 	for (io7 = NULL; (io7 = marvel_next_io7(io7)) != NULL; ) 
 		io7_clear_errors(io7);
 }
 
-static void
+static void __init
 marvel_init_rtc(void)
 {
 	init_rtc_irq();
