@@ -121,15 +121,26 @@ config KEYBOARD_NEWTON
 	  To compile this driver as a module, choose M here: the
 	  module will be called newtonkbd.
 
+config KEYBOARD_STOWAWAY
+	tristate "Stowaway keyboard"
+	select SERIO
+	help
+	  Say Y here if you have a Stowaway keyboard on a serial port.
+	  Stowaway compatible keyboards like Dicota Input-PDA keyboard
+	  are also supported by this driver.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called stowaway.
+
 config KEYBOARD_CORGI
 	tristate "Corgi keyboard"
 	depends on PXA_SHARPSL
-	default y	
+	default y
 	help
-	  Say Y here to enable the keyboard on the Sharp Zaurus SL-C7xx 
+	  Say Y here to enable the keyboard on the Sharp Zaurus SL-C7xx
 	  series of PDAs.
 
-	  To compile this driver as a module, choose M here: the 
+	  To compile this driver as a module, choose M here: the
 	  module will be called corgikbd.
 
 config KEYBOARD_SPITZ
@@ -153,9 +164,23 @@ config KEYBOARD_AMIGA
 	  To compile this driver as a module, choose M here: the
 	  module will be called amikbd.
 
+config ATARI_KBD_CORE
+	bool
+
+config KEYBOARD_ATARI
+	tristate "Atari keyboard"
+	depends on ATARI
+	select ATARI_KBD_CORE
+	help
+	  Say Y here if you are running Linux on any Atari and have a keyboard
+	  attached.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called atakbd.
+
 config KEYBOARD_HIL_OLD
 	tristate "HP HIL keyboard support (simple driver)"
-	depends on GSC
+	depends on GSC || HP300
 	default y
 	help
 	  The "Human Interface Loop" is a older, 8-channel USB-like
@@ -166,13 +191,13 @@ config KEYBOARD_HIL_OLD
 	  However, it has been thoroughly tested and is stable.
 
 	  If you want full HIL support including support for multiple
-	  keyboards, mices and tablets, you have to enable the
+	  keyboards, mice, and tablets, you have to enable the
 	  "HP System Device Controller i8042 Support" in the input/serio
 	  submenu.
 
 config KEYBOARD_HIL
 	tristate "HP HIL keyboard support"
-	depends on GSC
+	depends on GSC || HP300
 	default y
 	select HP_SDC
 	select HIL_MLC
@@ -182,5 +207,90 @@ config KEYBOARD_HIL
 	  controller used in several Hewlett Packard models.
 	  This driver implements support for HIL-keyboards attached
 	  to your machine, so normally you should say Y here.
+
+config KEYBOARD_HP6XX
+	tristate "HP Jornada 6xx keyboard"
+	depends on SH_HP6XX
+	select INPUT_POLLDEV
+	help
+	  Say Y here if you have a HP Jornada 620/660/680/690 and want to
+	  support the built-in keyboard.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called jornada680_kbd.
+
+config KEYBOARD_HP7XX
+	tristate "HP Jornada 7xx keyboard"
+	depends on SA1100_JORNADA720_SSP && SA1100_SSP
+	help
+	  Say Y here if you have a HP Jornada 710/720/728 and want to
+	  support the built-in keyboard.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called jornada720_kbd.
+
+config KEYBOARD_OMAP
+	tristate "TI OMAP keypad support"
+	depends on (ARCH_OMAP1 || ARCH_OMAP2)
+	help
+	  Say Y here if you want to use the OMAP keypad.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called omap-keypad.
+
+config KEYBOARD_PXA27x
+	tristate "PXA27x keyboard support"
+	depends on PXA27x
+	help
+	  Enable support for PXA27x matrix keyboard controller
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called pxa27x_keyboard.
+
+config KEYBOARD_AAED2000
+	tristate "AAED-2000 keyboard"
+	depends on MACH_AAED2000
+	select INPUT_POLLDEV
+	default y
+	help
+	  Say Y here to enable the keyboard on the Agilent AAED-2000
+	  development board.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called aaed2000_kbd.
+
+config KEYBOARD_GPIO
+	tristate "GPIO Buttons"
+	depends on GENERIC_GPIO
+	help
+	  This driver implements support for buttons connected
+	  to GPIO pins of various CPUs (and some other chips).
+
+	  Say Y here if your device has buttons connected
+	  directly to such GPIO pins.  Your board-specific
+	  setup logic must also provide a platform device,
+	  with configuration data saying which GPIOs are used.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called gpio-keys.
+
+config KEYBOARD_MAPLE
+	tristate "Maple bus keyboard"
+	depends on SH_DREAMCAST && MAPLE
+	help
+	  Say Y here if you have a Dreamcast console running Linux and have
+	  a keyboard attached to its Maple bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called maple_keyb.
+
+config KEYBOARD_BFIN
+	tristate "Blackfin BF54x keypad support"
+	depends on (BF54x && !BF544)
+	help
+	  Say Y here if you want to use the BF54x keypad.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called bf54x-keys.
 
 endif
