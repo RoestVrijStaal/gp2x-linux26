@@ -30,7 +30,7 @@
 #define QNX4_VERSION  4
 #define QNX4_BMNAME   ".bitmap"
 
-static struct super_operations qnx4_sops;
+static const struct super_operations qnx4_sops;
 
 #ifdef CONFIG_QNX4FS_RW
 
@@ -129,7 +129,7 @@ static void qnx4_read_inode(struct inode *);
 static int qnx4_remount(struct super_block *sb, int *flags, char *data);
 static int qnx4_statfs(struct dentry *, struct kstatfs *);
 
-static struct super_operations qnx4_sops =
+static const struct super_operations qnx4_sops =
 {
 	.alloc_inode	= qnx4_alloc_inode,
 	.destroy_inode	= qnx4_destroy_inode,
@@ -358,11 +358,10 @@ static int qnx4_fill_super(struct super_block *s, void *data, int silent)
 	const char *errmsg;
 	struct qnx4_sb_info *qs;
 
-	qs = kmalloc(sizeof(struct qnx4_sb_info), GFP_KERNEL);
+	qs = kzalloc(sizeof(struct qnx4_sb_info), GFP_KERNEL);
 	if (!qs)
 		return -ENOMEM;
 	s->s_fs_info = qs;
-	memset(qs, 0, sizeof(struct qnx4_sb_info));
 
 	sb_set_blocksize(s, QNX4_BLOCK_SIZE);
 
@@ -434,16 +433,21 @@ static int qnx4_writepage(struct page *page, struct writeback_control *wbc)
 {
 	return block_write_full_page(page,qnx4_get_block, wbc);
 }
+
 static int qnx4_readpage(struct file *file, struct page *page)
 {
 	return block_read_full_page(page,qnx4_get_block);
 }
-static int qnx4_prepare_write(struct file *file, struct page *page,
-			      unsigned from, unsigned to)
+
+static int qnx4_write_begin(struct file *file, struct address_space *mapping,
+			loff_t pos, unsigned len, unsigned flags,
+			struct page **pagep, void **fsdata)
 {
-	struct qnx4_inode_info *qnx4_inode = qnx4_i(page->mapping->host);
-	return cont_prepare_write(page, from, to, qnx4_get_block,
-				  &qnx4_inode->mmu_private);
+	struct qnx4_inode_info *qnx4_inode = qnx4_i(mapping->host);
+	*pagep = NULL;
+	return cont_write_begin(file, mapping, pos, len, flags, pagep, fsdata,
+				qnx4_get_block,
+				&qnx4_inode->mmu_private);
 }
 static sector_t qnx4_bmap(struct address_space *mapping, sector_t block)
 {
@@ -453,8 +457,8 @@ static const struct address_space_operations qnx4_aops = {
 	.readpage	= qnx4_readpage,
 	.writepage	= qnx4_writepage,
 	.sync_page	= block_sync_page,
-	.prepare_write	= qnx4_prepare_write,
-	.commit_write	= generic_commit_write,
+	.write_begin	= qnx4_write_begin,
+	.write_end	= generic_write_end,
 	.bmap		= qnx4_bmap
 };
 
@@ -497,7 +501,6 @@ static void qnx4_read_inode(struct inode *inode)
 	inode->i_ctime.tv_sec   = le32_to_cpu(raw_inode->di_ctime);
 	inode->i_ctime.tv_nsec = 0;
 	inode->i_blocks  = le32_to_cpu(raw_inode->di_first_xtnt.xtnt_size);
-	inode->i_blksize = QNX4_DIR_ENTRY_SIZE;
 
 	memcpy(qnx4_inode, raw_inode, QNX4_DIR_ENTRY_SIZE);
 	if (S_ISREG(inode->i_mode)) {
@@ -517,12 +520,12 @@ static void qnx4_read_inode(struct inode *inode)
 	brelse(bh);
 }
 
-static kmem_cache_t *qnx4_inode_cachep;
+static struct kmem_cache *qnx4_inode_cachep;
 
 static struct inode *qnx4_alloc_inode(struct super_block *sb)
 {
 	struct qnx4_inode_info *ei;
-	ei = kmem_cache_alloc(qnx4_inode_cachep, SLAB_KERNEL);
+	ei = kmem_cache_alloc(qnx4_inode_cachep, GFP_KERNEL);
 	if (!ei)
 		return NULL;
 	return &ei->vfs_inode;
@@ -533,14 +536,11 @@ static void qnx4_destroy_inode(struct inode *inode)
 	kmem_cache_free(qnx4_inode_cachep, qnx4_i(inode));
 }
 
-static void init_once(void *foo, kmem_cache_t * cachep,
-		      unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct qnx4_inode_info *ei = (struct qnx4_inode_info *) foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY | SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR)
-		inode_init_once(&ei->vfs_inode);
+	inode_init_once(&ei->vfs_inode);
 }
 
 static int init_inodecache(void)
@@ -549,7 +549,7 @@ static int init_inodecache(void)
 					     sizeof(struct qnx4_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
 						SLAB_MEM_SPREAD),
-					     init_once, NULL);
+					     init_once);
 	if (qnx4_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -557,9 +557,7 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	if (kmem_cache_destroy(qnx4_inode_cachep))
-		printk(KERN_INFO
-		       "qnx4_inode_cache: not all structures were freed\n");
+	kmem_cache_destroy(qnx4_inode_cachep);
 }
 
 static int qnx4_get_sb(struct file_system_type *fs_type,

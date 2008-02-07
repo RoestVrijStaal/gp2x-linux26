@@ -13,12 +13,13 @@
 
 #include <linux/pagemap.h>
 #include <linux/mpage.h>
+#include <linux/sched.h>
 
 #include "hfs_fs.h"
 #include "btree.h"
 
 static const struct file_operations hfs_file_operations;
-static struct inode_operations hfs_file_inode_operations;
+static const struct inode_operations hfs_file_inode_operations;
 
 /*================ Variable-like macros ================*/
 
@@ -34,10 +35,14 @@ static int hfs_readpage(struct file *file, struct page *page)
 	return block_read_full_page(page, hfs_get_block);
 }
 
-static int hfs_prepare_write(struct file *file, struct page *page, unsigned from, unsigned to)
+static int hfs_write_begin(struct file *file, struct address_space *mapping,
+			loff_t pos, unsigned len, unsigned flags,
+			struct page **pagep, void **fsdata)
 {
-	return cont_prepare_write(page, from, to, hfs_get_block,
-				  &HFS_I(page->mapping->host)->phys_size);
+	*pagep = NULL;
+	return cont_write_begin(file, mapping, pos, len, flags, pagep, fsdata,
+				hfs_get_block,
+				&HFS_I(mapping->host)->phys_size);
 }
 
 static sector_t hfs_bmap(struct address_space *mapping, sector_t block)
@@ -102,7 +107,7 @@ static ssize_t hfs_direct_IO(int rw, struct kiocb *iocb,
 		const struct iovec *iov, loff_t offset, unsigned long nr_segs)
 {
 	struct file *file = iocb->ki_filp;
-	struct inode *inode = file->f_dentry->d_inode->i_mapping->host;
+	struct inode *inode = file->f_path.dentry->d_inode->i_mapping->host;
 
 	return blockdev_direct_IO(rw, iocb, inode, inode->i_sb->s_bdev, iov,
 				  offset, nr_segs, hfs_get_block, NULL);
@@ -118,8 +123,8 @@ const struct address_space_operations hfs_btree_aops = {
 	.readpage	= hfs_readpage,
 	.writepage	= hfs_writepage,
 	.sync_page	= block_sync_page,
-	.prepare_write	= hfs_prepare_write,
-	.commit_write	= generic_commit_write,
+	.write_begin	= hfs_write_begin,
+	.write_end	= generic_write_end,
 	.bmap		= hfs_bmap,
 	.releasepage	= hfs_releasepage,
 };
@@ -128,8 +133,8 @@ const struct address_space_operations hfs_aops = {
 	.readpage	= hfs_readpage,
 	.writepage	= hfs_writepage,
 	.sync_page	= block_sync_page,
-	.prepare_write	= hfs_prepare_write,
-	.commit_write	= generic_commit_write,
+	.write_begin	= hfs_write_begin,
+	.write_end	= generic_write_end,
 	.bmap		= hfs_bmap,
 	.direct_IO	= hfs_direct_IO,
 	.writepages	= hfs_writepages,
@@ -154,7 +159,6 @@ struct inode *hfs_new_inode(struct inode *dir, struct qstr *name, int mode)
 	inode->i_gid = current->fsgid;
 	inode->i_nlink = 1;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME_SEC;
-	inode->i_blksize = HFS_SB(sb)->alloc_blksz;
 	HFS_I(inode)->flags = 0;
 	HFS_I(inode)->rsrc_inode = NULL;
 	HFS_I(inode)->fs_blocks = 0;
@@ -284,7 +288,6 @@ static int hfs_read_inode(struct inode *inode, void *data)
 	inode->i_uid = hsb->s_uid;
 	inode->i_gid = hsb->s_gid;
 	inode->i_nlink = 1;
-	inode->i_blksize = HFS_SB(inode->i_sb)->alloc_blksz;
 
 	if (idata->key)
 		HFS_I(inode)->cat_key = *idata->key;
@@ -603,16 +606,18 @@ int hfs_inode_setattr(struct dentry *dentry, struct iattr * attr)
 
 static const struct file_operations hfs_file_operations = {
 	.llseek		= generic_file_llseek,
-	.read		= generic_file_read,
-	.write		= generic_file_write,
+	.read		= do_sync_read,
+	.aio_read	= generic_file_aio_read,
+	.write		= do_sync_write,
+	.aio_write	= generic_file_aio_write,
 	.mmap		= generic_file_mmap,
-	.sendfile	= generic_file_sendfile,
+	.splice_read	= generic_file_splice_read,
 	.fsync		= file_fsync,
 	.open		= hfs_file_open,
 	.release	= hfs_file_release,
 };
 
-static struct inode_operations hfs_file_inode_operations = {
+static const struct inode_operations hfs_file_inode_operations = {
 	.lookup		= hfs_file_lookup,
 	.truncate	= hfs_file_truncate,
 	.setattr	= hfs_inode_setattr,

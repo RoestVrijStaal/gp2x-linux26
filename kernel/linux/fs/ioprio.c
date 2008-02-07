@@ -1,7 +1,7 @@
 /*
  * fs/ioprio.c
  *
- * Copyright (C) 2004 Jens Axboe <axboe@suse.de>
+ * Copyright (C) 2004 Jens Axboe <axboe@kernel.dk>
  *
  * Helper functions for setting/querying io priorities of processes. The
  * system calls closely mimmick getpriority/setpriority, see the man page for
@@ -25,6 +25,7 @@
 #include <linux/capability.h>
 #include <linux/syscalls.h>
 #include <linux/security.h>
+#include <linux/pid_namespace.h>
 
 static int set_task_ioprio(struct task_struct *task, int ioprio)
 {
@@ -47,8 +48,8 @@ static int set_task_ioprio(struct task_struct *task, int ioprio)
 	/* see wmb() in current_io_context() */
 	smp_read_barrier_depends();
 
-	if (ioc && ioc->set_ioprio)
-		ioc->set_ioprio(ioc, ioprio);
+	if (ioc)
+		ioc->ioprio_changed = 1;
 
 	task_unlock(task);
 	return 0;
@@ -60,6 +61,7 @@ asmlinkage long sys_ioprio_set(int which, int who, int ioprio)
 	int data = IOPRIO_PRIO_DATA(ioprio);
 	struct task_struct *p, *g;
 	struct user_struct *user;
+	struct pid *pgrp;
 	int ret;
 
 	switch (class) {
@@ -76,29 +78,40 @@ asmlinkage long sys_ioprio_set(int which, int who, int ioprio)
 			if (!capable(CAP_SYS_ADMIN))
 				return -EPERM;
 			break;
+		case IOPRIO_CLASS_NONE:
+			if (data)
+				return -EINVAL;
+			break;
 		default:
 			return -EINVAL;
 	}
 
 	ret = -ESRCH;
-	read_lock_irq(&tasklist_lock);
+	/*
+	 * We want IOPRIO_WHO_PGRP/IOPRIO_WHO_USER to be "atomic",
+	 * so we can't use rcu_read_lock(). See re-copy of ->ioprio
+	 * in copy_process().
+	 */
+	read_lock(&tasklist_lock);
 	switch (which) {
 		case IOPRIO_WHO_PROCESS:
 			if (!who)
 				p = current;
 			else
-				p = find_task_by_pid(who);
+				p = find_task_by_vpid(who);
 			if (p)
 				ret = set_task_ioprio(p, ioprio);
 			break;
 		case IOPRIO_WHO_PGRP:
 			if (!who)
-				who = process_group(current);
-			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				pgrp = task_pgrp(current);
+			else
+				pgrp = find_vpid(who);
+			do_each_pid_task(pgrp, PIDTYPE_PGID, p) {
 				ret = set_task_ioprio(p, ioprio);
 				if (ret)
 					break;
-			} while_each_task_pid(who, PIDTYPE_PGID, p);
+			} while_each_pid_task(pgrp, PIDTYPE_PGID, p);
 			break;
 		case IOPRIO_WHO_USER:
 			if (!who)
@@ -124,7 +137,7 @@ free_uid:
 			ret = -EINVAL;
 	}
 
-	read_unlock_irq(&tasklist_lock);
+	read_unlock(&tasklist_lock);
 	return ret;
 }
 
@@ -145,11 +158,6 @@ int ioprio_best(unsigned short aprio, unsigned short bprio)
 	unsigned short aclass = IOPRIO_PRIO_CLASS(aprio);
 	unsigned short bclass = IOPRIO_PRIO_CLASS(bprio);
 
-	if (!ioprio_valid(aprio))
-		return bprio;
-	if (!ioprio_valid(bprio))
-		return aprio;
-
 	if (aclass == IOPRIO_CLASS_NONE)
 		aclass = IOPRIO_CLASS_BE;
 	if (bclass == IOPRIO_CLASS_NONE)
@@ -167,23 +175,26 @@ asmlinkage long sys_ioprio_get(int which, int who)
 {
 	struct task_struct *g, *p;
 	struct user_struct *user;
+	struct pid *pgrp;
 	int ret = -ESRCH;
 	int tmpio;
 
-	read_lock_irq(&tasklist_lock);
+	read_lock(&tasklist_lock);
 	switch (which) {
 		case IOPRIO_WHO_PROCESS:
 			if (!who)
 				p = current;
 			else
-				p = find_task_by_pid(who);
+				p = find_task_by_vpid(who);
 			if (p)
 				ret = get_task_ioprio(p);
 			break;
 		case IOPRIO_WHO_PGRP:
 			if (!who)
-				who = process_group(current);
-			do_each_task_pid(who, PIDTYPE_PGID, p) {
+				pgrp = task_pgrp(current);
+			else
+				pgrp = find_vpid(who);
+			do_each_pid_task(pgrp, PIDTYPE_PGID, p) {
 				tmpio = get_task_ioprio(p);
 				if (tmpio < 0)
 					continue;
@@ -191,7 +202,7 @@ asmlinkage long sys_ioprio_get(int which, int who)
 					ret = tmpio;
 				else
 					ret = ioprio_best(ret, tmpio);
-			} while_each_task_pid(who, PIDTYPE_PGID, p);
+			} while_each_pid_task(pgrp, PIDTYPE_PGID, p);
 			break;
 		case IOPRIO_WHO_USER:
 			if (!who)
@@ -221,7 +232,7 @@ asmlinkage long sys_ioprio_get(int which, int who)
 			ret = -EINVAL;
 	}
 
-	read_unlock_irq(&tasklist_lock);
+	read_unlock(&tasklist_lock);
 	return ret;
 }
 

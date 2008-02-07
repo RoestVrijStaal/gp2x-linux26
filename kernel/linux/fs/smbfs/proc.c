@@ -873,11 +873,11 @@ smb_newconn(struct smb_sb_info *server, struct smb_conn_opt *opt)
 	filp = fget(opt->fd);
 	if (!filp)
 		goto out;
-	if (!smb_valid_socket(filp->f_dentry->d_inode))
+	if (!smb_valid_socket(filp->f_path.dentry->d_inode))
 		goto out_putf;
 
 	server->sock_file = filp;
-	server->conn_pid = current->pid;
+	server->conn_pid = get_pid(task_pid(current));
 	server->opt = *opt;
 	server->generation += 1;
 	server->state = CONN_VALID;
@@ -898,7 +898,7 @@ smb_newconn(struct smb_sb_info *server, struct smb_conn_opt *opt)
 	/*
 	 * Store the server in sock user_data (Only used by sunrpc)
 	 */
-	sk = SOCKET_I(filp->f_dentry->d_inode)->sk;
+	sk = SOCKET_I(filp->f_path.dentry->d_inode)->sk;
 	sk->sk_user_data = server;
 
 	/* chain into the data_ready callback */
@@ -971,8 +971,8 @@ smb_newconn(struct smb_sb_info *server, struct smb_conn_opt *opt)
 	}
 
 	VERBOSE("protocol=%d, max_xmit=%d, pid=%d capabilities=0x%x\n",
-		server->opt.protocol, server->opt.max_xmit, server->conn_pid,
-		server->opt.capabilities);
+		server->opt.protocol, server->opt.max_xmit,
+		pid_nr(server->conn_pid), server->opt.capabilities);
 
 	/* FIXME: this really should be done by smbmount. */
 	if (server->opt.max_xmit > SMB_MAX_PACKET_SIZE) {
@@ -1826,7 +1826,6 @@ smb_init_dirent(struct smb_sb_info *server, struct smb_fattr *fattr)
 	fattr->f_nlink = 1;
 	fattr->f_uid = server->mnt->uid;
 	fattr->f_gid = server->mnt->gid;
-	fattr->f_blksize = SMB_ST_BLKSIZE;
 	fattr->f_unix = 0;
 }
 
@@ -1940,7 +1939,7 @@ static int
 smb_proc_readdir_short(struct file *filp, void *dirent, filldir_t filldir,
 		       struct smb_cache_control *ctl)
 {
-	struct dentry *dir = filp->f_dentry;
+	struct dentry *dir = filp->f_path.dentry;
 	struct smb_sb_info *server = server_from_dentry(dir);
 	struct qstr qname;
 	struct smb_fattr fattr;
@@ -2292,7 +2291,7 @@ static int
 smb_proc_readdir_long(struct file *filp, void *dirent, filldir_t filldir,
 		      struct smb_cache_control *ctl)
 {
-	struct dentry *dir = filp->f_dentry;
+	struct dentry *dir = filp->f_path.dentry;
 	struct smb_sb_info *server = server_from_dentry(dir);
 	struct qstr qname;
 	struct smb_fattr fattr;
@@ -2594,7 +2593,7 @@ smb_proc_getattr_ff(struct smb_sb_info *server, struct dentry *dentry,
 	fattr->f_mtime.tv_sec = date_dos2unix(server, date, time);
 	fattr->f_mtime.tv_nsec = 0;
 	VERBOSE("name=%s, date=%x, time=%x, mtime=%ld\n",
-		mask, date, time, fattr->f_mtime);
+		mask, date, time, fattr->f_mtime.tv_sec);
 	fattr->f_size = DVAL(req->rq_data, 12);
 	/* ULONG allocation size */
 	fattr->attr = WVAL(req->rq_data, 20);
@@ -2860,7 +2859,7 @@ static int
 smb_proc_readdir_null(struct file *filp, void *dirent, filldir_t filldir,
 		      struct smb_cache_control *ctl)
 {
-	struct smb_sb_info *server = server_from_dentry(filp->f_dentry);
+	struct smb_sb_info *server = server_from_dentry(filp->f_path.dentry);
 
 	if (smb_proc_ops_wait(server) < 0)
 		return -EIO;

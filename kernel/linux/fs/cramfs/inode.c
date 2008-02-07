@@ -27,8 +27,8 @@
 
 #include <asm/uaccess.h>
 
-static struct super_operations cramfs_ops;
-static struct inode_operations cramfs_dir_inode_operations;
+static const struct super_operations cramfs_ops;
+static const struct inode_operations cramfs_dir_inode_operations;
 static const struct file_operations cramfs_directory_operations;
 static const struct address_space_operations cramfs_aops;
 
@@ -73,7 +73,6 @@ static int cramfs_iget5_set(struct inode *inode, void *opaque)
 	inode->i_uid = cramfs_inode->uid;
 	inode->i_size = cramfs_inode->size;
 	inode->i_blocks = (cramfs_inode->size - 1) / 512 + 1;
-	inode->i_blksize = PAGE_CACHE_SIZE;
 	inode->i_gid = cramfs_inode->gid;
 	/* Struct copy intentional */
 	inode->i_mtime = inode->i_atime = inode->i_ctime = zerotime;
@@ -149,7 +148,7 @@ static void *cramfs_read(struct super_block *sb, unsigned int offset, unsigned i
 {
 	struct address_space *mapping = sb->s_bdev->bd_inode->i_mapping;
 	struct page *pages[BLKS_PER_BUF];
-	unsigned i, blocknr, buffer, unread;
+	unsigned i, blocknr, buffer;
 	unsigned long devsize;
 	char *data;
 
@@ -176,12 +175,12 @@ static void *cramfs_read(struct super_block *sb, unsigned int offset, unsigned i
 	devsize = mapping->host->i_size >> PAGE_CACHE_SHIFT;
 
 	/* Ok, read in BLKS_PER_BUF pages completely first. */
-	unread = 0;
 	for (i = 0; i < BLKS_PER_BUF; i++) {
 		struct page *page = NULL;
 
 		if (blocknr + i < devsize) {
-			page = read_mapping_page(mapping, blocknr + i, NULL);
+			page = read_mapping_page_async(mapping, blocknr + i,
+									NULL);
 			/* synchronous error? */
 			if (IS_ERR(page))
 				page = NULL;
@@ -242,11 +241,10 @@ static int cramfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_flags |= MS_RDONLY;
 
-	sbi = kmalloc(sizeof(struct cramfs_sb_info), GFP_KERNEL);
+	sbi = kzalloc(sizeof(struct cramfs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
 	sb->s_fs_info = sbi;
-	memset(sbi, 0, sizeof(struct cramfs_sb_info));
 
 	/* Invalidate the read buffers on mount: think disk change.. */
 	mutex_lock(&read_mutex);
@@ -259,12 +257,21 @@ static int cramfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	/* Do sanity checks on the superblock */
 	if (super.magic != CRAMFS_MAGIC) {
+		/* check for wrong endianess */
+		if (super.magic == CRAMFS_MAGIC_WEND) {
+			if (!silent)
+				printk(KERN_ERR "cramfs: wrong endianess\n");
+			goto out;
+		}
+
 		/* check at 512 byte offset */
 		mutex_lock(&read_mutex);
 		memcpy(&super, cramfs_read(sb, 512, sizeof(super)), sizeof(super));
 		mutex_unlock(&read_mutex);
 		if (super.magic != CRAMFS_MAGIC) {
-			if (!silent)
+			if (super.magic == CRAMFS_MAGIC_WEND && !silent)
+				printk(KERN_ERR "cramfs: wrong endianess\n");
+			else if (!silent)
 				printk(KERN_ERR "cramfs: wrong magic\n");
 			goto out;
 		}
@@ -340,7 +347,7 @@ static int cramfs_statfs(struct dentry *dentry, struct kstatfs *buf)
  */
 static int cramfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
-	struct inode *inode = filp->f_dentry->d_inode;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
 	char *buf;
 	unsigned int offset;
@@ -354,7 +361,7 @@ static int cramfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	if (offset & 3)
 		return -EINVAL;
 
-	buf = kmalloc(256, GFP_KERNEL);
+	buf = kmalloc(CRAMFS_MAXPATHLEN, GFP_KERNEL);
 	if (!buf)
 		return -ENOMEM;
 
@@ -368,7 +375,7 @@ static int cramfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		int namelen, error;
 
 		mutex_lock(&read_mutex);
-		de = cramfs_read(sb, OFFSET(inode) + offset, sizeof(*de)+256);
+		de = cramfs_read(sb, OFFSET(inode) + offset, sizeof(*de)+CRAMFS_MAXPATHLEN);
 		name = (char *)(de+1);
 
 		/*
@@ -418,7 +425,7 @@ static struct dentry * cramfs_lookup(struct inode *dir, struct dentry *dentry, s
 		char *name;
 		int namelen, retval;
 
-		de = cramfs_read(dir->i_sb, OFFSET(dir) + offset, sizeof(*de)+256);
+		de = cramfs_read(dir->i_sb, OFFSET(dir) + offset, sizeof(*de)+CRAMFS_MAXPATHLEN);
 		name = (char *)(de+1);
 
 		/* Try to take advantage of sorted directories */
@@ -483,6 +490,8 @@ static int cramfs_readpage(struct file *file, struct page * page)
 		pgdata = kmap(page);
 		if (compr_len == 0)
 			; /* hole */
+		else if (compr_len > (PAGE_CACHE_SIZE << 1))
+			printk(KERN_ERR "cramfs: bad compressed blocksize %u\n", compr_len);
 		else {
 			mutex_lock(&read_mutex);
 			bytes_filled = cramfs_uncompress_block(pgdata,
@@ -518,11 +527,11 @@ static const struct file_operations cramfs_directory_operations = {
 	.readdir	= cramfs_readdir,
 };
 
-static struct inode_operations cramfs_dir_inode_operations = {
+static const struct inode_operations cramfs_dir_inode_operations = {
 	.lookup		= cramfs_lookup,
 };
 
-static struct super_operations cramfs_ops = {
+static const struct super_operations cramfs_ops = {
 	.put_super	= cramfs_put_super,
 	.remount_fs	= cramfs_remount,
 	.statfs		= cramfs_statfs,
@@ -545,8 +554,15 @@ static struct file_system_type cramfs_fs_type = {
 
 static int __init init_cramfs_fs(void)
 {
-	cramfs_uncompress_init();
-	return register_filesystem(&cramfs_fs_type);
+	int rv;
+
+	rv = cramfs_uncompress_init();
+	if (rv < 0)
+		return rv;
+	rv = register_filesystem(&cramfs_fs_type);
+	if (rv < 0)
+		cramfs_uncompress_exit();
+	return rv;
 }
 
 static void __exit exit_cramfs_fs(void)

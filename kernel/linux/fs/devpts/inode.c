@@ -19,6 +19,7 @@
 #include <linux/tty.h>
 #include <linux/devpts_fs.h>
 #include <linux/parser.h>
+#include <linux/fsnotify.h>
 
 #define DEVPTS_SUPER_MAGIC 0x1cd1
 
@@ -91,7 +92,7 @@ static int devpts_remount(struct super_block *sb, int *flags, char *data)
 	return 0;
 }
 
-static struct super_operations devpts_sops = {
+static const struct super_operations devpts_sops = {
 	.statfs		= simple_statfs,
 	.remount_fs	= devpts_remount,
 };
@@ -113,7 +114,6 @@ devpts_fill_super(struct super_block *s, void *data, int silent)
 	inode->i_ino = 1;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	inode->i_blocks = 0;
-	inode->i_blksize = 1024;
 	inode->i_uid = inode->i_gid = 0;
 	inode->i_mode = S_IFDIR | S_IRUGO | S_IXUGO | S_IWUSR;
 	inode->i_op = &simple_dir_inode_operations;
@@ -172,16 +172,17 @@ int devpts_pty_new(struct tty_struct *tty)
 		return -ENOMEM;
 
 	inode->i_ino = number+2;
-	inode->i_blksize = 1024;
 	inode->i_uid = config.setuid ? config.uid : current->fsuid;
 	inode->i_gid = config.setgid ? config.gid : current->fsgid;
 	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 	init_special_inode(inode, S_IFCHR|config.mode, device);
-	inode->u.generic_ip = tty;
+	inode->i_private = tty;
 
 	dentry = get_node(number);
-	if (!IS_ERR(dentry) && !dentry->d_inode)
+	if (!IS_ERR(dentry) && !dentry->d_inode) {
 		d_instantiate(dentry, inode);
+		fsnotify_create(devpts_root->d_inode, dentry);
+	}
 
 	mutex_unlock(&devpts_root->d_inode->i_mutex);
 
@@ -196,7 +197,7 @@ struct tty_struct *devpts_get_tty(int number)
 	tty = NULL;
 	if (!IS_ERR(dentry)) {
 		if (dentry->d_inode)
-			tty = dentry->d_inode->u.generic_ip;
+			tty = dentry->d_inode->i_private;
 		dput(dentry);
 	}
 

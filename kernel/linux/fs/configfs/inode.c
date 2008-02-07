@@ -32,6 +32,7 @@
 #include <linux/namei.h>
 #include <linux/backing-dev.h>
 #include <linux/capability.h>
+#include <linux/sched.h>
 
 #include <linux/configfs.h>
 #include "configfs_internal.h"
@@ -40,8 +41,8 @@ extern struct super_block * configfs_sb;
 
 static const struct address_space_operations configfs_aops = {
 	.readpage	= simple_readpage,
-	.prepare_write	= simple_prepare_write,
-	.commit_write	= simple_commit_write
+	.write_begin	= simple_write_begin,
+	.write_end	= simple_write_end,
 };
 
 static struct backing_dev_info configfs_backing_dev_info = {
@@ -49,7 +50,7 @@ static struct backing_dev_info configfs_backing_dev_info = {
 	.capabilities	= BDI_CAP_NO_ACCT_DIRTY | BDI_CAP_NO_WRITEBACK,
 };
 
-static struct inode_operations configfs_inode_operations ={
+static const struct inode_operations configfs_inode_operations ={
 	.setattr	= configfs_setattr,
 };
 
@@ -76,11 +77,10 @@ int configfs_setattr(struct dentry * dentry, struct iattr * iattr)
 
 	if (!sd_iattr) {
 		/* setting attributes for the first time, allocate now */
-		sd_iattr = kmalloc(sizeof(struct iattr), GFP_KERNEL);
+		sd_iattr = kzalloc(sizeof(struct iattr), GFP_KERNEL);
 		if (!sd_iattr)
 			return -ENOMEM;
 		/* assign default attributes */
-		memset(sd_iattr, 0, sizeof(struct iattr));
 		sd_iattr->ia_mode = sd->s_mode;
 		sd_iattr->ia_uid = 0;
 		sd_iattr->ia_gid = 0;
@@ -136,7 +136,6 @@ struct inode * configfs_new_inode(mode_t mode, struct configfs_dirent * sd)
 {
 	struct inode * inode = new_inode(configfs_sb);
 	if (inode) {
-		inode->i_blksize = PAGE_CACHE_SIZE;
 		inode->i_blocks = 0;
 		inode->i_mapping->a_ops = &configfs_aops;
 		inode->i_mapping->backing_dev_info = &configfs_backing_dev_info;
@@ -257,4 +256,12 @@ void configfs_hash_and_remove(struct dentry * dir, const char * name)
 	mutex_unlock(&dir->d_inode->i_mutex);
 }
 
+int __init configfs_inode_init(void)
+{
+	return bdi_init(&configfs_backing_dev_info);
+}
 
+void __exit configfs_inode_exit(void)
+{
+	bdi_destroy(&configfs_backing_dev_info);
+}

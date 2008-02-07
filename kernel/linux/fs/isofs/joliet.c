@@ -14,9 +14,9 @@
  * Convert Unicode 16 to UTF-8 or ASCII.
  */
 static int
-uni16_to_x8(unsigned char *ascii, u16 *uni, int len, struct nls_table *nls)
+uni16_to_x8(unsigned char *ascii, __be16 *uni, int len, struct nls_table *nls)
 {
-	wchar_t *ip, ch;
+	__be16 *ip, ch;
 	unsigned char *op;
 
 	ip = uni;
@@ -24,8 +24,8 @@ uni16_to_x8(unsigned char *ascii, u16 *uni, int len, struct nls_table *nls)
 
 	while ((ch = get_unaligned(ip)) && len) {
 		int llen;
-		ch = be16_to_cpu(ch);
-		if ((llen = nls->uni2char(ch, op, NLS_MAX_CHARSET_SIZE)) > 0)
+		llen = nls->uni2char(be16_to_cpu(ch), op, NLS_MAX_CHARSET_SIZE);
+		if (llen > 0)
 			op += llen;
 		else
 			*op++ = '?';
@@ -80,22 +80,20 @@ get_joliet_filename(struct iso_directory_record * de, unsigned char *outname, st
 
 	if (utf8) {
 		len = wcsntombs_be(outname, de->name,
-				   de->name_len[0] >> 1, PAGE_SIZE);
+				de->name_len[0] >> 1, PAGE_SIZE);
 	} else {
-		len = uni16_to_x8(outname, (u16 *) de->name,
-				  de->name_len[0] >> 1, nls);
+		len = uni16_to_x8(outname, (__be16 *) de->name,
+				de->name_len[0] >> 1, nls);
 	}
-	if ((len > 2) && (outname[len-2] == ';') && (outname[len-1] == '1')) {
+	if ((len > 2) && (outname[len-2] == ';') && (outname[len-1] == '1'))
 		len -= 2;
-	}
 
 	/*
 	 * Windows doesn't like periods at the end of a name,
 	 * so neither do we
 	 */
-	while (len >= 2 && (outname[len-1] == '.')) {
+	while (len >= 2 && (outname[len-1] == '.'))
 		len--;
-	}
 
 	return len;
 }

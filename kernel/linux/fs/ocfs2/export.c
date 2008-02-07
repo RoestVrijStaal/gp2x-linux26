@@ -33,6 +33,7 @@
 
 #include "dir.h"
 #include "dlmglue.h"
+#include "dcache.h"
 #include "export.h"
 #include "inode.h"
 
@@ -44,9 +45,9 @@ struct ocfs2_inode_handle
 	u32 ih_generation;
 };
 
-static struct dentry *ocfs2_get_dentry(struct super_block *sb, void *vobjp)
+static struct dentry *ocfs2_get_dentry(struct super_block *sb,
+		struct ocfs2_inode_handle *handle)
 {
-	struct ocfs2_inode_handle *handle = vobjp;
 	struct inode *inode;
 	struct dentry *result;
 
@@ -57,16 +58,13 @@ static struct dentry *ocfs2_get_dentry(struct super_block *sb, void *vobjp)
 		return ERR_PTR(-ESTALE);
 	}
 
-	inode = ocfs2_iget(OCFS2_SB(sb), handle->ih_blkno);
+	inode = ocfs2_iget(OCFS2_SB(sb), handle->ih_blkno, 0);
 
-	if (IS_ERR(inode)) {
-		mlog_errno(PTR_ERR(inode));
+	if (IS_ERR(inode))
 		return (void *)inode;
-	}
 
 	if (handle->ih_generation != inode->i_generation) {
 		iput(inode);
-		mlog_errno(-ESTALE);
 		return ERR_PTR(-ESTALE);
 	}
 
@@ -77,6 +75,7 @@ static struct dentry *ocfs2_get_dentry(struct super_block *sb, void *vobjp)
 		mlog_errno(-ENOMEM);
 		return ERR_PTR(-ENOMEM);
 	}
+	result->d_op = &ocfs2_dentry_ops;
 
 	mlog_exit_ptr(result);
 	return result;
@@ -89,8 +88,6 @@ static struct dentry *ocfs2_get_parent(struct dentry *child)
 	struct dentry *parent;
 	struct inode *inode;
 	struct inode *dir = child->d_inode;
-	struct buffer_head *dirent_bh = NULL;
-	struct ocfs2_dir_entry *dirent;
 
 	mlog_entry("(0x%p, '%.*s')\n", child,
 		   child->d_name.len, child->d_name.name);
@@ -98,7 +95,7 @@ static struct dentry *ocfs2_get_parent(struct dentry *child)
 	mlog(0, "find parent of directory %llu\n",
 	     (unsigned long long)OCFS2_I(dir)->ip_blkno);
 
-	status = ocfs2_meta_lock(dir, NULL, NULL, 0);
+	status = ocfs2_meta_lock(dir, NULL, 0);
 	if (status < 0) {
 		if (status != -ENOENT)
 			mlog_errno(status);
@@ -106,14 +103,13 @@ static struct dentry *ocfs2_get_parent(struct dentry *child)
 		goto bail;
 	}
 
-	status = ocfs2_find_files_on_disk("..", 2, &blkno, dir, &dirent_bh,
-					  &dirent);
+	status = ocfs2_lookup_ino_from_name(dir, "..", 2, &blkno);
 	if (status < 0) {
 		parent = ERR_PTR(-ENOENT);
 		goto bail_unlock;
 	}
 
-	inode = ocfs2_iget(OCFS2_SB(dir->i_sb), blkno);
+	inode = ocfs2_iget(OCFS2_SB(dir->i_sb), blkno, 0);
 	if (IS_ERR(inode)) {
 		mlog(ML_ERROR, "Unable to create inode %llu\n",
 		     (unsigned long long)blkno);
@@ -127,11 +123,10 @@ static struct dentry *ocfs2_get_parent(struct dentry *child)
 		parent = ERR_PTR(-ENOMEM);
 	}
 
+	parent->d_op = &ocfs2_dentry_ops;
+
 bail_unlock:
 	ocfs2_meta_unlock(dir, 0);
-
-	if (dirent_bh)
-		brelse(dirent_bh);
 
 bail:
 	mlog_exit_ptr(parent);
@@ -139,7 +134,7 @@ bail:
 	return parent;
 }
 
-static int ocfs2_encode_fh(struct dentry *dentry, __be32 *fh, int *max_len,
+static int ocfs2_encode_fh(struct dentry *dentry, u32 *fh_in, int *max_len,
 			   int connectable)
 {
 	struct inode *inode = dentry->d_inode;
@@ -147,6 +142,7 @@ static int ocfs2_encode_fh(struct dentry *dentry, __be32 *fh, int *max_len,
 	int type = 1;
 	u64 blkno;
 	u32 generation;
+	__le32 *fh = (__force __le32 *) fh_in;
 
 	mlog_entry("(0x%p, '%.*s', 0x%p, %d, %d)\n", dentry,
 		   dentry->d_name.len, dentry->d_name.name,
@@ -198,53 +194,37 @@ bail:
 	return type;
 }
 
-static struct dentry *ocfs2_decode_fh(struct super_block *sb, __be32 *fh,
-				      int fh_len, int fileid_type,
-				      int (*acceptable)(void *context,
-						        struct dentry *de),
-				      void *context)
+static struct dentry *ocfs2_fh_to_dentry(struct super_block *sb,
+		struct fid *fid, int fh_len, int fh_type)
 {
-	struct ocfs2_inode_handle handle, parent;
-	struct dentry *ret = NULL;
+	struct ocfs2_inode_handle handle;
 
-	mlog_entry("(0x%p, 0x%p, %d, %d, 0x%p, 0x%p)\n",
-		   sb, fh, fh_len, fileid_type, acceptable, context);
+	if (fh_len < 3 || fh_type > 2)
+		return NULL;
 
-	if (fh_len < 3 || fileid_type > 2)
-		goto bail;
-
-	if (fileid_type == 2) {
-		if (fh_len < 6)
-			goto bail;
-
-		parent.ih_blkno = (u64)le32_to_cpu(fh[3]) << 32;
-		parent.ih_blkno |= (u64)le32_to_cpu(fh[4]);
-		parent.ih_generation = le32_to_cpu(fh[5]);
-
-		mlog(0, "Decoding parent: blkno: %llu, generation: %u\n",
-		     (unsigned long long)parent.ih_blkno,
-		     parent.ih_generation);
-	}
-
-	handle.ih_blkno = (u64)le32_to_cpu(fh[0]) << 32;
-	handle.ih_blkno |= (u64)le32_to_cpu(fh[1]);
-	handle.ih_generation = le32_to_cpu(fh[2]);
-
-	mlog(0, "Encoding fh: blkno: %llu, generation: %u\n",
-	     (unsigned long long)handle.ih_blkno, handle.ih_generation);
-
-	ret = ocfs2_export_ops.find_exported_dentry(sb, &handle, &parent,
-						    acceptable, context);
-
-bail:
-	mlog_exit_ptr(ret);
-	return ret;
+	handle.ih_blkno = (u64)le32_to_cpu(fid->raw[0]) << 32;
+	handle.ih_blkno |= (u64)le32_to_cpu(fid->raw[1]);
+	handle.ih_generation = le32_to_cpu(fid->raw[2]);
+	return ocfs2_get_dentry(sb, &handle);
 }
 
-struct export_operations ocfs2_export_ops = {
-	.decode_fh	= ocfs2_decode_fh,
-	.encode_fh	= ocfs2_encode_fh,
+static struct dentry *ocfs2_fh_to_parent(struct super_block *sb,
+		struct fid *fid, int fh_len, int fh_type)
+{
+	struct ocfs2_inode_handle parent;
 
+	if (fh_type != 2 || fh_len < 6)
+		return NULL;
+
+	parent.ih_blkno = (u64)le32_to_cpu(fid->raw[3]) << 32;
+	parent.ih_blkno |= (u64)le32_to_cpu(fid->raw[4]);
+	parent.ih_generation = le32_to_cpu(fid->raw[5]);
+	return ocfs2_get_dentry(sb, &parent);
+}
+
+const struct export_operations ocfs2_export_ops = {
+	.encode_fh	= ocfs2_encode_fh,
+	.fh_to_dentry	= ocfs2_fh_to_dentry,
+	.fh_to_parent	= ocfs2_fh_to_parent,
 	.get_parent	= ocfs2_get_parent,
-	.get_dentry	= ocfs2_get_dentry,
 };

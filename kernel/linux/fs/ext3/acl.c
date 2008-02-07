@@ -90,8 +90,8 @@ ext3_acl_to_disk(const struct posix_acl *acl, size_t *size)
 	size_t n;
 
 	*size = ext3_acl_size(acl->a_count);
-	ext_acl = (ext3_acl_header *)kmalloc(sizeof(ext3_acl_header) +
-		acl->a_count * sizeof(ext3_acl_entry), GFP_KERNEL);
+	ext_acl = kmalloc(sizeof(ext3_acl_header) + acl->a_count *
+			sizeof(ext3_acl_entry), GFP_KERNEL);
 	if (!ext_acl)
 		return ERR_PTR(-ENOMEM);
 	ext_acl->a_version = cpu_to_le32(EXT3_ACL_VERSION);
@@ -258,7 +258,7 @@ ext3_set_acl(handle_t *handle, struct inode *inode, int type,
 		default:
 			return -EINVAL;
 	}
- 	if (acl) {
+	if (acl) {
 		value = ext3_acl_to_disk(acl, &size);
 		if (IS_ERR(value))
 			return (int)PTR_ERR(value);
@@ -489,7 +489,7 @@ ext3_xattr_set_acl(struct inode *inode, int type, const void *value,
 
 	if (!test_opt(inode->i_sb, POSIX_ACL))
 		return -EOPNOTSUPP;
-	if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+	if (!is_owner_or_cap(inode))
 		return -EPERM;
 
 	if (value) {

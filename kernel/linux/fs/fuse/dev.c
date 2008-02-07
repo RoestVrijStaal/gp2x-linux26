@@ -19,7 +19,7 @@
 
 MODULE_ALIAS_MISCDEV(FUSE_MINOR);
 
-static kmem_cache_t *fuse_req_cachep;
+static struct kmem_cache *fuse_req_cachep;
 
 static struct fuse_conn *fuse_get_conn(struct file *file)
 {
@@ -41,7 +41,7 @@ static void fuse_request_init(struct fuse_req *req)
 
 struct fuse_req *fuse_request_alloc(void)
 {
-	struct fuse_req *req = kmem_cache_alloc(fuse_req_cachep, SLAB_KERNEL);
+	struct fuse_req *req = kmem_cache_alloc(fuse_req_cachep, GFP_KERNEL);
 	if (req)
 		fuse_request_init(req);
 	return req;
@@ -129,7 +129,7 @@ static struct fuse_req *get_reserved_req(struct fuse_conn *fc,
 	struct fuse_file *ff = file->private_data;
 
 	do {
-		wait_event(fc->blocked_waitq, ff->reserved_req);
+		wait_event(fc->reserved_req_waitq, ff->reserved_req);
 		spin_lock(&fc->lock);
 		if (ff->reserved_req) {
 			req = ff->reserved_req;
@@ -155,7 +155,7 @@ static void put_reserved_req(struct fuse_conn *fc, struct fuse_req *req)
 	fuse_request_init(req);
 	BUG_ON(ff->reserved_req);
 	ff->reserved_req = req;
-	wake_up(&fc->blocked_waitq);
+	wake_up_all(&fc->reserved_req_waitq);
 	spin_unlock(&fc->lock);
 	fput(file);
 }
@@ -212,6 +212,7 @@ void fuse_put_request(struct fuse_conn *fc, struct fuse_req *req)
  * Called with fc->lock, unlocks it
  */
 static void request_end(struct fuse_conn *fc, struct fuse_req *req)
+	__releases(fc->lock)
 {
 	void (*end) (struct fuse_conn *, struct fuse_req *) = req->end;
 	req->end = NULL;
@@ -223,13 +224,13 @@ static void request_end(struct fuse_conn *fc, struct fuse_req *req)
 			fc->blocked = 0;
 			wake_up_all(&fc->blocked_waitq);
 		}
+		if (fc->num_background == FUSE_CONGESTION_THRESHOLD) {
+			clear_bdi_congested(&fc->bdi, READ);
+			clear_bdi_congested(&fc->bdi, WRITE);
+		}
 		fc->num_background--;
 	}
 	spin_unlock(&fc->lock);
-	dput(req->dentry);
-	mntput(req->vfsmount);
-	if (req->file)
-		fput(req->file);
 	wake_up(&req->waitq);
 	if (end)
 		end(fc, req);
@@ -272,28 +273,41 @@ static void request_wait_answer(struct fuse_conn *fc, struct fuse_req *req)
 			queue_interrupt(fc, req);
 	}
 
-	if (req->force) {
-		spin_unlock(&fc->lock);
-		wait_event(req->waitq, req->state == FUSE_REQ_FINISHED);
-		spin_lock(&fc->lock);
-	} else {
+	if (!req->force) {
 		sigset_t oldset;
 
 		/* Only fatal signals may interrupt this */
 		block_sigs(&oldset);
 		wait_answer_interruptible(fc, req);
 		restore_sigs(&oldset);
+
+		if (req->aborted)
+			goto aborted;
+		if (req->state == FUSE_REQ_FINISHED)
+			return;
+
+		/* Request is not yet in userspace, bail out */
+		if (req->state == FUSE_REQ_PENDING) {
+			list_del(&req->list);
+			__fuse_put_request(req);
+			req->out.h.error = -EINTR;
+			return;
+		}
 	}
 
-	if (req->aborted)
-		goto aborted;
-	if (req->state == FUSE_REQ_FINISHED)
- 		return;
+	/*
+	 * Either request is already in userspace, or it was forced.
+	 * Wait it out.
+	 */
+	spin_unlock(&fc->lock);
+	wait_event(req->waitq, req->state == FUSE_REQ_FINISHED);
+	spin_lock(&fc->lock);
 
-	req->out.h.error = -EINTR;
-	req->aborted = 1;
+	if (!req->aborted)
+		return;
 
  aborted:
+	BUG_ON(req->state != FUSE_REQ_FINISHED);
 	if (req->locked) {
 		/* This is uninterruptible sleep, because data is
 		   being copied to/from the buffers of req.  During
@@ -302,14 +316,6 @@ static void request_wait_answer(struct fuse_conn *fc, struct fuse_req *req)
 		   to deadlock */
 		spin_unlock(&fc->lock);
 		wait_event(req->waitq, !req->locked);
-		spin_lock(&fc->lock);
-	}
-	if (req->state == FUSE_REQ_PENDING) {
-		list_del(&req->list);
-		__fuse_put_request(req);
-	} else if (req->state == FUSE_REQ_SENT) {
-		spin_unlock(&fc->lock);
-		wait_event(req->waitq, req->state == FUSE_REQ_FINISHED);
 		spin_lock(&fc->lock);
 	}
 }
@@ -377,6 +383,10 @@ static void request_send_nowait(struct fuse_conn *fc, struct fuse_req *req)
 		fc->num_background++;
 		if (fc->num_background == FUSE_MAX_BACKGROUND)
 			fc->blocked = 1;
+		if (fc->num_background == FUSE_CONGESTION_THRESHOLD) {
+			set_bdi_congested(&fc->bdi, READ);
+			set_bdi_congested(&fc->bdi, WRITE);
+		}
 
 		queue_request(fc, req);
 		spin_unlock(&fc->lock);
@@ -640,6 +650,7 @@ static void request_wait(struct fuse_conn *fc)
  */
 static int fuse_read_interrupt(struct fuse_conn *fc, struct fuse_req *req,
 			       const struct iovec *iov, unsigned long nr_segs)
+	__releases(fc->lock)
 {
 	struct fuse_copy_state cs;
 	struct fuse_in_header ih;
@@ -678,14 +689,15 @@ static int fuse_read_interrupt(struct fuse_conn *fc, struct fuse_req *req,
  * request_end().  Otherwise add it to the processing list, and set
  * the 'sent' flag.
  */
-static ssize_t fuse_dev_readv(struct file *file, const struct iovec *iov,
-			      unsigned long nr_segs, loff_t *off)
+static ssize_t fuse_dev_read(struct kiocb *iocb, const struct iovec *iov,
+			      unsigned long nr_segs, loff_t pos)
 {
 	int err;
 	struct fuse_req *req;
 	struct fuse_in *in;
 	struct fuse_copy_state cs;
 	unsigned reqsize;
+	struct file *file = iocb->ki_filp;
 	struct fuse_conn *fc = fuse_get_conn(file);
 	if (!fc)
 		return -EPERM;
@@ -735,11 +747,12 @@ static ssize_t fuse_dev_readv(struct file *file, const struct iovec *iov,
 	fuse_copy_finish(&cs);
 	spin_lock(&fc->lock);
 	req->locked = 0;
-	if (!err && req->aborted)
-		err = -ENOENT;
+	if (req->aborted) {
+		request_end(fc, req);
+		return -ENODEV;
+	}
 	if (err) {
-		if (!req->aborted)
-			req->out.h.error = -EIO;
+		req->out.h.error = -EIO;
 		request_end(fc, req);
 		return err;
 	}
@@ -757,15 +770,6 @@ static ssize_t fuse_dev_readv(struct file *file, const struct iovec *iov,
  err_unlock:
 	spin_unlock(&fc->lock);
 	return err;
-}
-
-static ssize_t fuse_dev_read(struct file *file, char __user *buf,
-			     size_t nbytes, loff_t *off)
-{
-	struct iovec iov;
-	iov.iov_len = nbytes;
-	iov.iov_base = buf;
-	return fuse_dev_readv(file, &iov, 1, off);
 }
 
 /* Look up request on processing list by unique ID */
@@ -812,15 +816,15 @@ static int copy_out_args(struct fuse_copy_state *cs, struct fuse_out *out,
  * it from the list and copy the rest of the buffer to the request.
  * The request is finished by calling request_end()
  */
-static ssize_t fuse_dev_writev(struct file *file, const struct iovec *iov,
-			       unsigned long nr_segs, loff_t *off)
+static ssize_t fuse_dev_write(struct kiocb *iocb, const struct iovec *iov,
+			       unsigned long nr_segs, loff_t pos)
 {
 	int err;
 	unsigned nbytes = iov_length(iov, nr_segs);
 	struct fuse_req *req;
 	struct fuse_out_header oh;
 	struct fuse_copy_state cs;
-	struct fuse_conn *fc = fuse_get_conn(file);
+	struct fuse_conn *fc = fuse_get_conn(iocb->ki_filp);
 	if (!fc)
 		return -EPERM;
 
@@ -894,15 +898,6 @@ static ssize_t fuse_dev_writev(struct file *file, const struct iovec *iov,
  err_finish:
 	fuse_copy_finish(&cs);
 	return err;
-}
-
-static ssize_t fuse_dev_write(struct file *file, const char __user *buf,
-			      size_t nbytes, loff_t *off)
-{
-	struct iovec iov;
-	iov.iov_len = nbytes;
-	iov.iov_base = (char __user *) buf;
-	return fuse_dev_writev(file, &iov, 1, off);
 }
 
 static unsigned fuse_dev_poll(struct file *file, poll_table *wait)
@@ -1039,10 +1034,10 @@ static int fuse_dev_fasync(int fd, struct file *file, int on)
 const struct file_operations fuse_dev_operations = {
 	.owner		= THIS_MODULE,
 	.llseek		= no_llseek,
-	.read		= fuse_dev_read,
-	.readv		= fuse_dev_readv,
-	.write		= fuse_dev_write,
-	.writev		= fuse_dev_writev,
+	.read		= do_sync_read,
+	.aio_read	= fuse_dev_read,
+	.write		= do_sync_write,
+	.aio_write	= fuse_dev_write,
 	.poll		= fuse_dev_poll,
 	.release	= fuse_dev_release,
 	.fasync		= fuse_dev_fasync,
@@ -1059,7 +1054,7 @@ int __init fuse_dev_init(void)
 	int err = -ENOMEM;
 	fuse_req_cachep = kmem_cache_create("fuse_request",
 					    sizeof(struct fuse_req),
-					    0, 0, NULL, NULL);
+					    0, 0, NULL);
 	if (!fuse_req_cachep)
 		goto out;
 

@@ -1,4 +1,13 @@
-/* $Id: jffs2_fs_i.h,v 1.19 2005/11/07 11:14:52 gleixner Exp $ */
+/*
+ * JFFS2 -- Journalling Flash File System, Version 2.
+ *
+ * Copyright © 2001-2007 Red Hat, Inc.
+ *
+ * Created by David Woodhouse <dwmw2@infradead.org>
+ *
+ * For licensing information, see the file 'LICENCE' in this directory.
+ *
+ */
 
 #ifndef _JFFS2_FS_I
 #define _JFFS2_FS_I
@@ -41,11 +50,7 @@ struct jffs2_inode_info {
 
 	uint16_t flags;
 	uint8_t usercompr;
-#if !defined (__ECOS)
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,5,2)
 	struct inode vfs_inode;
-#endif
-#endif
 #ifdef CONFIG_JFFS2_FS_POSIX_ACL
 	struct posix_acl *i_acl_access;
 	struct posix_acl *i_acl_default;

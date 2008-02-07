@@ -40,8 +40,6 @@
 #define DPRINTK(fmt,args...) do {} while(0)
 #endif
 
-#define AUTOFS_SUPER_MAGIC 0x0187
-
 /* Unified info structure.  This is pointed to by both the dentry and
    inode structures.  Each file in the filesystem has an instance of this
    structure.  It holds a reference to the dentry, so dentries are never
@@ -53,6 +51,8 @@ struct autofs_info {
 	struct inode	*inode;
 
 	int		flags;
+
+	struct list_head rehash;
 
 	struct autofs_sb_info *sbi;
 	unsigned long last_used;
@@ -96,7 +96,6 @@ struct autofs_wait_queue {
 
 struct autofs_sb_info {
 	u32 magic;
-	struct dentry *root;
 	int pipefd;
 	struct file *pipe;
 	pid_t oz_pgrp;
@@ -113,6 +112,8 @@ struct autofs_sb_info {
 	struct mutex wq_mutex;
 	spinlock_t fs_lock;
 	struct autofs_wait_queue *queues; /* Wait queue pointer */
+	spinlock_t rehash_lock;
+	struct list_head rehash_list;
 };
 
 static inline struct autofs_sb_info *autofs4_sbi(struct super_block *sb)
@@ -130,7 +131,7 @@ static inline struct autofs_info *autofs4_dentry_ino(struct dentry *dentry)
    filesystem without "magic".) */
 
 static inline int autofs4_oz_mode(struct autofs_sb_info *sbi) {
-	return sbi->catatonic || process_group(current) == sbi->oz_pgrp;
+	return sbi->catatonic || task_pgrp_nr(current) == sbi->oz_pgrp;
 }
 
 /* Does a dentry have some pending activity? */
@@ -153,7 +154,8 @@ static inline int autofs4_ispending(struct dentry *dentry)
 
 static inline void autofs4_copy_atime(struct file *src, struct file *dst)
 {
-	dst->f_dentry->d_inode->i_atime = src->f_dentry->d_inode->i_atime;
+	dst->f_path.dentry->d_inode->i_atime =
+		src->f_path.dentry->d_inode->i_atime;
 	return;
 }
 
@@ -170,11 +172,11 @@ int autofs4_expire_multi(struct super_block *, struct vfsmount *,
 
 /* Operations structures */
 
-extern struct inode_operations autofs4_symlink_inode_operations;
-extern struct inode_operations autofs4_dir_inode_operations;
-extern struct inode_operations autofs4_root_inode_operations;
-extern struct inode_operations autofs4_indirect_root_inode_operations;
-extern struct inode_operations autofs4_direct_root_inode_operations;
+extern const struct inode_operations autofs4_symlink_inode_operations;
+extern const struct inode_operations autofs4_dir_inode_operations;
+extern const struct inode_operations autofs4_root_inode_operations;
+extern const struct inode_operations autofs4_indirect_root_inode_operations;
+extern const struct inode_operations autofs4_direct_root_inode_operations;
 extern const struct file_operations autofs4_dir_operations;
 extern const struct file_operations autofs4_root_operations;
 
@@ -231,4 +233,4 @@ out:
 }
 
 void autofs4_dentry_release(struct dentry *);
-
+extern void autofs4_kill_sb(struct super_block *);

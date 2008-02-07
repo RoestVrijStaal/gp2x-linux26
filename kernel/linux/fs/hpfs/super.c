@@ -11,6 +11,8 @@
 #include <linux/parser.h>
 #include <linux/init.h>
 #include <linux/statfs.h>
+#include <linux/magic.h>
+#include <linux/sched.h>
 
 /* Mark the filesystem dirty, so that chkdsk checks it when os/2 booted */
 
@@ -45,21 +47,17 @@ static void unmark_dirty(struct super_block *s)
 }
 
 /* Filesystem error... */
+static char err_buf[1024];
 
-#define ERR_BUF_SIZE 1024
-
-void hpfs_error(struct super_block *s, char *m,...)
+void hpfs_error(struct super_block *s, const char *fmt, ...)
 {
-	char *buf;
-	va_list l;
-	va_start(l, m);
-	if (!(buf = kmalloc(ERR_BUF_SIZE, GFP_KERNEL)))
-		printk("HPFS: No memory for error message '%s'\n",m);
-	else if (vsprintf(buf, m, l) >= ERR_BUF_SIZE)
-		printk("HPFS: Grrrr... Kernel memory corrupted ... going on, but it'll crash very soon :-(\n");
-	printk("HPFS: filesystem error: ");
-	if (buf) printk("%s", buf);
-	else printk("%s\n",m);
+	va_list args;
+
+	va_start(args, fmt);
+	vsnprintf(err_buf, sizeof(err_buf), fmt, args);
+	va_end(args);
+
+	printk("HPFS: filesystem error: %s", err_buf);
 	if (!hpfs_sb(s)->sb_was_error) {
 		if (hpfs_sb(s)->sb_err == 2) {
 			printk("; crashing the system because you wanted it\n");
@@ -75,7 +73,6 @@ void hpfs_error(struct super_block *s, char *m,...)
 		} else if (s->s_flags & MS_RDONLY) printk("; going on - but anything won't be destroyed because it's read-only\n");
 		else printk("; corrupted filesystem mounted read/write - your computer will explode within 20 seconds ... but you wanted it so!\n");
 	} else printk("\n");
-	kfree(buf);
 	hpfs_sb(s)->sb_was_error = 1;
 }
 
@@ -159,12 +156,12 @@ static int hpfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	return 0;
 }
 
-static kmem_cache_t * hpfs_inode_cachep;
+static struct kmem_cache * hpfs_inode_cachep;
 
 static struct inode *hpfs_alloc_inode(struct super_block *sb)
 {
 	struct hpfs_inode_info *ei;
-	ei = (struct hpfs_inode_info *)kmem_cache_alloc(hpfs_inode_cachep, SLAB_NOFS);
+	ei = (struct hpfs_inode_info *)kmem_cache_alloc(hpfs_inode_cachep, GFP_NOFS);
 	if (!ei)
 		return NULL;
 	ei->vfs_inode.i_version = 1;
@@ -176,25 +173,22 @@ static void hpfs_destroy_inode(struct inode *inode)
 	kmem_cache_free(hpfs_inode_cachep, hpfs_i(inode));
 }
 
-static void init_once(void * foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct hpfs_inode_info *ei = (struct hpfs_inode_info *) foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR) {
-		mutex_init(&ei->i_mutex);
-		mutex_init(&ei->i_parent_mutex);
-		inode_init_once(&ei->vfs_inode);
-	}
+	mutex_init(&ei->i_mutex);
+	mutex_init(&ei->i_parent_mutex);
+	inode_init_once(&ei->vfs_inode);
 }
- 
+
 static int init_inodecache(void)
 {
 	hpfs_inode_cachep = kmem_cache_create("hpfs_inode_cache",
 					     sizeof(struct hpfs_inode_info),
 					     0, (SLAB_RECLAIM_ACCOUNT|
 						SLAB_MEM_SPREAD),
-					     init_once, NULL);
+					     init_once);
 	if (hpfs_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -202,8 +196,7 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	if (kmem_cache_destroy(hpfs_inode_cachep))
-		printk(KERN_INFO "hpfs_inode_cache: not all structures were freed\n");
+	kmem_cache_destroy(hpfs_inode_cachep);
 }
 
 /*
@@ -431,7 +424,7 @@ static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 
 /* Super operations */
 
-static struct super_operations hpfs_sops =
+static const struct super_operations hpfs_sops =
 {
 	.alloc_inode	= hpfs_alloc_inode,
 	.destroy_inode	= hpfs_destroy_inode,
@@ -461,11 +454,10 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 
 	int o;
 
-	sbi = kmalloc(sizeof(*sbi), GFP_KERNEL);
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
 	s->s_fs_info = sbi;
-	memset(sbi, 0, sizeof(*sbi));
 
 	sbi->sb_bmp_dir = NULL;
 	sbi->sb_cp_table = NULL;

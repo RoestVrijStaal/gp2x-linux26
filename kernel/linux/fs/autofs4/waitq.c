@@ -41,11 +41,8 @@ void autofs4_catatonic_mode(struct autofs_sb_info *sbi)
 		wake_up_interruptible(&wq->queue);
 		wq = nwq;
 	}
-	if (sbi->pipe) {
-		fput(sbi->pipe);	/* Close the pipe */
-		sbi->pipe = NULL;
-	}
-	shrink_dcache_sb(sbi->sb);
+	fput(sbi->pipe);	/* Close the pipe */
+	sbi->pipe = NULL;
 }
 
 static int autofs4_write(struct file *file, const void *addr, int bytes)
@@ -87,7 +84,11 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 				 struct autofs_wait_queue *wq,
 				 int type)
 {
-	union autofs_packet_union pkt;
+	union {
+		struct autofs_packet_hdr hdr;
+		union autofs_packet_union v4_pkt;
+		union autofs_v5_packet_union v5_pkt;
+	} pkt;
 	size_t pktsz;
 
 	DPRINTK("wait id = 0x%08lx, name = %.*s, type=%d",
@@ -101,7 +102,7 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	/* Kernel protocol v4 missing and expire packets */
 	case autofs_ptype_missing:
 	{
-		struct autofs_packet_missing *mp = &pkt.missing;
+		struct autofs_packet_missing *mp = &pkt.v4_pkt.missing;
 
 		pktsz = sizeof(*mp);
 
@@ -113,7 +114,7 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	}
 	case autofs_ptype_expire_multi:
 	{
-		struct autofs_packet_expire_multi *ep = &pkt.expire_multi;
+		struct autofs_packet_expire_multi *ep = &pkt.v4_pkt.expire_multi;
 
 		pktsz = sizeof(*ep);
 
@@ -132,7 +133,7 @@ static void autofs4_notify_daemon(struct autofs_sb_info *sbi,
 	case autofs_ptype_missing_direct:
 	case autofs_ptype_expire_direct:
 	{
-		struct autofs_v5_packet *packet = &pkt.v5_packet;
+		struct autofs_v5_packet *packet = &pkt.v5_pkt.v5_packet;
 
 		pktsz = sizeof(*packet);
 
@@ -375,7 +376,7 @@ int autofs4_wait_release(struct autofs_sb_info *sbi, autofs_wqt_t wait_queue_tok
 	struct autofs_wait_queue *wq, **wql;
 
 	mutex_lock(&sbi->wq_mutex);
-	for (wql = &sbi->queues ; (wq = *wql) != 0 ; wql = &wq->next) {
+	for (wql = &sbi->queues; (wq = *wql) != NULL; wql = &wq->next) {
 		if (wq->wait_queue_token == wait_queue_token)
 			break;
 	}

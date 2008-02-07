@@ -18,7 +18,7 @@
 #include <linux/pagemap.h>
 #include <linux/parser.h>
 #include <linux/bitops.h>
-#include <linux/smp_lock.h>
+#include <linux/magic.h>
 #include "autofs_i.h"
 #include <linux/module.h>
 
@@ -46,6 +46,8 @@ struct autofs_info *autofs4_init_ino(struct autofs_info *ino,
 	ino->inode = NULL;
 	ino->dentry = NULL;
 	ino->size = 0;
+
+	INIT_LIST_HEAD(&ino->rehash);
 
 	ino->last_used = jiffies;
 	atomic_set(&ino->count, 0);
@@ -95,8 +97,11 @@ void autofs4_free_ino(struct autofs_info *ino)
  */
 static void autofs4_force_release(struct autofs_sb_info *sbi)
 {
-	struct dentry *this_parent = sbi->root;
+	struct dentry *this_parent = sbi->sb->s_root;
 	struct list_head *next;
+
+	if (!sbi->sb->s_root)
+		return;
 
 	spin_lock(&dcache_lock);
 repeat:
@@ -126,7 +131,7 @@ resume:
 		spin_lock(&dcache_lock);
 	}
 
-	if (this_parent != sbi->root) {
+	if (this_parent != sbi->sb->s_root) {
 		struct dentry *dentry = this_parent;
 
 		next = this_parent->d_u.d_child.next;
@@ -139,29 +144,33 @@ resume:
 		goto resume;
 	}
 	spin_unlock(&dcache_lock);
-
-	dput(sbi->root);
-	sbi->root = NULL;
-	shrink_dcache_sb(sbi->sb);
-
-	return;
 }
 
-static void autofs4_put_super(struct super_block *sb)
+void autofs4_kill_sb(struct super_block *sb)
 {
 	struct autofs_sb_info *sbi = autofs4_sbi(sb);
 
-	sb->s_fs_info = NULL;
+	/*
+	 * In the event of a failure in get_sb_nodev the superblock
+	 * info is not present so nothing else has been setup, so
+	 * just call kill_anon_super when we are called from
+	 * deactivate_super.
+	 */
+	if (!sbi)
+		goto out_kill_sb;
 
-	if ( !sbi->catatonic )
+	if (!sbi->catatonic)
 		autofs4_catatonic_mode(sbi); /* Free wait queues, close pipe */
 
 	/* Clean up and release dangling references */
 	autofs4_force_release(sbi);
 
+	sb->s_fs_info = NULL;
 	kfree(sbi);
 
+out_kill_sb:
 	DPRINTK("shutting down");
+	kill_anon_super(sb);
 }
 
 static int autofs4_show_options(struct seq_file *m, struct vfsmount *mnt)
@@ -187,8 +196,7 @@ static int autofs4_show_options(struct seq_file *m, struct vfsmount *mnt)
 	return 0;
 }
 
-static struct super_operations autofs4_sops = {
-	.put_super	= autofs4_put_super,
+static const struct super_operations autofs4_sops = {
 	.statfs		= simple_statfs,
 	.show_options	= autofs4_show_options,
 };
@@ -210,8 +218,7 @@ static match_table_t tokens = {
 };
 
 static int parse_options(char *options, int *pipefd, uid_t *uid, gid_t *gid,
-			 pid_t *pgrp, unsigned int *type,
-			 int *minproto, int *maxproto)
+		pid_t *pgrp, unsigned int *type, int *minproto, int *maxproto)
 {
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
@@ -219,7 +226,7 @@ static int parse_options(char *options, int *pipefd, uid_t *uid, gid_t *gid,
 
 	*uid = current->uid;
 	*gid = current->gid;
-	*pgrp = process_group(current);
+	*pgrp = task_pgrp_nr(current);
 
 	*minproto = AUTOFS_MIN_PROTO_VERSION;
 	*maxproto = AUTOFS_MAX_PROTO_VERSION;
@@ -305,20 +312,18 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	struct autofs_sb_info *sbi;
 	struct autofs_info *ino;
 
-	sbi = (struct autofs_sb_info *) kmalloc(sizeof(*sbi), GFP_KERNEL);
-	if ( !sbi )
+	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
+	if (!sbi)
 		goto fail_unlock;
 	DPRINTK("starting up, sbi = %p",sbi);
 
-	memset(sbi, 0, sizeof(*sbi));
-
 	s->s_fs_info = sbi;
 	sbi->magic = AUTOFS_SBI_MAGIC;
-	sbi->root = NULL;
 	sbi->pipefd = -1;
-	sbi->catatonic = 0;
+	sbi->pipe = NULL;
+	sbi->catatonic = 1;
 	sbi->exp_timeout = 0;
-	sbi->oz_pgrp = process_group(current);
+	sbi->oz_pgrp = task_pgrp_nr(current);
 	sbi->sb = s;
 	sbi->version = 0;
 	sbi->sub_version = 0;
@@ -328,6 +333,8 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	mutex_init(&sbi->wq_mutex);
 	spin_lock_init(&sbi->fs_lock);
 	sbi->queues = NULL;
+	spin_lock_init(&sbi->rehash_lock);
+	INIT_LIST_HEAD(&sbi->rehash_list);
 	s->s_blocksize = 1024;
 	s->s_blocksize_bits = 10;
 	s->s_magic = AUTOFS_SUPER_MAGIC;
@@ -353,10 +360,9 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	root->d_fsdata = ino;
 
 	/* Can this call block? */
-	if (parse_options(data, &pipefd,
-			  &root_inode->i_uid, &root_inode->i_gid,
-			  &sbi->oz_pgrp, &sbi->type,
-			  &sbi->min_proto, &sbi->max_proto)) {
+	if (parse_options(data, &pipefd, &root_inode->i_uid, &root_inode->i_gid,
+				&sbi->oz_pgrp, &sbi->type, &sbi->min_proto,
+				&sbi->max_proto)) {
 		printk("autofs: called with bogus options\n");
 		goto fail_dput;
 	}
@@ -386,21 +392,15 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	DPRINTK("pipe fd = %d, pgrp = %u", pipefd, sbi->oz_pgrp);
 	pipe = fget(pipefd);
 	
-	if ( !pipe ) {
+	if (!pipe) {
 		printk("autofs: could not open pipe file descriptor\n");
 		goto fail_dput;
 	}
-	if ( !pipe->f_op || !pipe->f_op->write )
+	if (!pipe->f_op || !pipe->f_op->write)
 		goto fail_fput;
 	sbi->pipe = pipe;
 	sbi->pipefd = pipefd;
-
-	/*
-	 * Take a reference to the root dentry so we get a chance to
-	 * clean up the dentry tree on umount.
-	 * See autofs4_force_release.
-	 */
-	sbi->root = dget(root);
+	sbi->catatonic = 0;
 
 	/*
 	 * Success! Install the root dentry now to indicate completion.
@@ -425,6 +425,7 @@ fail_ino:
 	kfree(ino);
 fail_free:
 	kfree(sbi);
+	s->s_fs_info = NULL;
 fail_unlock:
 	return -EINVAL;
 }
@@ -446,7 +447,6 @@ struct inode *autofs4_get_inode(struct super_block *sb,
 		inode->i_uid = 0;
 		inode->i_gid = 0;
 	}
-	inode->i_blksize = PAGE_CACHE_SIZE;
 	inode->i_blocks = 0;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 

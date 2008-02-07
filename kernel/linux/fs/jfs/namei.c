@@ -4,22 +4,23 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/fs.h>
 #include <linux/ctype.h>
 #include <linux/quotaops.h>
+#include <linux/exportfs.h>
 #include "jfs_incore.h"
 #include "jfs_superblock.h"
 #include "jfs_inode.h"
@@ -41,7 +42,7 @@ static s64 commitZeroLink(tid_t, struct inode *);
 /*
  * NAME:	free_ea_wmap(inode)
  *
- * FUNCTION:	free uncommitted extended attributes from working map 
+ * FUNCTION:	free uncommitted extended attributes from working map
  *
  */
 static inline void free_ea_wmap(struct inode *inode)
@@ -62,7 +63,7 @@ static inline void free_ea_wmap(struct inode *inode)
  * FUNCTION:	create a regular file in the parent directory <dip>
  *		with name = <from dentry> and mode = <mode>
  *
- * PARAMETER:	dip 	- parent directory vnode
+ * PARAMETER:	dip	- parent directory vnode
  *		dentry	- dentry of new file
  *		mode	- create mode (rwxrwxrwx).
  *		nd- nd struct
@@ -97,15 +98,15 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
 	 * begin the transaction before we search the directory.
 	 */
 	ip = ialloc(dip, mode);
-	if (ip == NULL) {
-		rc = -ENOSPC;
+	if (IS_ERR(ip)) {
+		rc = PTR_ERR(ip);
 		goto out2;
 	}
 
 	tid = txBegin(dip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dip)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	rc = jfs_init_acl(tid, ip, dip);
 	if (rc)
@@ -190,7 +191,7 @@ static int jfs_create(struct inode *dip, struct dentry *dentry, int mode,
  * FUNCTION:	create a child directory in the parent directory <dip>
  *		with name = <from dentry> and mode = <mode>
  *
- * PARAMETER:	dip 	- parent directory vnode
+ * PARAMETER:	dip	- parent directory vnode
  *		dentry	- dentry of child directory
  *		mode	- create mode (rwxrwxrwx).
  *
@@ -231,15 +232,15 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 	 * begin the transaction before we search the directory.
 	 */
 	ip = ialloc(dip, S_IFDIR | mode);
-	if (ip == NULL) {
-		rc = -ENOSPC;
+	if (IS_ERR(ip)) {
+		rc = PTR_ERR(ip);
 		goto out2;
 	}
 
 	tid = txBegin(dip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dip)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	rc = jfs_init_acl(tid, ip, dip);
 	if (rc)
@@ -292,7 +293,7 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
 	mark_inode_dirty(ip);
 
 	/* update parent directory inode */
-	dip->i_nlink++;		/* for '..' from child directory */
+	inc_nlink(dip);		/* for '..' from child directory */
 	dip->i_ctime = dip->i_mtime = CURRENT_TIME;
 	mark_inode_dirty(dip);
 
@@ -324,18 +325,18 @@ static int jfs_mkdir(struct inode *dip, struct dentry *dentry, int mode)
  *
  * FUNCTION:	remove a link to child directory
  *
- * PARAMETER:	dip 	- parent inode
+ * PARAMETER:	dip	- parent inode
  *		dentry	- child directory dentry
  *
  * RETURN:	-EINVAL	- if name is . or ..
- *		-EINVAL  - if . or .. exist but are invalid.
+ *		-EINVAL - if . or .. exist but are invalid.
  *		errors from subroutines
  *
  * note:
- * if other threads have the directory open when the last link 
- * is removed, the "." and ".." entries, if present, are removed before 
- * rmdir() returns and no new entries may be created in the directory, 
- * but the directory is not removed until the last reference to 
+ * if other threads have the directory open when the last link
+ * is removed, the "." and ".." entries, if present, are removed before
+ * rmdir() returns and no new entries may be created in the directory,
+ * but the directory is not removed until the last reference to
  * the directory is released (cf.unlink() of regular file).
  */
 static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
@@ -365,8 +366,8 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 
 	tid = txBegin(dip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dip)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	iplist[0] = dip;
 	iplist[1] = ip;
@@ -393,9 +394,8 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 	/* update parent directory's link count corresponding
 	 * to ".." entry of the target directory deleted
 	 */
-	dip->i_nlink--;
 	dip->i_ctime = dip->i_mtime = CURRENT_TIME;
-	mark_inode_dirty(dip);
+	inode_dec_link_count(dip);
 
 	/*
 	 * OS/2 could have created EA and/or ACL
@@ -415,7 +415,7 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 	JFS_IP(ip)->acl.flag = 0;
 
 	/* mark the target directory as deleted */
-	ip->i_nlink = 0;
+	clear_nlink(ip);
 	mark_inode_dirty(ip);
 
 	rc = txCommit(tid, 2, &iplist[0], 0);
@@ -447,11 +447,11 @@ static int jfs_rmdir(struct inode *dip, struct dentry *dentry)
 /*
  * NAME:	jfs_unlink(dip, dentry)
  *
- * FUNCTION:	remove a link to object <vp> named by <name> 
+ * FUNCTION:	remove a link to object <vp> named by <name>
  *		from parent directory <dvp>
  *
- * PARAMETER:	dip 	- inode of parent directory
- *		dentry 	- dentry of object to be removed
+ * PARAMETER:	dip	- inode of parent directory
+ *		dentry	- dentry of object to be removed
  *
  * RETURN:	errors from subroutines
  *
@@ -484,12 +484,12 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 	if ((rc = get_UCSname(&dname, dentry)))
 		goto out;
 
-	IWRITE_LOCK(ip);
+	IWRITE_LOCK(ip, RDWRLOCK_NORMAL);
 
 	tid = txBegin(dip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dip)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	iplist[0] = dip;
 	iplist[1] = ip;
@@ -515,11 +515,10 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 	mark_inode_dirty(dip);
 
 	/* update target's inode */
-	ip->i_nlink--;
-	mark_inode_dirty(ip);
+	inode_dec_link_count(ip);
 
 	/*
-	 *      commit zero link count object
+	 *	commit zero link count object
 	 */
 	if (ip->i_nlink == 0) {
 		assert(!test_cflag(COMMIT_Nolink, ip));
@@ -598,9 +597,9 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
 /*
  * NAME:	commitZeroLink()
  *
- * FUNCTION:    for non-directory, called by jfs_remove(),
+ * FUNCTION:	for non-directory, called by jfs_remove(),
  *		truncate a regular file, directory or symbolic
- *		link to zero length. return 0 if type is not 
+ *		link to zero length. return 0 if type is not
  *		one of these.
  *
  *		if the file is currently associated with a VM segment
@@ -610,7 +609,7 @@ static int jfs_unlink(struct inode *dip, struct dentry *dentry)
  *		map by ctrunc1.
  *		if there is no VM segment on entry, the resources are
  *		freed in both work and permanent map.
- *		(? for temporary file - memory object is cached even 
+ *		(? for temporary file - memory object is cached even
  *		after no reference:
  *		reference count > 0 -   )
  *
@@ -664,7 +663,7 @@ static s64 commitZeroLink(tid_t tid, struct inode *ip)
 
 	/*
 	 * free xtree/data (truncate to zero length):
-	 * free xtree/data pages from cache if COMMIT_PWMAP, 
+	 * free xtree/data pages from cache if COMMIT_PWMAP,
 	 * free xtree/data blocks from persistent block map, and
 	 * free xtree/data blocks from working block map if COMMIT_PWMAP;
 	 */
@@ -678,8 +677,8 @@ static s64 commitZeroLink(tid_t tid, struct inode *ip)
 /*
  * NAME:	jfs_free_zero_link()
  *
- * FUNCTION:    for non-directory, called by iClose(),
- *		free resources of a file from cache and WORKING map 
+ * FUNCTION:	for non-directory, called by iClose(),
+ *		free resources of a file from cache and WORKING map
  *		for a file previously committed with zero link count
  *		while associated with a pager object,
  *
@@ -764,7 +763,7 @@ void jfs_free_zero_link(struct inode *ip)
  * FUNCTION:	create a link to <vp> by the name = <name>
  *		in the parent directory <dvp>
  *
- * PARAMETER:	vp 	- target object
+ * PARAMETER:	vp	- target object
  *		dvp	- parent directory of new link
  *		name	- name of new link to target object
  *		crp	- credential
@@ -804,8 +803,8 @@ static int jfs_link(struct dentry *old_dentry,
 
 	tid = txBegin(ip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dir)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dir)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	/*
 	 * scan parent directory for entry/freespace
@@ -824,7 +823,7 @@ static int jfs_link(struct dentry *old_dentry,
 		goto free_dname;
 
 	/* update object inode */
-	ip->i_nlink++;		/* for new link */
+	inc_nlink(ip);		/* for new link */
 	ip->i_ctime = CURRENT_TIME;
 	dir->i_ctime = dir->i_mtime = CURRENT_TIME;
 	mark_inode_dirty(dir);
@@ -835,7 +834,7 @@ static int jfs_link(struct dentry *old_dentry,
 	rc = txCommit(tid, 2, &iplist[0], 0);
 
 	if (rc) {
-		ip->i_nlink--;
+		ip->i_nlink--; /* never instantiated */
 		iput(ip);
 	} else
 		d_instantiate(dentry, ip);
@@ -857,12 +856,12 @@ static int jfs_link(struct dentry *old_dentry,
  * NAME:	jfs_symlink(dip, dentry, name)
  *
  * FUNCTION:	creates a symbolic link to <symlink> by name <name>
- *		        in directory <dip>
+ *			in directory <dip>
  *
- * PARAMETER:	dip	    - parent directory vnode
- *		        dentry 	- dentry of symbolic link
- *		        name    - the path name of the existing object 
- *			              that will be the source of the link
+ * PARAMETER:	dip	- parent directory vnode
+ *		dentry	- dentry of symbolic link
+ *		name	- the path name of the existing object
+ *			  that will be the source of the link
  *
  * RETURN:	errors from subroutines
  *
@@ -908,15 +907,15 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	 * (iAlloc() returns new, locked inode)
 	 */
 	ip = ialloc(dip, S_IFLNK | 0777);
-	if (ip == NULL) {
-		rc = -ENOSPC;
+	if (IS_ERR(ip)) {
+		rc = PTR_ERR(ip);
 		goto out2;
 	}
 
 	tid = txBegin(dip->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dip)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dip)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	rc = jfs_init_security(tid, ip, dip);
 	if (rc)
@@ -928,7 +927,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 	tblk->u.ixpxd = JFS_IP(ip)->ixpxd;
 
 	/* fix symlink access permission
-	 * (dir_create() ANDs in the u.u_cmask, 
+	 * (dir_create() ANDs in the u.u_cmask,
 	 * but symlinks really need to be 777 access)
 	 */
 	ip->i_mode |= 0777;
@@ -969,7 +968,7 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 		ip->i_mapping->a_ops = &jfs_aops;
 
 		/*
-		 * even though the data of symlink object (source 
+		 * even though the data of symlink object (source
 		 * path name) is treated as non-journaled user data,
 		 * it is read/written thru buffer cache for performance.
 		 */
@@ -980,7 +979,6 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 		xlen = xsize >> JFS_SBI(sb)->l2bsize;
 		if ((rc = xtInsert(tid, ip, 0, 0, xlen, &xaddr, 0))) {
 			txAbort(tid, 0);
-			rc = -ENOSPC;
 			goto out3;
 		}
 		extent = xaddr;
@@ -1055,9 +1053,9 @@ static int jfs_symlink(struct inode *dip, struct dentry *dentry,
 
 
 /*
- * NAME:        jfs_rename
+ * NAME:	jfs_rename
  *
- * FUNCTION:    rename a file or directory
+ * FUNCTION:	rename a file or directory
  */
 static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	       struct inode *new_dir, struct dentry *new_dentry)
@@ -1130,7 +1128,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			goto out3;
 		}
 	} else if (new_ip) {
-		IWRITE_LOCK(new_ip);
+		IWRITE_LOCK(new_ip, RDWRLOCK_NORMAL);
 		/* Init inode for quota operations. */
 		DQUOT_INIT(new_ip);
 	}
@@ -1140,13 +1138,21 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	 */
 	tid = txBegin(new_dir->i_sb, 0);
 
-	mutex_lock(&JFS_IP(new_dir)->commit_mutex);
-	mutex_lock(&JFS_IP(old_ip)->commit_mutex);
+	/*
+	 * How do we know the locking is safe from deadlocks?
+	 * The vfs does the hard part for us.  Any time we are taking nested
+	 * commit_mutexes, the vfs already has i_mutex held on the parent.
+	 * Here, the vfs has already taken i_mutex on both old_dir and new_dir.
+	 */
+	mutex_lock_nested(&JFS_IP(new_dir)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(old_ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 	if (old_dir != new_dir)
-		mutex_lock(&JFS_IP(old_dir)->commit_mutex);
+		mutex_lock_nested(&JFS_IP(old_dir)->commit_mutex,
+				  COMMIT_MUTEX_SECOND_PARENT);
 
 	if (new_ip) {
-		mutex_lock(&JFS_IP(new_ip)->commit_mutex);
+		mutex_lock_nested(&JFS_IP(new_ip)->commit_mutex,
+				  COMMIT_MUTEX_VICTIM);
 		/*
 		 * Change existing directory entry to new inode number
 		 */
@@ -1155,9 +1161,9 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			      old_ip->i_ino, JFS_RENAME);
 		if (rc)
 			goto out4;
-		new_ip->i_nlink--;
+		drop_nlink(new_ip);
 		if (S_ISDIR(new_ip->i_mode)) {
-			new_ip->i_nlink--;
+			drop_nlink(new_ip);
 			if (new_ip->i_nlink) {
 				mutex_unlock(&JFS_IP(new_ip)->commit_mutex);
 				if (old_dir != new_dir)
@@ -1178,7 +1184,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			/* free block resources */
 			if ((new_size = commitZeroLink(tid, new_ip)) < 0) {
 				txAbort(tid, 1);	/* Marks FS Dirty */
-				rc = new_size;		
+				rc = new_size;
 				goto out4;
 			}
 			tblk = tid_to_tblock(tid);
@@ -1208,7 +1214,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 			goto out4;
 		}
 		if (S_ISDIR(old_ip->i_mode))
-			new_dir->i_nlink++;
+			inc_nlink(new_dir);
 	}
 	/*
 	 * Remove old directory entry
@@ -1223,7 +1229,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		goto out4;
 	}
 	if (S_ISDIR(old_ip->i_mode)) {
-		old_dir->i_nlink--;
+		drop_nlink(old_dir);
 		if (old_dir != new_dir) {
 			/*
 			 * Change inode number of parent for moved directory
@@ -1294,7 +1300,7 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 		new_size = xtTruncate_pmap(tid, new_ip, new_size);
 		if (new_size < 0) {
 			txAbort(tid, 1);
-			rc = new_size;		
+			rc = new_size;
 		} else
 			rc = txCommit(tid, 1, &new_ip, COMMIT_SYNC);
 		txEnd(tid);
@@ -1326,9 +1332,9 @@ static int jfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 
 
 /*
- * NAME:        jfs_mknod
+ * NAME:	jfs_mknod
  *
- * FUNCTION:    Create a special file (device)
+ * FUNCTION:	Create a special file (device)
  */
 static int jfs_mknod(struct inode *dir, struct dentry *dentry,
 		int mode, dev_t rdev)
@@ -1352,16 +1358,16 @@ static int jfs_mknod(struct inode *dir, struct dentry *dentry,
 		goto out;
 
 	ip = ialloc(dir, mode);
-	if (ip == NULL) {
-		rc = -ENOSPC;
+	if (IS_ERR(ip)) {
+		rc = PTR_ERR(ip);
 		goto out1;
 	}
 	jfs_ip = JFS_IP(ip);
 
 	tid = txBegin(dir->i_sb, 0);
 
-	mutex_lock(&JFS_IP(dir)->commit_mutex);
-	mutex_lock(&JFS_IP(ip)->commit_mutex);
+	mutex_lock_nested(&JFS_IP(dir)->commit_mutex, COMMIT_MUTEX_PARENT);
+	mutex_lock_nested(&JFS_IP(ip)->commit_mutex, COMMIT_MUTEX_CHILD);
 
 	rc = jfs_init_acl(tid, ip, dir);
 	if (rc)
@@ -1472,6 +1478,40 @@ static struct dentry *jfs_lookup(struct inode *dip, struct dentry *dentry, struc
 	return dentry;
 }
 
+static struct inode *jfs_nfs_get_inode(struct super_block *sb,
+		u64 ino, u32 generation)
+{
+	struct inode *inode;
+
+	if (ino == 0)
+		return ERR_PTR(-ESTALE);
+	inode = iget(sb, ino);
+	if (inode == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	if (is_bad_inode(inode) ||
+	    (generation && inode->i_generation != generation)) {
+		iput(inode);
+		return ERR_PTR(-ESTALE);
+	}
+
+	return inode;
+}
+
+struct dentry *jfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
+		int fh_len, int fh_type)
+{
+	return generic_fh_to_dentry(sb, fid, fh_len, fh_type,
+				    jfs_nfs_get_inode);
+}
+
+struct dentry *jfs_fh_to_parent(struct super_block *sb, struct fid *fid,
+		int fh_len, int fh_type)
+{
+	return generic_fh_to_parent(sb, fid, fh_len, fh_type,
+				    jfs_nfs_get_inode);
+}
+
 struct dentry *jfs_get_parent(struct dentry *dentry)
 {
 	struct super_block *sb = dentry->d_inode->i_sb;
@@ -1498,7 +1538,7 @@ struct dentry *jfs_get_parent(struct dentry *dentry)
 	return parent;
 }
 
-struct inode_operations jfs_dir_inode_operations = {
+const struct inode_operations jfs_dir_inode_operations = {
 	.create		= jfs_create,
 	.lookup		= jfs_lookup,
 	.link		= jfs_link,

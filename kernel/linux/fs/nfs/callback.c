@@ -14,11 +14,13 @@
 #include <linux/sunrpc/svcsock.h>
 #include <linux/nfs_fs.h>
 #include <linux/mutex.h>
+#include <linux/freezer.h>
 
 #include <net/inet_sock.h>
 
 #include "nfs4_fs.h"
 #include "callback.h"
+#include "internal.h"
 
 #define NFSDBG_FACILITY NFSDBG_CALLBACK
 
@@ -36,13 +38,27 @@ static struct svc_program nfs4_callback_program;
 
 unsigned int nfs_callback_set_tcpport;
 unsigned short nfs_callback_tcpport;
+static const int nfs_set_port_min = 0;
+static const int nfs_set_port_max = 65535;
+
+static int param_set_port(const char *val, struct kernel_param *kp)
+{
+	char *endp;
+	int num = simple_strtol(val, &endp, 0);
+	if (endp == val || *endp || num < nfs_set_port_min || num > nfs_set_port_max)
+		return -EINVAL;
+	*((int *)kp->arg) = num;
+	return 0;
+}
+
+module_param_call(callback_tcpport, param_set_port, param_get_int,
+		 &nfs_callback_set_tcpport, 0644);
 
 /*
  * This is the callback kernel thread.
  */
 static void nfs_callback_svc(struct svc_rqst *rqstp)
 {
-	struct svc_serv *serv = rqstp->rq_server;
 	int err;
 
 	__module_get(THIS_MODULE);
@@ -52,10 +68,13 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 	daemonize("nfsv4-svc");
 	/* Process request with signals blocked, but allow SIGKILL.  */
 	allow_signal(SIGKILL);
+	set_freezable();
 
 	complete(&nfs_callback_info.started);
 
 	for(;;) {
+		char buf[RPC_MAX_ADDRBUFLEN];
+
 		if (signalled()) {
 			if (nfs_callback_info.users == 0)
 				break;
@@ -64,7 +83,7 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 		/*
 		 * Listen for a request on the socket
 		 */
-		err = svc_recv(serv, rqstp, MAX_SCHEDULE_TIMEOUT);
+		err = svc_recv(rqstp, MAX_SCHEDULE_TIMEOUT);
 		if (err == -EAGAIN || err == -EINTR)
 			continue;
 		if (err < 0) {
@@ -73,9 +92,9 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 					__FUNCTION__, -err);
 			break;
 		}
-		dprintk("%s: request from %u.%u.%u.%u\n", __FUNCTION__,
-				NIPQUAD(rqstp->rq_addr.sin_addr.s_addr));
-		svc_process(serv, rqstp);
+		dprintk("%s: request from %s\n", __FUNCTION__,
+				svc_print_addr(rqstp, buf, sizeof(buf)));
+		svc_process(rqstp);
 	}
 
 	svc_exit_thread(rqstp);
@@ -91,7 +110,6 @@ static void nfs_callback_svc(struct svc_rqst *rqstp)
 int nfs_callback_up(void)
 {
 	struct svc_serv *serv;
-	struct svc_sock *svsk;
 	int ret = 0;
 
 	lock_kernel();
@@ -100,21 +118,18 @@ int nfs_callback_up(void)
 		goto out;
 	init_completion(&nfs_callback_info.started);
 	init_completion(&nfs_callback_info.stopped);
-	serv = svc_create(&nfs4_callback_program, NFS4_CALLBACK_BUFSIZE);
+	serv = svc_create(&nfs4_callback_program, NFS4_CALLBACK_BUFSIZE, NULL);
 	ret = -ENOMEM;
 	if (!serv)
 		goto out_err;
-	/* FIXME: We don't want to register this socket with the portmapper */
-	ret = svc_makesock(serv, IPPROTO_TCP, nfs_callback_set_tcpport);
-	if (ret < 0)
+
+	ret = svc_makesock(serv, IPPROTO_TCP, nfs_callback_set_tcpport,
+							SVC_SOCK_ANONYMOUS);
+	if (ret <= 0)
 		goto out_destroy;
-	if (!list_empty(&serv->sv_permsocks)) {
-		svsk = list_entry(serv->sv_permsocks.next,
-				struct svc_sock, sk_list);
-		nfs_callback_tcpport = ntohs(inet_sk(svsk->sk_sk)->sport);
-		dprintk ("Callback port = 0x%x\n", nfs_callback_tcpport);
-	} else
-		BUG();
+	nfs_callback_tcpport = ret;
+	dprintk("Callback port = 0x%x\n", nfs_callback_tcpport);
+
 	ret = svc_create_thread(nfs_callback_svc, serv);
 	if (ret < 0)
 		goto out_destroy;
@@ -125,6 +140,8 @@ out:
 	unlock_kernel();
 	return ret;
 out_destroy:
+	dprintk("Couldn't create callback socket or server thread; err = %d\n",
+		ret);
 	svc_destroy(serv);
 out_err:
 	nfs_callback_info.users--;
@@ -134,10 +151,8 @@ out_err:
 /*
  * Kill the server process if it is not already up.
  */
-int nfs_callback_down(void)
+void nfs_callback_down(void)
 {
-	int ret = 0;
-
 	lock_kernel();
 	mutex_lock(&nfs_callback_mutex);
 	nfs_callback_info.users--;
@@ -149,20 +164,23 @@ int nfs_callback_down(void)
 	} while (wait_for_completion_timeout(&nfs_callback_info.stopped, 5*HZ) == 0);
 	mutex_unlock(&nfs_callback_mutex);
 	unlock_kernel();
-	return ret;
 }
 
 static int nfs_callback_authenticate(struct svc_rqst *rqstp)
 {
-	struct in_addr *addr = &rqstp->rq_addr.sin_addr;
-	struct nfs4_client *clp;
+	struct sockaddr_in *addr = svc_addr_in(rqstp);
+	struct nfs_client *clp;
+	char buf[RPC_MAX_ADDRBUFLEN];
 
 	/* Don't talk to strangers */
-	clp = nfs4_find_client(addr);
+	clp = nfs_find_client(addr, 4);
 	if (clp == NULL)
 		return SVC_DROP;
-	dprintk("%s: %u.%u.%u.%u NFSv4 callback!\n", __FUNCTION__, NIPQUAD(addr));
-	nfs4_put_client(clp);
+
+	dprintk("%s: %s NFSv4 callback!\n", __FUNCTION__,
+			svc_print_addr(rqstp, buf, sizeof(buf)));
+	nfs_put_client(clp);
+
 	switch (rqstp->rq_authop->flavour) {
 		case RPC_AUTH_NULL:
 			if (rqstp->rq_proc != CB_NULL)

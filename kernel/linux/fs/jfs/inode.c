@@ -4,16 +4,16 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
@@ -33,7 +33,7 @@
 
 void jfs_read_inode(struct inode *inode)
 {
-	if (diRead(inode)) { 
+	if (diRead(inode)) {
 		make_bad_inode(inode);
 		return;
 	}
@@ -55,7 +55,6 @@ void jfs_read_inode(struct inode *inode)
 		inode->i_op = &jfs_file_inode_operations;
 		init_special_inode(inode, inode->i_mode, inode->i_rdev);
 	}
-	jfs_set_inode_flags(inode);
 }
 
 /*
@@ -182,9 +181,9 @@ int jfs_get_block(struct inode *ip, sector_t lblock,
 	 * Take appropriate lock on inode
 	 */
 	if (create)
-		IWRITE_LOCK(ip);
+		IWRITE_LOCK(ip, RDWRLOCK_NORMAL);
 	else
-		IREAD_LOCK(ip);
+		IREAD_LOCK(ip, RDWRLOCK_NORMAL);
 
 	if (((lblock64 << ip->i_sb->s_blocksize_bits) < ip->i_size) &&
 	    (!xtLookup(ip, lblock64, xlen, &xflag, &xaddr, &xlen, 0)) &&
@@ -227,7 +226,7 @@ int jfs_get_block(struct inode *ip, sector_t lblock,
 #ifdef _JFS_4K
 	if ((rc = extHint(ip, lblock64 << ip->i_sb->s_blocksize_bits, &xad)))
 		goto unlock;
-	rc = extAlloc(ip, xlen, lblock64, &xad, FALSE);
+	rc = extAlloc(ip, xlen, lblock64, &xad, false);
 	if (rc)
 		goto unlock;
 
@@ -256,7 +255,7 @@ int jfs_get_block(struct inode *ip, sector_t lblock,
 
 static int jfs_writepage(struct page *page, struct writeback_control *wbc)
 {
-	return nobh_writepage(page, jfs_get_block, wbc);
+	return block_write_full_page(page, jfs_get_block, wbc);
 }
 
 static int jfs_writepages(struct address_space *mapping,
@@ -276,10 +275,12 @@ static int jfs_readpages(struct file *file, struct address_space *mapping,
 	return mpage_readpages(mapping, pages, nr_pages, jfs_get_block);
 }
 
-static int jfs_prepare_write(struct file *file,
-			     struct page *page, unsigned from, unsigned to)
+static int jfs_write_begin(struct file *file, struct address_space *mapping,
+				loff_t pos, unsigned len, unsigned flags,
+				struct page **pagep, void **fsdata)
 {
-	return nobh_prepare_write(page, from, to, jfs_get_block);
+	return nobh_write_begin(file, mapping, pos, len, flags, pagep, fsdata,
+				jfs_get_block);
 }
 
 static sector_t jfs_bmap(struct address_space *mapping, sector_t block)
@@ -303,8 +304,8 @@ const struct address_space_operations jfs_aops = {
 	.writepage	= jfs_writepage,
 	.writepages	= jfs_writepages,
 	.sync_page	= block_sync_page,
-	.prepare_write	= jfs_prepare_write,
-	.commit_write	= nobh_commit_write,
+	.write_begin	= jfs_write_begin,
+	.write_end	= nobh_write_end,
 	.bmap		= jfs_bmap,
 	.direct_IO	= jfs_direct_IO,
 };
@@ -357,9 +358,9 @@ void jfs_truncate(struct inode *ip)
 {
 	jfs_info("jfs_truncate: size = 0x%lx", (ulong) ip->i_size);
 
-	nobh_truncate_page(ip->i_mapping, ip->i_size);
+	nobh_truncate_page(ip->i_mapping, ip->i_size, jfs_get_block);
 
-	IWRITE_LOCK(ip);
+	IWRITE_LOCK(ip, RDWRLOCK_NORMAL);
 	jfs_truncate_nolock(ip, ip->i_size);
 	IWRITE_UNLOCK(ip);
 }

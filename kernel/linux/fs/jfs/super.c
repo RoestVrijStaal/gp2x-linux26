@@ -4,16 +4,16 @@
  *
  *   This program is free software;  you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
- *   the Free Software Foundation; either version 2 of the License, or 
+ *   the Free Software Foundation; either version 2 of the License, or
  *   (at your option) any later version.
- * 
+ *
  *   This program is distributed in the hope that it will be useful,
  *   but WITHOUT ANY WARRANTY;  without even the implied warranty of
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
  *   the GNU General Public License for more details.
  *
  *   You should have received a copy of the GNU General Public License
- *   along with this program;  if not, write to the Free Software 
+ *   along with this program;  if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
@@ -27,6 +27,7 @@
 #include <linux/kthread.h>
 #include <linux/posix_acl.h>
 #include <linux/buffer_head.h>
+#include <linux/exportfs.h>
 #include <asm/uaccess.h>
 #include <linux/seq_file.h>
 
@@ -44,10 +45,10 @@ MODULE_DESCRIPTION("The Journaled Filesystem (JFS)");
 MODULE_AUTHOR("Steve Best/Dave Kleikamp/Barry Arndt, IBM");
 MODULE_LICENSE("GPL");
 
-static kmem_cache_t * jfs_inode_cachep;
+static struct kmem_cache * jfs_inode_cachep;
 
-static struct super_operations jfs_super_operations;
-static struct export_operations jfs_export_operations;
+static const struct super_operations jfs_super_operations;
+static const struct export_operations jfs_export_operations;
 static struct file_system_type jfs_fs_type;
 
 #define MAX_COMMIT_THREADS 64
@@ -82,7 +83,7 @@ static void jfs_handle_error(struct super_block *sb)
 			"as read-only\n",
 			sb->s_id);
 		sb->s_flags |= MS_RDONLY;
-	} 
+	}
 
 	/* nothing is done for continue beyond marking the superblock dirty */
 }
@@ -93,7 +94,7 @@ void jfs_error(struct super_block *sb, const char * function, ...)
 	va_list args;
 
 	va_start(args, function);
-	vsprintf(error_buf, function, args);
+	vsnprintf(error_buf, sizeof(error_buf), function, args);
 	va_end(args);
 
 	printk(KERN_ERR "ERROR: (device %s): %s\n", sb->s_id, error_buf);
@@ -422,7 +423,7 @@ static int jfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sbi = kzalloc(sizeof (struct jfs_sb_info), GFP_KERNEL);
 	if (!sbi)
-		return -ENOSPC;
+		return -ENOMEM;
 	sb->s_fs_info = sbi;
 	sbi->sb = sb;
 	sbi->uid = sbi->gid = sbi->umask = -1;
@@ -716,7 +717,7 @@ out:
 
 #endif
 
-static struct super_operations jfs_super_operations = {
+static const struct super_operations jfs_super_operations = {
 	.alloc_inode	= jfs_alloc_inode,
 	.destroy_inode	= jfs_destroy_inode,
 	.read_inode	= jfs_read_inode,
@@ -736,7 +737,9 @@ static struct super_operations jfs_super_operations = {
 #endif
 };
 
-static struct export_operations jfs_export_operations = {
+static const struct export_operations jfs_export_operations = {
+	.fh_to_dentry	= jfs_fh_to_dentry,
+	.fh_to_parent	= jfs_fh_to_parent,
 	.get_parent	= jfs_get_parent,
 };
 
@@ -748,25 +751,22 @@ static struct file_system_type jfs_fs_type = {
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 
-static void init_once(void *foo, kmem_cache_t * cachep, unsigned long flags)
+static void init_once(struct kmem_cache *cachep, void *foo)
 {
 	struct jfs_inode_info *jfs_ip = (struct jfs_inode_info *) foo;
 
-	if ((flags & (SLAB_CTOR_VERIFY | SLAB_CTOR_CONSTRUCTOR)) ==
-	    SLAB_CTOR_CONSTRUCTOR) {
-		memset(jfs_ip, 0, sizeof(struct jfs_inode_info));
-		INIT_LIST_HEAD(&jfs_ip->anon_inode_list);
-		init_rwsem(&jfs_ip->rdwrlock);
-		mutex_init(&jfs_ip->commit_mutex);
-		init_rwsem(&jfs_ip->xattr_sem);
-		spin_lock_init(&jfs_ip->ag_lock);
-		jfs_ip->active_ag = -1;
+	memset(jfs_ip, 0, sizeof(struct jfs_inode_info));
+	INIT_LIST_HEAD(&jfs_ip->anon_inode_list);
+	init_rwsem(&jfs_ip->rdwrlock);
+	mutex_init(&jfs_ip->commit_mutex);
+	init_rwsem(&jfs_ip->xattr_sem);
+	spin_lock_init(&jfs_ip->ag_lock);
+	jfs_ip->active_ag = -1;
 #ifdef CONFIG_JFS_POSIX_ACL
-		jfs_ip->i_acl = JFS_ACL_NOT_CACHED;
-		jfs_ip->i_default_acl = JFS_ACL_NOT_CACHED;
+	jfs_ip->i_acl = JFS_ACL_NOT_CACHED;
+	jfs_ip->i_default_acl = JFS_ACL_NOT_CACHED;
 #endif
-		inode_init_once(&jfs_ip->vfs_inode);
-	}
+	inode_init_once(&jfs_ip->vfs_inode);
 }
 
 static int __init init_jfs_fs(void)
@@ -775,9 +775,9 @@ static int __init init_jfs_fs(void)
 	int rc;
 
 	jfs_inode_cachep =
-	    kmem_cache_create("jfs_ip", sizeof(struct jfs_inode_info), 0, 
+	    kmem_cache_create("jfs_ip", sizeof(struct jfs_inode_info), 0,
 			    SLAB_RECLAIM_ACCOUNT|SLAB_MEM_SPREAD,
-			    init_once, NULL);
+			    init_once);
 	if (jfs_inode_cachep == NULL)
 		return -ENOMEM;
 

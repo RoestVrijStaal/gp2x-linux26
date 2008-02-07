@@ -13,8 +13,9 @@
 #include <linux/ext3_fs.h>
 #include <linux/ext3_jbd.h>
 #include <linux/time.h>
+#include <linux/compat.h>
+#include <linux/smp_lock.h>
 #include <asm/uaccess.h>
-
 
 int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		unsigned long arg)
@@ -27,6 +28,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 
 	switch (cmd) {
 	case EXT3_IOC_GETFLAGS:
+		ext3_get_inode_flags(ei);
 		flags = ei->i_flags & EXT3_FL_USER_VISIBLE;
 		return put_user(flags, (int __user *) arg);
 	case EXT3_IOC_SETFLAGS: {
@@ -39,7 +41,7 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 		if (IS_RDONLY(inode))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(flags, (int __user *) arg))
@@ -49,6 +51,11 @@ int ext3_ioctl (struct inode * inode, struct file * filp, unsigned int cmd,
 			flags &= ~EXT3_DIRSYNC_FL;
 
 		mutex_lock(&inode->i_mutex);
+		/* Is it quota file? Do not allow user to mess with it */
+		if (IS_NOQUOTA(inode)) {
+			mutex_unlock(&inode->i_mutex);
+			return -EPERM;
+		}
 		oldflags = ei->i_flags;
 
 		/* The JOURNAL_DATA flag is modifiable only by root */
@@ -120,7 +127,7 @@ flags_err:
 		__u32 generation;
 		int err;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EPERM;
 		if (IS_RDONLY(inode))
 			return -EROFS;
@@ -179,7 +186,7 @@ flags_err:
 		if (IS_RDONLY(inode))
 			return -EROFS;
 
-		if ((current->fsuid != inode->i_uid) && !capable(CAP_FOWNER))
+		if (!is_owner_or_cap(inode))
 			return -EACCES;
 
 		if (get_user(rsv_window_size, (int __user *)arg))
@@ -252,3 +259,55 @@ flags_err:
 		return -ENOTTY;
 	}
 }
+
+#ifdef CONFIG_COMPAT
+long ext3_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct inode *inode = file->f_path.dentry->d_inode;
+	int ret;
+
+	/* These are just misnamed, they actually get/put from/to user an int */
+	switch (cmd) {
+	case EXT3_IOC32_GETFLAGS:
+		cmd = EXT3_IOC_GETFLAGS;
+		break;
+	case EXT3_IOC32_SETFLAGS:
+		cmd = EXT3_IOC_SETFLAGS;
+		break;
+	case EXT3_IOC32_GETVERSION:
+		cmd = EXT3_IOC_GETVERSION;
+		break;
+	case EXT3_IOC32_SETVERSION:
+		cmd = EXT3_IOC_SETVERSION;
+		break;
+	case EXT3_IOC32_GROUP_EXTEND:
+		cmd = EXT3_IOC_GROUP_EXTEND;
+		break;
+	case EXT3_IOC32_GETVERSION_OLD:
+		cmd = EXT3_IOC_GETVERSION_OLD;
+		break;
+	case EXT3_IOC32_SETVERSION_OLD:
+		cmd = EXT3_IOC_SETVERSION_OLD;
+		break;
+#ifdef CONFIG_JBD_DEBUG
+	case EXT3_IOC32_WAIT_FOR_READONLY:
+		cmd = EXT3_IOC_WAIT_FOR_READONLY;
+		break;
+#endif
+	case EXT3_IOC32_GETRSVSZ:
+		cmd = EXT3_IOC_GETRSVSZ;
+		break;
+	case EXT3_IOC32_SETRSVSZ:
+		cmd = EXT3_IOC_SETRSVSZ;
+		break;
+	case EXT3_IOC_GROUP_ADD:
+		break;
+	default:
+		return -ENOIOCTLCMD;
+	}
+	lock_kernel();
+	ret = ext3_ioctl(inode, file, cmd, (unsigned long) compat_ptr(arg));
+	unlock_kernel();
+	return ret;
+}
+#endif

@@ -24,7 +24,7 @@
 #include "hfs_fs.h"
 #include "btree.h"
 
-static kmem_cache_t *hfs_inode_cachep;
+static struct kmem_cache *hfs_inode_cachep;
 
 MODULE_LICENSE("GPL");
 
@@ -145,7 +145,7 @@ static struct inode *hfs_alloc_inode(struct super_block *sb)
 {
 	struct hfs_inode_info *i;
 
-	i = kmem_cache_alloc(hfs_inode_cachep, SLAB_KERNEL);
+	i = kmem_cache_alloc(hfs_inode_cachep, GFP_KERNEL);
 	return i ? &i->vfs_inode : NULL;
 }
 
@@ -154,7 +154,7 @@ static void hfs_destroy_inode(struct inode *inode)
 	kmem_cache_free(hfs_inode_cachep, HFS_I(inode));
 }
 
-static struct super_operations hfs_super_operations = {
+static const struct super_operations hfs_super_operations = {
 	.alloc_inode	= hfs_alloc_inode,
 	.destroy_inode	= hfs_destroy_inode,
 	.write_inode	= hfs_write_inode,
@@ -356,11 +356,10 @@ static int hfs_fill_super(struct super_block *sb, void *data, int silent)
 	struct inode *root_inode;
 	int res;
 
-	sbi = kmalloc(sizeof(struct hfs_sb_info), GFP_KERNEL);
+	sbi = kzalloc(sizeof(struct hfs_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
 	sb->s_fs_info = sbi;
-	memset(sbi, 0, sizeof(struct hfs_sb_info));
 	INIT_HLIST_HEAD(&sbi->rsrc_inodes);
 
 	res = -EINVAL;
@@ -391,11 +390,13 @@ static int hfs_fill_super(struct super_block *sb, void *data, int silent)
 		hfs_find_exit(&fd);
 		goto bail_no_root;
 	}
+	res = -EINVAL;
 	root_inode = hfs_iget(sb, &fd.search_key->cat, &rec);
 	hfs_find_exit(&fd);
 	if (!root_inode)
 		goto bail_no_root;
 
+	res = -ENOMEM;
 	sb->s_root = d_alloc_root(root_inode);
 	if (!sb->s_root)
 		goto bail_iput;
@@ -429,12 +430,11 @@ static struct file_system_type hfs_fs_type = {
 	.fs_flags	= FS_REQUIRES_DEV,
 };
 
-static void hfs_init_once(void *p, kmem_cache_t *cachep, unsigned long flags)
+static void hfs_init_once(struct kmem_cache *cachep, void *p)
 {
 	struct hfs_inode_info *i = p;
 
-	if ((flags & (SLAB_CTOR_VERIFY|SLAB_CTOR_CONSTRUCTOR)) == SLAB_CTOR_CONSTRUCTOR)
-		inode_init_once(&i->vfs_inode);
+	inode_init_once(&i->vfs_inode);
 }
 
 static int __init init_hfs_fs(void)
@@ -443,7 +443,7 @@ static int __init init_hfs_fs(void)
 
 	hfs_inode_cachep = kmem_cache_create("hfs_inode_cache",
 		sizeof(struct hfs_inode_info), 0, SLAB_HWCACHE_ALIGN,
-		hfs_init_once, NULL);
+		hfs_init_once);
 	if (!hfs_inode_cachep)
 		return -ENOMEM;
 	err = register_filesystem(&hfs_fs_type);
@@ -455,8 +455,7 @@ static int __init init_hfs_fs(void)
 static void __exit exit_hfs_fs(void)
 {
 	unregister_filesystem(&hfs_fs_type);
-	if (kmem_cache_destroy(hfs_inode_cachep))
-		printk(KERN_ERR "hfs_inode_cache: not all structures were freed\n");
+	kmem_cache_destroy(hfs_inode_cachep);
 }
 
 module_init(init_hfs_fs)
