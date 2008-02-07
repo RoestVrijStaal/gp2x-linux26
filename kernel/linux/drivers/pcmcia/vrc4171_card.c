@@ -22,7 +22,6 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/spinlock.h>
-#include <linux/sched.h>
 #include <linux/types.h>
 #include <linux/platform_device.h>
 
@@ -514,7 +513,7 @@ static inline unsigned int get_events(int slot)
 	return events;
 }
 
-static irqreturn_t pccard_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pccard_interrupt(int irq, void *dev_id)
 {
 	vrc4171_socket_t *socket;
 	unsigned int events;
@@ -597,7 +596,7 @@ static int __devinit vrc4171_add_sockets(void)
 		}
 
 		sprintf(socket->name, "NEC VRC4171 Card Slot %1c", 'A' + slot);
-		socket->pcmcia_socket.dev.dev = &vrc4171_card_device.dev;
+		socket->pcmcia_socket.dev.parent = &vrc4171_card_device.dev;
 		socket->pcmcia_socket.ops = &vrc4171_pccard_operations;
 		socket->pcmcia_socket.owner = THIS_MODULE;
 

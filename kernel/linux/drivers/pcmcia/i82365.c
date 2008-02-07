@@ -40,7 +40,6 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/timer.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
@@ -80,7 +79,7 @@ module_param(pc_debug, int, 0644);
 #define debug(lvl, fmt, arg...) do { } while (0)
 #endif
 
-static irqreturn_t i365_count_irq(int, void *, struct pt_regs *);
+static irqreturn_t i365_count_irq(int, void *);
 static inline int _check_irq(int irq, int flags)
 {
     if (request_irq(irq, i365_count_irq, flags, "x", i365_count_irq) != 0)
@@ -102,7 +101,7 @@ static int ignore = -1;
 /* Bit map or list of interrupts to choose from */
 static u_int irq_mask = 0xffff;
 static int irq_list[16];
-static int irq_list_count;
+static unsigned int irq_list_count;
 /* The card status change interrupt -- 0 means autoselect */
 static int cs_irq = 0;
 
@@ -498,7 +497,7 @@ static u_int __init set_bridge_opts(u_short s, u_short ns)
 static volatile u_int irq_hits;
 static u_short irq_sock;
 
-static irqreturn_t i365_count_irq(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t i365_count_irq(int irq, void *dev)
 {
     i365_get(irq_sock, I365_CSC);
     irq_hits++;
@@ -848,8 +847,7 @@ static void __init isa_probe(void)
 
 /*====================================================================*/
 
-static irqreturn_t pcic_interrupt(int irq, void *dev,
-				    struct pt_regs *regs)
+static irqreturn_t pcic_interrupt(int irq, void *dev)
 {
     int i, j, csc;
     u_int events, active;
@@ -898,7 +896,7 @@ static irqreturn_t pcic_interrupt(int irq, void *dev,
 
 static void pcic_interrupt_wrapper(u_long data)
 {
-    pcic_interrupt(0, NULL, NULL);
+    pcic_interrupt(0, NULL);
     poll_timer.expires = jiffies + poll_interval;
     add_timer(&poll_timer);
 }
@@ -1299,7 +1297,7 @@ static int __init init_i82365(void)
     
     /* register sockets with the pcmcia core */
     for (i = 0; i < sockets; i++) {
-	    socket[i].socket.dev.dev = &i82365_device->dev;
+	    socket[i].socket.dev.parent = &i82365_device->dev;
 	    socket[i].socket.ops = &pcic_operations;
 	    socket[i].socket.resource_ops = &pccard_nonstatic_ops;
 	    socket[i].socket.owner = THIS_MODULE;

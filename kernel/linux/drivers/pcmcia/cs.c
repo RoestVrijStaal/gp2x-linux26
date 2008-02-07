@@ -26,9 +26,9 @@
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/pm.h>
-#include <linux/pci.h>
 #include <linux/device.h>
 #include <linux/kthread.h>
+#include <linux/freezer.h>
 #include <asm/system.h>
 #include <asm/irq.h>
 
@@ -89,7 +89,7 @@ DECLARE_RWSEM(pcmcia_socket_list_rwsem);
 EXPORT_SYMBOL(pcmcia_socket_list_rwsem);
 
 
-/**
+/*
  * Low-level PCMCIA socket drivers need to register with the PCCard
  * core using pcmcia_register_socket.
  *
@@ -109,7 +109,7 @@ int pcmcia_socket_dev_suspend(struct device *dev, pm_message_t state)
 
 	down_read(&pcmcia_socket_list_rwsem);
 	list_for_each_entry(socket, &pcmcia_socket_list, socket_list) {
-		if (socket->dev.dev != dev)
+		if (socket->dev.parent != dev)
 			continue;
 		mutex_lock(&socket->skt_mutex);
 		socket_suspend(socket);
@@ -127,7 +127,7 @@ int pcmcia_socket_dev_resume(struct device *dev)
 
 	down_read(&pcmcia_socket_list_rwsem);
 	list_for_each_entry(socket, &pcmcia_socket_list, socket_list) {
-		if (socket->dev.dev != dev)
+		if (socket->dev.parent != dev)
 			continue;
 		mutex_lock(&socket->skt_mutex);
 		socket_resume(socket);
@@ -142,12 +142,12 @@ EXPORT_SYMBOL(pcmcia_socket_dev_resume);
 
 struct pcmcia_socket * pcmcia_get_socket(struct pcmcia_socket *skt)
 {
-	struct class_device *cl_dev = class_device_get(&skt->dev);
-	if (!cl_dev)
+	struct device *dev = get_device(&skt->dev);
+	if (!dev)
 		return NULL;
-	skt = class_get_devdata(cl_dev);
+	skt = dev_get_drvdata(dev);
 	if (!try_module_get(skt->owner)) {
-		class_device_put(&skt->dev);
+		put_device(&skt->dev);
 		return NULL;
 	}
 	return (skt);
@@ -158,14 +158,14 @@ EXPORT_SYMBOL(pcmcia_get_socket);
 void pcmcia_put_socket(struct pcmcia_socket *skt)
 {
 	module_put(skt->owner);
-	class_device_put(&skt->dev);
+	put_device(&skt->dev);
 }
 EXPORT_SYMBOL(pcmcia_put_socket);
 
 
-static void pcmcia_release_socket(struct class_device *class_dev)
+static void pcmcia_release_socket(struct device *dev)
 {
-	struct pcmcia_socket *socket = class_get_devdata(class_dev);
+	struct pcmcia_socket *socket = dev_get_drvdata(dev);
 
 	complete(&socket->socket_released);
 }
@@ -174,13 +174,14 @@ static int pccardd(void *__skt);
 
 /**
  * pcmcia_register_socket - add a new pcmcia socket device
+ * @socket: the &socket to register
  */
 int pcmcia_register_socket(struct pcmcia_socket *socket)
 {
 	struct task_struct *tsk;
 	int ret;
 
-	if (!socket || !socket->ops || !socket->dev.dev || !socket->resource_ops)
+	if (!socket || !socket->ops || !socket->dev.parent || !socket->resource_ops)
 		return -EINVAL;
 
 	cs_dbg(socket, 0, "pcmcia_register_socket(0x%p)\n", socket->ops);
@@ -225,9 +226,9 @@ int pcmcia_register_socket(struct pcmcia_socket *socket)
 #endif
 
 	/* set proper values in socket->dev */
-	socket->dev.class_data = socket;
+	dev_set_drvdata(&socket->dev, socket);
 	socket->dev.class = &pcmcia_socket_class;
-	snprintf(socket->dev.class_id, BUS_ID_SIZE, "pcmcia_socket%u", socket->sock);
+	snprintf(socket->dev.bus_id, BUS_ID_SIZE, "pcmcia_socket%u", socket->sock);
 
 	/* base address = 0, map = 0 */
 	socket->cis_mem.flags = 0;
@@ -268,6 +269,7 @@ EXPORT_SYMBOL(pcmcia_register_socket);
 
 /**
  * pcmcia_unregister_socket - remove a pcmcia socket device
+ * @socket: the &socket to unregister
  */
 void pcmcia_unregister_socket(struct pcmcia_socket *socket)
 {
@@ -311,7 +313,7 @@ struct pcmcia_socket * pcmcia_get_socket_by_nr(unsigned int nr)
 }
 EXPORT_SYMBOL(pcmcia_get_socket_by_nr);
 
-/**
+/*
  * The central event handler.  Send_event() sends an event to the
  * 16-bit subsystem, which then calls the relevant device drivers.
  * Parse_events() interprets the event bits from
@@ -380,7 +382,7 @@ static int socket_reset(struct pcmcia_socket *skt)
 	return CS_GENERAL_FAILURE;
 }
 
-/**
+/*
  * socket_setup() and socket_shutdown() are called by the main event handler
  * when card insertion and removal events are received.
  * socket_setup() turns on socket power and resets the socket, in two stages.
@@ -408,6 +410,9 @@ static void socket_shutdown(struct pcmcia_socket *s)
 	cb_free(s);
 #endif
 	s->functions = 0;
+
+	/* give socket some time to power down */
+	msleep(100);
 
 	s->ops->get_status(s, &status);
 	if (status & SS_POWERON) {
@@ -639,7 +644,7 @@ static int pccardd(void *__skt)
 	skt->ops->set_socket(skt, &skt->socket);
 
 	/* register with the device core */
-	ret = class_device_register(&skt->dev);
+	ret = device_register(&skt->dev);
 	if (ret) {
 		printk(KERN_WARNING "PCMCIA: unable to register socket 0x%p\n",
 			skt);
@@ -651,6 +656,7 @@ static int pccardd(void *__skt)
 	add_wait_queue(&skt->thread_wait, &wait);
 	complete(&skt->thread_done);
 
+	set_freezable();
 	for (;;) {
 		unsigned long flags;
 		unsigned int events;
@@ -688,7 +694,7 @@ static int pccardd(void *__skt)
 	remove_wait_queue(&skt->thread_wait, &wait);
 
 	/* remove from the device core */
-	class_device_unregister(&skt->dev);
+	device_unregister(&skt->dev);
 
 	return 0;
 }
@@ -903,17 +909,13 @@ int pcmcia_insert_card(struct pcmcia_socket *skt)
 EXPORT_SYMBOL(pcmcia_insert_card);
 
 
-static int pcmcia_socket_uevent(struct class_device *dev, char **envp,
-			        int num_envp, char *buffer, int buffer_size)
+static int pcmcia_socket_uevent(struct device *dev,
+				struct kobj_uevent_env *env)
 {
 	struct pcmcia_socket *s = container_of(dev, struct pcmcia_socket, dev);
-	int i = 0, length = 0;
 
-	if (add_uevent_var(envp, num_envp, &i, buffer, buffer_size,
-			   &length, "SOCKET_NO=%u", s->sock))
+	if (add_uevent_var(env, "SOCKET_NO=%u", s->sock))
 		return -ENOMEM;
-
-	envp[i] = NULL;
 
 	return 0;
 }
@@ -929,8 +931,8 @@ static void pcmcia_release_socket_class(struct class *data)
 
 struct class pcmcia_socket_class = {
 	.name = "pcmcia_socket",
-	.uevent = pcmcia_socket_uevent,
-	.release = pcmcia_release_socket,
+	.dev_uevent = pcmcia_socket_uevent,
+	.dev_release = pcmcia_release_socket,
 	.class_release = pcmcia_release_socket_class,
 };
 EXPORT_SYMBOL(pcmcia_socket_class);

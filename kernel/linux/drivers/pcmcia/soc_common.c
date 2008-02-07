@@ -256,7 +256,7 @@ static void soc_common_pcmcia_poll_event(unsigned long dummy)
  * handling code performs scheduling operations which cannot be
  * executed from within an interrupt context.
  */
-static irqreturn_t soc_common_pcmcia_interrupt(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t soc_common_pcmcia_interrupt(int irq, void *dev)
 {
 	struct soc_pcmcia_socket *skt = dev;
 
@@ -478,10 +478,10 @@ dump_bits(char **p, const char *prefix, unsigned int val, struct bittbl *bits, i
  *
  * Returns: the number of characters added to the buffer
  */
-static ssize_t show_status(struct class_device *class_dev, char *buf)
+static ssize_t show_status(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct soc_pcmcia_socket *skt =
-		container_of(class_dev, struct soc_pcmcia_socket, socket.dev);
+		container_of(dev, struct soc_pcmcia_socket, socket.dev);
 	char *p = buf;
 
 	p+=sprintf(p, "slot     : %d\n", skt->nr);
@@ -501,7 +501,7 @@ static ssize_t show_status(struct class_device *class_dev, char *buf)
 
 	return p-buf;
 }
-static CLASS_DEVICE_ATTR(status, S_IRUGO, show_status, NULL);
+static DEVICE_ATTR(status, S_IRUGO, show_status, NULL);
 
 
 static struct pccard_operations soc_common_pcmcia_operations = {
@@ -660,7 +660,7 @@ int soc_common_drv_pcmcia_probe(struct device *dev, struct pcmcia_low_level *ops
 
 		skt->socket.ops = &soc_common_pcmcia_operations;
 		skt->socket.owner = ops->owner;
-		skt->socket.dev.dev = dev;
+		skt->socket.dev.parent = dev;
 
 		init_timer(&skt->poll_timer);
 		skt->poll_timer.function = soc_common_pcmcia_poll_event;
@@ -747,7 +747,7 @@ int soc_common_drv_pcmcia_probe(struct device *dev, struct pcmcia_low_level *ops
 
 		add_timer(&skt->poll_timer);
 
-		class_device_create_file(&skt->socket.dev, &class_device_attr_status);
+		device_create_file(&skt->socket.dev, &dev_attr_status);
 	}
 
 	dev_set_drvdata(dev, sinfo);
@@ -824,3 +824,4 @@ int soc_common_drv_pcmcia_remove(struct device *dev)
 
 	return 0;
 }
+EXPORT_SYMBOL(soc_common_drv_pcmcia_remove);

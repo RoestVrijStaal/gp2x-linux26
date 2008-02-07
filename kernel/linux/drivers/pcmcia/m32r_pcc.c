@@ -16,16 +16,15 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/timer.h>
-#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/workqueue.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
+#include <linux/bitops.h>
 #include <asm/irq.h>
 #include <asm/io.h>
-#include <asm/bitops.h>
 #include <asm/system.h>
 #include <asm/addrspace.h>
 
@@ -267,7 +266,7 @@ static pcc_t pcc[] = {
 	{ "xnux2", 0 }, { "xnux2", 0 },
 };
 
-static irqreturn_t pcc_interrupt(int, void *, struct pt_regs *);
+static irqreturn_t pcc_interrupt(int, void *);
 
 /*====================================================================*/
 
@@ -352,7 +351,7 @@ static void add_pcc_socket(ulong base, int irq, ulong mapaddr, kio_addr_t ioaddr
 
 /*====================================================================*/
 
-static irqreturn_t pcc_interrupt(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t pcc_interrupt(int irq, void *dev)
 {
 	int i, j, irc;
 	u_int events, active;
@@ -395,7 +394,7 @@ static irqreturn_t pcc_interrupt(int irq, void *dev, struct pt_regs *regs)
 
 static void pcc_interrupt_wrapper(u_long data)
 {
-	pcc_interrupt(0, NULL, NULL);
+	pcc_interrupt(0, NULL);
 	init_timer(&poll_timer);
 	poll_timer.expires = jiffies + poll_interval;
 	add_timer(&poll_timer);
@@ -722,7 +721,7 @@ static int __init init_m32r_pcc(void)
 	/* Set up interrupt handler(s) */
 
 	for (i = 0 ; i < pcc_sockets ; i++) {
-		socket[i].socket.dev.dev = &pcc_device.dev;
+		socket[i].socket.dev.parent = &pcc_device.dev;
 		socket[i].socket.ops = &pcc_operations;
 		socket[i].socket.resource_ops = &pccard_static_ops;
 		socket[i].socket.owner = THIS_MODULE;
