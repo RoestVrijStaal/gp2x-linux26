@@ -1,8 +1,6 @@
 /*
  * EHCI HCD (Host Controller Driver) for USB.
  *
- * (C) Copyright 2000-2004 David Brownell <dbrownell@users.sourceforge.net>
- *
  * Bus Glue for AMD Alchemy Au1xxx
  *
  * Based on "ohci-au1xxx.c" by Matt Porter <mporter@kernel.crashing.org>
@@ -196,10 +194,14 @@ static const struct hc_driver ehci_au1xxx_hc_driver = {
 
 	/*
 	 * basic lifecycle operations
+	 *
+	 * FIXME -- ehci_init() doesn't do enough here.
+	 * See ehci-ppc-soc for a complete implementation.
 	 */
 	.reset = ehci_init,
 	.start = ehci_run,
 	.stop = ehci_stop,
+	.shutdown = ehci_shutdown,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -218,10 +220,8 @@ static const struct hc_driver ehci_au1xxx_hc_driver = {
 	 */
 	.hub_status_data = ehci_hub_status_data,
 	.hub_control = ehci_hub_control,
-#ifdef	CONFIG_PM
-	.hub_suspend = ehci_hub_suspend,
-	.hub_resume = ehci_hub_resume,
-#endif
+	.bus_suspend = ehci_bus_suspend,
+	.bus_resume = ehci_bus_resume,
 };
 
 /*-------------------------------------------------------------------------*/
@@ -268,6 +268,7 @@ MODULE_ALIAS("au1xxx-ehci");
 static struct platform_driver ehci_hcd_au1xxx_driver = {
 	.probe = ehci_hcd_au1xxx_drv_probe,
 	.remove = ehci_hcd_au1xxx_drv_remove,
+	.shutdown = usb_hcd_platform_shutdown,
 	/*.suspend      = ehci_hcd_au1xxx_drv_suspend, */
 	/*.resume       = ehci_hcd_au1xxx_drv_resume, */
 	.driver = {

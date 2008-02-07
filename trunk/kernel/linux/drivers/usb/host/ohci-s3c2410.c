@@ -358,7 +358,7 @@ static int usb_hcd_s3c2410_probe (const struct hc_driver *driver,
 	hcd->rsrc_len   = dev->resource[0].end - dev->resource[0].start + 1;
 
 	if (!request_mem_region(hcd->rsrc_start, hcd->rsrc_len, hcd_name)) {
-		dev_err(&dev->dev, "request_mem_region failed");
+		dev_err(&dev->dev, "request_mem_region failed\n");
 		retval = -EBUSY;
 		goto err_put;
 	}
@@ -370,7 +370,7 @@ static int usb_hcd_s3c2410_probe (const struct hc_driver *driver,
 		goto err_mem;
 	}
 
-	usb_clk = clk_get(&dev->dev, "upll");
+	usb_clk = clk_get(&dev->dev, "usb-bus-host");
 	if (IS_ERR(usb_clk)) {
 		dev_err(&dev->dev, "cannot get usb-host clock\n");
 		retval = -ENOENT;
@@ -447,6 +447,7 @@ static const struct hc_driver ohci_s3c2410_hc_driver = {
 	 */
 	.start =		ohci_s3c2410_start,
 	.stop =			ohci_stop,
+	.shutdown =		ohci_shutdown,
 
 	/*
 	 * managing i/o requests and associated device resources
@@ -465,6 +466,7 @@ static const struct hc_driver ohci_s3c2410_hc_driver = {
 	 */
 	.hub_status_data =	ohci_s3c2410_hub_status_data,
 	.hub_control =		ohci_s3c2410_hub_control,
+	.hub_irq_enable =	ohci_rhsc_enable,
 #ifdef	CONFIG_PM
 	.bus_suspend =		ohci_bus_suspend,
 	.bus_resume =		ohci_bus_resume,
@@ -490,6 +492,7 @@ static int ohci_hcd_s3c2410_drv_remove(struct platform_device *pdev)
 static struct platform_driver ohci_hcd_s3c2410_driver = {
 	.probe		= ohci_hcd_s3c2410_drv_probe,
 	.remove		= ohci_hcd_s3c2410_drv_remove,
+	.shutdown	= usb_hcd_platform_shutdown,
 	/*.suspend	= ohci_hcd_s3c2410_drv_suspend, */
 	/*.resume	= ohci_hcd_s3c2410_drv_resume, */
 	.driver		= {
@@ -498,15 +501,3 @@ static struct platform_driver ohci_hcd_s3c2410_driver = {
 	},
 };
 
-static int __init ohci_hcd_s3c2410_init (void)
-{
-	return platform_driver_register(&ohci_hcd_s3c2410_driver);
-}
-
-static void __exit ohci_hcd_s3c2410_cleanup (void)
-{
-	platform_driver_unregister(&ohci_hcd_s3c2410_driver);
-}
-
-module_init (ohci_hcd_s3c2410_init);
-module_exit (ohci_hcd_s3c2410_cleanup);
