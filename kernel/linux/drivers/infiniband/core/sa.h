@@ -1,9 +1,7 @@
 /*
- * Copyright (c) 2004 Mellanox Technologies Ltd.  All rights reserved.
- * Copyright (c) 2004 Infinicon Corporation.  All rights reserved.
- * Copyright (c) 2004 Intel Corporation.  All rights reserved.
- * Copyright (c) 2004 Topspin Corporation.  All rights reserved.
- * Copyright (c) 2004 Voltaire Corporation.  All rights reserved.
+ * Copyright (c) 2004 Topspin Communications.  All rights reserved.
+ * Copyright (c) 2005 Voltaire, Inc.  All rights reserved.
+ * Copyright (c) 2006 Intel Corporation.  All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -32,22 +30,37 @@
  * ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
- *
- * $Id: agent.h 1389 2004-12-27 22:56:47Z roland $
  */
 
-#ifndef __AGENT_H_
-#define __AGENT_H_
+#ifndef SA_H
+#define SA_H
 
-#include <linux/err.h>
-#include <rdma/ib_mad.h>
+#include <rdma/ib_sa.h>
 
-extern int ib_agent_port_open(struct ib_device *device, int port_num);
+static inline void ib_sa_client_get(struct ib_sa_client *client)
+{
+	atomic_inc(&client->users);
+}
 
-extern int ib_agent_port_close(struct ib_device *device, int port_num);
+static inline void ib_sa_client_put(struct ib_sa_client *client)
+{
+	if (atomic_dec_and_test(&client->users))
+		complete(&client->comp);
+}
 
-extern void agent_send_response(struct ib_mad *mad, struct ib_grh *grh,
-				struct ib_wc *wc, struct ib_device *device,
-				int port_num, int qpn);
+int ib_sa_mcmember_rec_query(struct ib_sa_client *client,
+			     struct ib_device *device, u8 port_num,
+			     u8 method,
+			     struct ib_sa_mcmember_rec *rec,
+			     ib_sa_comp_mask comp_mask,
+			     int timeout_ms, gfp_t gfp_mask,
+			     void (*callback)(int status,
+					      struct ib_sa_mcmember_rec *resp,
+					      void *context),
+			     void *context,
+			     struct ib_sa_query **sa_query);
 
-#endif	/* __AGENT_H_ */
+int mcast_init(void);
+void mcast_cleanup(void);
+
+#endif /* SA_H */
