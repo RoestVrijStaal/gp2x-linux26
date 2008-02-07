@@ -249,7 +249,7 @@ static void __exit ali_ircc_cleanup(void)
 
 	IRDA_DEBUG(2, "%s(), ---------------- Start ----------------\n", __FUNCTION__);	
 
-	for (i=0; i < 4; i++) {
+	for (i=0; i < ARRAY_SIZE(dev_self); i++) {
 		if (dev_self[i])
 			ali_ircc_close(dev_self[i]);
 	}
@@ -273,6 +273,12 @@ static int ali_ircc_open(int i, chipio_t *info)
 	int err;
 			
 	IRDA_DEBUG(2, "%s(), ---------------- Start ----------------\n", __FUNCTION__);	
+
+	if (i >= ARRAY_SIZE(dev_self)) {
+		IRDA_ERROR("%s(), maximum number of supported chips reached!\n",
+			   __FUNCTION__);
+		return -ENOMEM;
+	}
 	
 	/* Set FIR FIFO and DMA Threshold */
 	if ((ali_ircc_setup(info)) == -1)
@@ -353,10 +359,6 @@ static int ali_ircc_open(int i, chipio_t *info)
 	/* Reset Tx queue info */
 	self->tx_fifo.len = self->tx_fifo.ptr = self->tx_fifo.free = 0;
 	self->tx_fifo.tail = self->tx_buff.head;
-
-	
-	/* Keep track of module usage */
-	SET_MODULE_OWNER(dev);
 
 	/* Override the network functions we need to use */
 	dev->hard_start_xmit = ali_ircc_sir_hard_xmit;
@@ -654,22 +656,15 @@ static int ali_ircc_read_dongle_id (int i, chipio_t *info)
  *    An interrupt from the chip has arrived. Time to do some work
  *
  */
-static irqreturn_t ali_ircc_interrupt(int irq, void *dev_id,
-					struct pt_regs *regs)
+static irqreturn_t ali_ircc_interrupt(int irq, void *dev_id)
 {
-	struct net_device *dev = (struct net_device *) dev_id;
+	struct net_device *dev = dev_id;
 	struct ali_ircc_cb *self;
 	int ret;
 		
 	IRDA_DEBUG(2, "%s(), ---------------- Start ----------------\n", __FUNCTION__);
 		
- 	if (!dev) {
-		IRDA_WARNING("%s: irq %d for unknown device.\n",
-			     ALI_IRCC_DRIVER_NAME, irq);
-		return IRQ_NONE;
-	}	
-	
-	self = (struct ali_ircc_cb *) dev->priv;
+	self = dev->priv;
 	
 	spin_lock(&self->lock);
 	
@@ -1473,9 +1468,8 @@ static int ali_ircc_fir_hard_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	self->stats.tx_bytes += skb->len;
 
-	memcpy(self->tx_fifo.queue[self->tx_fifo.free].start, skb->data, 
-	       skb->len);
-	
+	skb_copy_from_linear_data(skb, self->tx_fifo.queue[self->tx_fifo.free].start,
+		      skb->len);
 	self->tx_fifo.len++;
 	self->tx_fifo.free++;
 
@@ -1925,7 +1919,7 @@ static int  ali_ircc_dma_receive_complete(struct ali_ircc_cb *self)
 			
 			/* Copy frame without CRC, CRC is removed by hardware*/
 			skb_put(skb, len);
-			memcpy(skb->data, self->rx_buff.data, len);
+			skb_copy_to_linear_data(skb, self->rx_buff.data, len);
 
 			/* Move to next frame */
 			self->rx_buff.data += len;
@@ -1933,7 +1927,7 @@ static int  ali_ircc_dma_receive_complete(struct ali_ircc_cb *self)
 			self->stats.rx_packets++;
 
 			skb->dev = self->netdev;
-			skb->mac.raw  = skb->data;
+			skb_reset_mac_header(skb);
 			skb->protocol = htons(ETH_P_IRDA);
 			netif_rx(skb);
 			self->netdev->last_rx = jiffies;

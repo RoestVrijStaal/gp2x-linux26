@@ -20,7 +20,7 @@
  *     published by the Free Software Foundation; either version 2 of 
  *     the License, or (at your option) any later version.
  *  
- *     Neither Dag Brattli nor University of Tromsø admit liability nor
+ *     Neither Dag Brattli nor University of TromsÃ¸ admit liability nor
  *     provide warranty for any of this software. This material is 
  *     provided "AS-IS" and at no charge.
  *     
@@ -117,7 +117,7 @@ static int irtty_change_speed(struct sir_dev *dev, unsigned speed)
 {
 	struct sirtty_cb *priv = dev->priv;
 	struct tty_struct *tty;
-        struct termios old_termios;
+        struct ktermios old_termios;
 	int cflag;
 
 	IRDA_ASSERT(priv != NULL, return -1;);
@@ -318,7 +318,7 @@ static void irtty_write_wakeup(struct tty_struct *tty)
 
 static inline void irtty_stop_receiver(struct tty_struct *tty, int stop)
 {
-	struct termios old_termios;
+	struct ktermios old_termios;
 	int cflag;
 
 	lock_kernel();
@@ -434,11 +434,6 @@ static int irtty_ioctl(struct tty_struct *tty, struct file *file, unsigned int c
 	IRDA_ASSERT(dev != NULL, return -1;);
 
 	switch (cmd) {
-	case TCGETS:
-	case TCGETA:
-		err = n_tty_ioctl(tty, file, cmd, arg);
-		break;
-
 	case IRTTY_IOCTDONGLE:
 		/* this call blocks for completion */
 		err = sirdev_set_dongle(dev, (IRDA_DONGLE) arg);
@@ -454,7 +449,7 @@ static int irtty_ioctl(struct tty_struct *tty, struct file *file, unsigned int c
 			err = -EFAULT;
 		break;
 	default:
-		err = -ENOIOCTLCMD;
+		err = tty_mode_ioctl(tty, file, cmd, arg);
 		break;
 	}
 	return err;
@@ -505,10 +500,9 @@ static int irtty_open(struct tty_struct *tty)
 	}
 
 	/* allocate private device info block */
-	priv = kmalloc(sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		goto out_put;
-	memset(priv, 0, sizeof(*priv));
 
 	priv->magic = IRTTY_MAGIC;
 	priv->tty = tty;

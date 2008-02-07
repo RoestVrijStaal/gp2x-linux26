@@ -93,8 +93,7 @@ static int via_ircc_hard_xmit_fir(struct sk_buff *skb,
 				  struct net_device *dev);
 static void via_hw_init(struct via_ircc_cb *self);
 static void via_ircc_change_speed(struct via_ircc_cb *self, __u32 baud);
-static irqreturn_t via_ircc_interrupt(int irq, void *dev_id,
-				      struct pt_regs *regs);
+static irqreturn_t via_ircc_interrupt(int irq, void *dev_id);
 static int via_ircc_is_receiving(struct via_ircc_cb *self);
 static int via_ircc_read_dongle_id(int iobase);
 
@@ -279,7 +278,7 @@ static void via_ircc_clean(void)
 
 	IRDA_DEBUG(3, "%s()\n", __FUNCTION__);
 
-	for (i=0; i < 4; i++) {
+	for (i=0; i < ARRAY_SIZE(dev_self); i++) {
 		if (dev_self[i])
 			via_ircc_close(dev_self[i]);
 	}
@@ -326,6 +325,9 @@ static __devinit int via_ircc_open(int i, chipio_t * info, unsigned int id)
 	int err;
 
 	IRDA_DEBUG(3, "%s()\n", __FUNCTION__);
+
+	if (i >= ARRAY_SIZE(dev_self))
+		return -ENOMEM;
 
 	/* Allocate new instance of the driver */
 	dev = alloc_irdadev(sizeof(struct via_ircc_cb));
@@ -426,9 +428,6 @@ static __devinit int via_ircc_open(int i, chipio_t * info, unsigned int id)
 	/* Reset Tx queue info */
 	self->tx_fifo.len = self->tx_fifo.ptr = self->tx_fifo.free = 0;
 	self->tx_fifo.tail = self->tx_buff.head;
-
-	/* Keep track of module usage */
-	SET_MODULE_OWNER(dev);
 
 	/* Override the network functions we need to use */
 	dev->hard_start_xmit = via_ircc_hard_xmit_sir;
@@ -923,8 +922,8 @@ static int via_ircc_hard_xmit_fir(struct sk_buff *skb,
 
 	self->tx_fifo.tail += skb->len;
 	self->stats.tx_bytes += skb->len;
-	memcpy(self->tx_fifo.queue[self->tx_fifo.free].start, skb->data,
-	       skb->len);
+	skb_copy_from_linear_data(skb,
+		      self->tx_fifo.queue[self->tx_fifo.free].start, skb->len);
 	self->tx_fifo.len++;
 	self->tx_fifo.free++;
 //F01   if (self->tx_fifo.len == 1) {
@@ -1123,7 +1122,7 @@ static int via_ircc_dma_receive_complete(struct via_ircc_cb *self,
 		self->stats.rx_bytes += len;
 		self->stats.rx_packets++;
 		skb->dev = self->netdev;
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = htons(ETH_P_IRDA);
 		netif_rx(skb);
 		return TRUE;
@@ -1187,7 +1186,7 @@ F01_E */
 		skb_reserve(skb, 1);
 		skb_put(skb, len - 4);
 
-		memcpy(skb->data, self->rx_buff.data, len - 4);
+		skb_copy_to_linear_data(skb, self->rx_buff.data, len - 4);
 		IRDA_DEBUG(2, "%s(): len=%x.rx_buff=%p\n", __FUNCTION__,
 			   len - 4, self->rx_buff.data);
 
@@ -1196,7 +1195,7 @@ F01_E */
 		self->stats.rx_bytes += len;
 		self->stats.rx_packets++;
 		skb->dev = self->netdev;
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = htons(ETH_P_IRDA);
 		netif_rx(skb);
 
@@ -1220,14 +1219,19 @@ static int upload_rxdata(struct via_ircc_cb *self, int iobase)
 
 	IRDA_DEBUG(2, "%s(): len=%x\n", __FUNCTION__, len);
 
+	if ((len - 4) < 2) {
+		self->stats.rx_dropped++;
+		return FALSE;
+	}
+
 	skb = dev_alloc_skb(len + 1);
-	if ((skb == NULL) || ((len - 4) < 2)) {
+	if (skb == NULL) {
 		self->stats.rx_dropped++;
 		return FALSE;
 	}
 	skb_reserve(skb, 1);
 	skb_put(skb, len - 4 + 1);
-	memcpy(skb->data, self->rx_buff.data, len - 4 + 1);
+	skb_copy_to_linear_data(skb, self->rx_buff.data, len - 4 + 1);
 	st_fifo->tail++;
 	st_fifo->len++;
 	if (st_fifo->tail > MAX_RX_WINDOW)
@@ -1237,7 +1241,7 @@ static int upload_rxdata(struct via_ircc_cb *self, int iobase)
 	self->stats.rx_bytes += len;
 	self->stats.rx_packets++;
 	skb->dev = self->netdev;
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	skb->protocol = htons(ETH_P_IRDA);
 	netif_rx(skb);
 	if (st_fifo->len < (MAX_RX_WINDOW + 2)) {
@@ -1296,7 +1300,7 @@ static int RxTimerHandler(struct via_ircc_cb *self, int iobase)
 			}
 			skb_reserve(skb, 1);
 			skb_put(skb, len - 4);
-			memcpy(skb->data, self->rx_buff.data, len - 4);
+			skb_copy_to_linear_data(skb, self->rx_buff.data, len - 4);
 
 			IRDA_DEBUG(2, "%s(): len=%x.head=%x\n", __FUNCTION__,
 				   len - 4, st_fifo->head);
@@ -1306,7 +1310,7 @@ static int RxTimerHandler(struct via_ircc_cb *self, int iobase)
 			self->stats.rx_bytes += len;
 			self->stats.rx_packets++;
 			skb->dev = self->netdev;
-			skb->mac.raw = skb->data;
+			skb_reset_mac_header(skb);
 			skb->protocol = htons(ETH_P_IRDA);
 			netif_rx(skb);
 		}		//while
@@ -1337,13 +1341,12 @@ static int RxTimerHandler(struct via_ircc_cb *self, int iobase)
 
 
 /*
- * Function via_ircc_interrupt (irq, dev_id, regs)
+ * Function via_ircc_interrupt (irq, dev_id)
  *
  *    An interrupt from the chip has arrived. Time to do some work
  *
  */
-static irqreturn_t via_ircc_interrupt(int irq, void *dev_id,
-				      struct pt_regs *regs)
+static irqreturn_t via_ircc_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = (struct net_device *) dev_id;
 	struct via_ircc_cb *self;

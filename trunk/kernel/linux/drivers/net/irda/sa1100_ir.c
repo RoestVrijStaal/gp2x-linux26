@@ -504,7 +504,7 @@ static void sa1100_irda_fir_error(struct sa1100_irda *si, struct net_device *dev
 
 		skb_put(skb, len);
 		skb->dev = dev;
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = htons(ETH_P_IRDA);
 		si->stats.rx_packets++;
 		si->stats.rx_bytes += len;
@@ -579,7 +579,7 @@ static void sa1100_irda_fir_irq(struct net_device *dev)
 	sa1100_irda_rx_dma_start(si);
 }
 
-static irqreturn_t sa1100_irda_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t sa1100_irda_irq(int irq, void *dev_id)
 {
 	struct net_device *dev = dev_id;
 	if (IS_FIR(((struct sa1100_irda *)dev->priv)))
