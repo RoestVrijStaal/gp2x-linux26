@@ -1,7 +1,6 @@
-/* $Id: floppy.h,v 1.32 2001/10/26 17:59:36 davem Exp $
- * asm-sparc64/floppy.h: Sparc specific parts of the Floppy driver.
+/* floppy.h: Sparc specific parts of the Floppy driver.
  *
- * Copyright (C) 1996 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1996, 2007 David S. Miller (davem@davemloft.net)
  * Copyright (C) 1997 Jakub Jelinek (jj@sunsite.mff.cuni.cz)
  *
  * Ultra/PCI support added: Sep 1997  Eddie C. Dost  (ecd@skynet.be)
@@ -11,6 +10,7 @@
 #define __ASM_SPARC64_FLOPPY_H
 
 #include <linux/init.h>
+#include <linux/pci.h>
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
@@ -83,8 +83,6 @@ static struct sun_floppy_ops sun_fdops;
 #define fd_request_irq()          sun_fdops.fd_request_irq()
 #define fd_free_irq()             sun_fdops.fd_free_irq()
 #define fd_eject(drive)           sun_fdops.fd_eject(drive)
-
-static int FLOPPY_MOTOR_MASK = 0x10;
 
 /* Super paranoid... */
 #undef HAVE_DISABLE_HLT
@@ -208,7 +206,7 @@ static void sun_fd_enable_dma(void)
 	pdma_areasize = pdma_size;
 }
 
-irqreturn_t sparc_floppy_irq(int irq, void *dev_cookie, struct pt_regs *regs)
+irqreturn_t sparc_floppy_irq(int irq, void *dev_cookie)
 {
 	if (likely(doing_pdma)) {
 		void __iomem *stat = (void __iomem *) fdc_status;
@@ -255,7 +253,7 @@ irqreturn_t sparc_floppy_irq(int irq, void *dev_cookie, struct pt_regs *regs)
 	}
 
 main_interrupt:
-	return floppy_interrupt(irq, dev_cookie, regs);
+	return floppy_interrupt(irq, dev_cookie);
 }
 
 static int sun_fd_request_irq(void)
@@ -311,7 +309,7 @@ struct sun_pci_dma_op {
 static struct sun_pci_dma_op sun_pci_dma_current = { -1U, 0, 0, NULL};
 static struct sun_pci_dma_op sun_pci_dma_pending = { -1U, 0, 0, NULL};
 
-extern irqreturn_t floppy_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+extern irqreturn_t floppy_interrupt(int irq, void *dev_id);
 
 static unsigned char sun_pci_fd_inb(unsigned long port)
 {
@@ -446,7 +444,7 @@ static int sun_pci_fd_eject(int drive)
 
 void sun_pci_fd_dma_callback(struct ebus_dma_info *p, int event, void *cookie)
 {
-	floppy_interrupt(0, NULL, NULL);
+	floppy_interrupt(0, NULL);
 }
 
 /*
@@ -549,7 +547,7 @@ static int __init ebus_fdthree_p(struct linux_ebus_device *edev)
 	if (!strcmp(edev->prom_node->name, "fdthree"))
 		return 1;
 	if (!strcmp(edev->prom_node->name, "floppy")) {
-		char *compat;
+		const char *compat;
 
 		compat = of_get_property(edev->prom_node,
 					 "compatible", NULL);
@@ -622,7 +620,6 @@ isa_done:
 	sun_fdops.fd_eject = sun_pci_fd_eject;
 
         fdc_status = (unsigned long) &sun_fdc->status_82077;
-	FLOPPY_MOTOR_MASK = 0xf0;
 
 	allowed_drive_mask = 0;
 	sun_floppy_types[0] = 0;
@@ -661,7 +658,7 @@ static unsigned long __init sun_floppy_init(void)
 		struct linux_ebus_device *edev = NULL;
 		unsigned long config = 0;
 		void __iomem *auxio_reg;
-		char *state_prop;
+		const char *state_prop;
 
 		for_each_ebus(ebus) {
 			for_each_ebusdev(edev, ebus) {
@@ -729,7 +726,6 @@ static unsigned long __init sun_floppy_init(void)
 		sun_fdops.fd_eject = sun_pci_fd_eject;
 
         	fdc_status = (unsigned long) &sun_fdc->status_82077;
-		FLOPPY_MOTOR_MASK = 0xf0;
 
 		/*
 		 * XXX: Find out on which machines this is really needed.
@@ -853,5 +849,16 @@ static unsigned long __init sun_floppy_init(void)
 }
 
 #define EXTRA_FLOPPY_PARAMS
+
+static DEFINE_SPINLOCK(dma_spin_lock);
+
+#define claim_dma_lock() \
+({	unsigned long flags; \
+	spin_lock_irqsave(&dma_spin_lock, flags); \
+	flags; \
+})
+
+#define release_dma_lock(__flags) \
+	spin_unlock_irqrestore(&dma_spin_lock, __flags);
 
 #endif /* !(__ASM_SPARC64_FLOPPY_H) */
