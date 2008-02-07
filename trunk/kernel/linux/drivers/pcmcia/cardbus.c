@@ -40,8 +40,6 @@
 
 /*====================================================================*/
 
-#define FIND_FIRST_BIT(n)	((n) - ((n) & ((n)-1)))
-
 /* Offsets in the Expansion ROM Image Header */
 #define ROM_SIGNATURE		0x0000	/* 2 bytes */
 #define ROM_DATA_PTR		0x0018	/* 2 bytes */
@@ -138,7 +136,7 @@ int read_cb_mem(struct pcmcia_socket * s, int space, u_int addr, u_int len, void
 
 	cs_dbg(s, 3, "read_cb_mem(%d, %#x, %u)\n", space, addr, len);
 
-	dev = pci_find_slot(s->cb_dev->subordinate->number, 0);
+	dev = pci_get_slot(s->cb_dev->subordinate, 0);
 	if (!dev)
 		goto fail;
 
@@ -152,6 +150,9 @@ int read_cb_mem(struct pcmcia_socket * s, int space, u_int addr, u_int len, void
 	}
 
 	res = dev->resource + space - 1;
+
+	pci_dev_put(dev);
+
 	if (!res->flags)
 		goto fail;
 

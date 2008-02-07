@@ -11,7 +11,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/platform_device.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -67,6 +66,7 @@ struct omap_cf_socket {
 	struct platform_device	*pdev;
 	unsigned long		phys_cf;
 	u_int			irq;
+	struct resource		iomem;
 };
 
 #define	POLL_INTERVAL		(2 * HZ)
@@ -101,7 +101,7 @@ static void omap_cf_timer(unsigned long _cf)
  * claim the card's IRQ.  It may also detect some card insertions, but
  * not removals; it can't always eliminate timer irqs.
  */
-static irqreturn_t omap_cf_irq(int irq, void *_cf, struct pt_regs *r)
+static irqreturn_t omap_cf_irq(int irq, void *_cf)
 {
 	omap_cf_timer((unsigned long)_cf);
 	return IRQ_HANDLED;
@@ -112,16 +112,14 @@ static int omap_cf_get_status(struct pcmcia_socket *s, u_int *sp)
 	if (!sp)
 		return -EINVAL;
 
-	/* FIXME power management should probably be board-specific:
-	 *  - 3VCARD vs XVCARD (OSK only handles 3VCARD)
-	 *  - POWERON (switched on/off by set_socket)
-	 */
+	/* NOTE CF is always 3VCARD */
 	if (omap_cf_present()) {
 		struct omap_cf_socket	*cf;
 
 		*sp = SS_READY | SS_DETECT | SS_POWERON | SS_3VCARD;
 		cf = container_of(s, struct omap_cf_socket, socket);
-		s->irq.AssignedIRQ = cf->irq;
+		s->irq.AssignedIRQ = 0;
+		s->pci_irq = cf->irq;
 	} else
 		*sp = 0;
 	return 0;
@@ -132,7 +130,7 @@ omap_cf_set_socket(struct pcmcia_socket *sock, struct socket_state_t *s)
 {
 	u16		control;
 
-	/* FIXME some non-OSK boards will support power switching */
+	/* REVISIT some non-OSK boards may support power switching */
 	switch (s->Vcc) {
 	case 0:
 	case 33:
@@ -204,15 +202,14 @@ static struct pccard_operations omap_cf_ops = {
  * "what chipselect is used".  Boards could want more.
  */
 
-static int __init omap_cf_probe(struct device *dev)
+static int __init omap_cf_probe(struct platform_device *pdev)
 {
 	unsigned		seg;
 	struct omap_cf_socket	*cf;
-	struct platform_device	*pdev = to_platform_device(dev);
 	int			irq;
 	int			status;
 
-	seg = (int) dev->platform_data;
+	seg = (int) pdev->dev.platform_data;
 	if (seg == 0 || seg > 3)
 		return -ENODEV;
 
@@ -221,7 +218,7 @@ static int __init omap_cf_probe(struct device *dev)
 	if (irq < 0)
 		return -EINVAL;
 
-	cf = kcalloc(1, sizeof *cf, GFP_KERNEL);
+	cf = kzalloc(sizeof *cf, GFP_KERNEL);
 	if (!cf)
 		return -ENOMEM;
 	init_timer(&cf->timer);
@@ -229,7 +226,7 @@ static int __init omap_cf_probe(struct device *dev)
 	cf->timer.data = (unsigned long) cf;
 
 	cf->pdev = pdev;
-	dev_set_drvdata(dev, cf);
+	platform_set_drvdata(pdev, cf);
 
 	/* this primarily just shuts up irq handling noise */
 	status = request_irq(irq, omap_cf_irq, IRQF_SHARED,
@@ -253,6 +250,9 @@ static int __init omap_cf_probe(struct device *dev)
 	default:
 		goto  fail1;
 	}
+	cf->iomem.start = cf->phys_cf;
+	cf->iomem.end = cf->iomem.end + SZ_8K - 1;
+	cf->iomem.flags = IORESOURCE_MEM;
 
 	/* pcmcia layer only remaps "real" memory */
 	cf->socket.io_offset = (unsigned long)
@@ -290,12 +290,13 @@ static int __init omap_cf_probe(struct device *dev)
 		omap_cf_present() ? "present" : "(not present)");
 
 	cf->socket.owner = THIS_MODULE;
-	cf->socket.dev.dev = dev;
+	cf->socket.dev.parent = &pdev->dev;
 	cf->socket.ops = &omap_cf_ops;
 	cf->socket.resource_ops = &pccard_static_ops;
 	cf->socket.features = SS_CAP_PCCARD | SS_CAP_STATIC_MAP
 				| SS_CAP_MEM_ALIGN;
 	cf->socket.map_size = SZ_2K;
+	cf->socket.io[0].res = &cf->iomem;
 
 	status = pcmcia_register_socket(&cf->socket);
 	if (status < 0)
@@ -306,18 +307,19 @@ static int __init omap_cf_probe(struct device *dev)
 	return 0;
 
 fail2:
-	iounmap((void __iomem *) cf->socket.io_offset);
 	release_mem_region(cf->phys_cf, SZ_8K);
 fail1:
+	if (cf->socket.io_offset)
+		iounmap((void __iomem *) cf->socket.io_offset);
 	free_irq(irq, cf);
 fail0:
 	kfree(cf);
 	return status;
 }
 
-static int __devexit omap_cf_remove(struct device *dev)
+static int __exit omap_cf_remove(struct platform_device *pdev)
 {
-	struct omap_cf_socket *cf = dev_get_drvdata(dev);
+	struct omap_cf_socket *cf = platform_get_drvdata(pdev);
 
 	cf->active = 0;
 	pcmcia_unregister_socket(&cf->socket);
@@ -329,26 +331,36 @@ static int __devexit omap_cf_remove(struct device *dev)
 	return 0;
 }
 
-static struct device_driver omap_cf_driver = {
-	.name		= (char *) driver_name,
-	.bus		= &platform_bus_type,
-	.probe		= omap_cf_probe,
-	.remove		= __devexit_p(omap_cf_remove),
-	.suspend 	= pcmcia_socket_dev_suspend,
-	.resume 	= pcmcia_socket_dev_resume,
+static int omap_cf_suspend(struct platform_device *pdev, pm_message_t mesg)
+{
+	return pcmcia_socket_dev_suspend(&pdev->dev, mesg);
+}
+
+static int omap_cf_resume(struct platform_device *pdev)
+{
+	return pcmcia_socket_dev_resume(&pdev->dev);
+}
+
+static struct platform_driver omap_cf_driver = {
+	.driver = {
+		.name	= (char *) driver_name,
+	},
+	.remove		= __exit_p(omap_cf_remove),
+	.suspend	= omap_cf_suspend,
+	.resume		= omap_cf_resume,
 };
 
 static int __init omap_cf_init(void)
 {
 	if (cpu_is_omap16xx())
-		driver_register(&omap_cf_driver);
-	return 0;
+		return platform_driver_probe(&omap_cf_driver, omap_cf_probe);
+	return -ENODEV;
 }
 
 static void __exit omap_cf_exit(void)
 {
 	if (cpu_is_omap16xx())
-		driver_unregister(&omap_cf_driver);
+		platform_driver_unregister(&omap_cf_driver);
 }
 
 module_init(omap_cf_init);

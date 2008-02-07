@@ -650,7 +650,7 @@ static int hs_set_mem_map(struct pcmcia_socket *s, struct pccard_mem_map *mem)
  */
 static int hs_irq_demux(int irq, void *dev)
 {
-    	hs_socket_t *sp = (hs_socket_t *)dev;
+    	hs_socket_t *sp = dev;
 	u_int cscr;
     	
     	DPRINTK("hs_irq_demux(irq=%d)\n", irq);
@@ -671,13 +671,12 @@ static int hs_irq_demux(int irq, void *dev)
  * Interrupt handling routine.
  */
  
-static irqreturn_t hs_interrupt(int irq, void *dev, struct pt_regs *regs)
+static irqreturn_t hs_interrupt(int irq, void *dev)
 {
-    	hs_socket_t *sp = (hs_socket_t *)dev;
+    	hs_socket_t *sp = dev;
 	u_int events = 0;
 	u_int cscr;
-	
-	
+
 	cscr = hs_in(sp, CSCR);
 	
 	DPRINTK("hs_interrupt, cscr=%04x\n", cscr);
@@ -908,7 +907,7 @@ static int __init init_hs(void)
 
 	for (i=0; i<HS_MAX_SOCKETS; i++) {
 		unsigned int ret;
-		hs_sockets[i].socket.dev.dev = &hd64465_device.dev;		
+		hs_sockets[i].socket.dev.parent = &hd64465_device.dev;
 		hs_sockets[i].number = i;
 		ret = pcmcia_register_socket(&hs_sockets[i].socket);
 		if (ret && i)

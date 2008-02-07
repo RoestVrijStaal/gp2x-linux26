@@ -48,7 +48,6 @@ static u8 pcmcia_used_irq[NR_IRQS];
 
 #ifdef DEBUG
 extern int ds_pc_debug;
-#define cs_socket_name(skt)    ((skt)->dev.class_id)
 
 #define ds_dbg(skt, lvl, fmt, arg...) do {			\
 	if (ds_pc_debug >= lvl)					\
@@ -95,7 +94,7 @@ static int alloc_io_space(struct pcmcia_socket *s, u_int attr, ioaddr_t *base,
 	 * potential conflicts, just the most obvious ones.
 	 */
 	for (i = 0; i < MAX_IO_WIN; i++)
-		if ((s->io[i].res) &&
+		if ((s->io[i].res) && *base &&
 		    ((s->io[i].res->start & (align-1)) == *base))
 			return 1;
 	for (i = 0; i < MAX_IO_WIN; i++) {
@@ -784,7 +783,7 @@ EXPORT_SYMBOL(pcmcia_request_io);
  */
 
 #ifdef CONFIG_PCMCIA_PROBE
-static irqreturn_t test_action(int cpl, void *dev_id, struct pt_regs *regs)
+static irqreturn_t test_action(int cpl, void *dev_id)
 {
 	return IRQ_NONE;
 }
