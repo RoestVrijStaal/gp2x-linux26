@@ -40,21 +40,10 @@
 #define YMIN_NOMINAL 1408
 #define YMAX_NOMINAL 4448
 
-/*****************************************************************************
- *	Synaptics communications functions
- ****************************************************************************/
 
-/*
- * Send a command to the synpatics touchpad by special commands
- */
-static int synaptics_send_cmd(struct psmouse *psmouse, unsigned char c, unsigned char *param)
-{
-	if (psmouse_sliced_command(psmouse, c))
-		return -1;
-	if (ps2_command(&psmouse->ps2dev, param, PSMOUSE_CMD_GETINFO))
-		return -1;
-	return 0;
-}
+/*****************************************************************************
+ *	Stuff we need even when we do not want native Synaptics support
+ ****************************************************************************/
 
 /*
  * Set the synaptics touchpad mode byte by special commands
@@ -67,6 +56,54 @@ static int synaptics_mode_cmd(struct psmouse *psmouse, unsigned char mode)
 		return -1;
 	param[0] = SYN_PS_SET_MODE2;
 	if (ps2_command(&psmouse->ps2dev, param, PSMOUSE_CMD_SETRATE))
+		return -1;
+	return 0;
+}
+
+int synaptics_detect(struct psmouse *psmouse, int set_properties)
+{
+	struct ps2dev *ps2dev = &psmouse->ps2dev;
+	unsigned char param[4];
+
+	param[0] = 0;
+
+	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
+	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
+	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
+	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
+	ps2_command(ps2dev, param, PSMOUSE_CMD_GETINFO);
+
+	if (param[1] != 0x47)
+		return -ENODEV;
+
+	if (set_properties) {
+		psmouse->vendor = "Synaptics";
+		psmouse->name = "TouchPad";
+	}
+
+	return 0;
+}
+
+void synaptics_reset(struct psmouse *psmouse)
+{
+	/* reset touchpad back to relative mode, gestures enabled */
+	synaptics_mode_cmd(psmouse, 0);
+}
+
+#ifdef CONFIG_MOUSE_PS2_SYNAPTICS
+
+/*****************************************************************************
+ *	Synaptics communications functions
+ ****************************************************************************/
+
+/*
+ * Send a command to the synpatics touchpad by special commands
+ */
+static int synaptics_send_cmd(struct psmouse *psmouse, unsigned char c, unsigned char *param)
+{
+	if (psmouse_sliced_command(psmouse, c))
+		return -1;
+	if (ps2_command(&psmouse->ps2dev, param, PSMOUSE_CMD_GETINFO))
 		return -1;
 	return 0;
 }
@@ -148,7 +185,7 @@ static int synaptics_query_hardware(struct psmouse *psmouse)
 	int retries = 0;
 
 	while ((retries++ < 3) && psmouse_reset(psmouse))
-		printk(KERN_ERR "synaptics reset failed\n");
+		/* empty */;
 
 	if (synaptics_identify(psmouse))
 		return -1;
@@ -216,13 +253,13 @@ static void synaptics_pass_pt_packet(struct serio *ptport, unsigned char *packet
 	struct psmouse *child = serio_get_drvdata(ptport);
 
 	if (child && child->state == PSMOUSE_ACTIVATED) {
-		serio_interrupt(ptport, packet[1], 0, NULL);
-		serio_interrupt(ptport, packet[4], 0, NULL);
-		serio_interrupt(ptport, packet[5], 0, NULL);
+		serio_interrupt(ptport, packet[1], 0);
+		serio_interrupt(ptport, packet[4], 0);
+		serio_interrupt(ptport, packet[5], 0);
 		if (child->pktsize == 4)
-			serio_interrupt(ptport, packet[2], 0, NULL);
+			serio_interrupt(ptport, packet[2], 0);
 	} else
-		serio_interrupt(ptport, packet[1], 0, NULL);
+		serio_interrupt(ptport, packet[1], 0);
 }
 
 static void synaptics_pt_activate(struct psmouse *psmouse)
@@ -430,11 +467,11 @@ static void synaptics_process_packet(struct psmouse *psmouse)
 
 static int synaptics_validate_byte(unsigned char packet[], int idx, unsigned char pkt_type)
 {
-	static unsigned char newabs_mask[]	= { 0xC8, 0x00, 0x00, 0xC8, 0x00 };
-	static unsigned char newabs_rel_mask[]	= { 0xC0, 0x00, 0x00, 0xC0, 0x00 };
-	static unsigned char newabs_rslt[]	= { 0x80, 0x00, 0x00, 0xC0, 0x00 };
-	static unsigned char oldabs_mask[]	= { 0xC0, 0x60, 0x00, 0xC0, 0x60 };
-	static unsigned char oldabs_rslt[]	= { 0xC0, 0x00, 0x00, 0x80, 0x00 };
+	static const unsigned char newabs_mask[]	= { 0xC8, 0x00, 0x00, 0xC8, 0x00 };
+	static const unsigned char newabs_rel_mask[]	= { 0xC0, 0x00, 0x00, 0xC0, 0x00 };
+	static const unsigned char newabs_rslt[]	= { 0x80, 0x00, 0x00, 0xC0, 0x00 };
+	static const unsigned char oldabs_mask[]	= { 0xC0, 0x60, 0x00, 0xC0, 0x60 };
+	static const unsigned char oldabs_rslt[]	= { 0xC0, 0x00, 0x00, 0x80, 0x00 };
 
 	if (idx < 0 || idx > 4)
 		return 0;
@@ -469,12 +506,9 @@ static unsigned char synaptics_detect_pkt_type(struct psmouse *psmouse)
 	return SYN_NEWABS_STRICT;
 }
 
-static psmouse_ret_t synaptics_process_byte(struct psmouse *psmouse, struct pt_regs *regs)
+static psmouse_ret_t synaptics_process_byte(struct psmouse *psmouse)
 {
-	struct input_dev *dev = psmouse->dev;
 	struct synaptics_data *priv = psmouse->private;
-
-	input_regs(dev, regs);
 
 	if (psmouse->pktcnt >= 6) { /* Full packet received */
 		if (unlikely(priv->pkt_type == SYN_NEWABS))
@@ -532,12 +566,6 @@ static void set_input_params(struct input_dev *dev, struct synaptics_data *priv)
 	clear_bit(REL_Y, dev->relbit);
 }
 
-void synaptics_reset(struct psmouse *psmouse)
-{
-	/* reset touchpad back to relative mode, gestures enabled */
-	synaptics_mode_cmd(psmouse, 0);
-}
-
 static void synaptics_disconnect(struct psmouse *psmouse)
 {
 	synaptics_reset(psmouse);
@@ -572,33 +600,9 @@ static int synaptics_reconnect(struct psmouse *psmouse)
 	return 0;
 }
 
-int synaptics_detect(struct psmouse *psmouse, int set_properties)
-{
-	struct ps2dev *ps2dev = &psmouse->ps2dev;
-	unsigned char param[4];
-
-	param[0] = 0;
-
-	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
-	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
-	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
-	ps2_command(ps2dev, param, PSMOUSE_CMD_SETRES);
-	ps2_command(ps2dev, param, PSMOUSE_CMD_GETINFO);
-
-	if (param[1] != 0x47)
-		return -1;
-
-	if (set_properties) {
-		psmouse->vendor = "Synaptics";
-		psmouse->name = "TouchPad";
-	}
-
-	return 0;
-}
-
 #if defined(__i386__)
 #include <linux/dmi.h>
-static struct dmi_system_id toshiba_dmi_table[] = {
+static const struct dmi_system_id toshiba_dmi_table[] = {
 	{
 		.ident = "Toshiba Satellite",
 		.matches = {
@@ -651,10 +655,21 @@ int synaptics_init(struct psmouse *psmouse)
 
 	set_input_params(psmouse->dev, priv);
 
+	/*
+	 * Encode touchpad model so that it can be used to set
+	 * input device->id.version and be visible to userspace.
+	 * Because version is __u16 we have to drop something.
+	 * Hardware info bits seem to be good candidates as they
+	 * are documented to be for Synaptics corp. internal use.
+	 */
+	psmouse->model = ((priv->model_id & 0x00ff0000) >> 8) |
+			  (priv->model_id & 0x000000ff);
+
 	psmouse->protocol_handler = synaptics_process_byte;
 	psmouse->set_rate = synaptics_set_rate;
 	psmouse->disconnect = synaptics_disconnect;
 	psmouse->reconnect = synaptics_reconnect;
+	psmouse->cleanup = synaptics_reset;
 	psmouse->pktsize = 6;
 	/* Synaptics can usually stay in sync without extra help */
 	psmouse->resync_time = 0;
@@ -682,4 +697,12 @@ int synaptics_init(struct psmouse *psmouse)
 	return -1;
 }
 
+#else /* CONFIG_MOUSE_PS2_SYNAPTICS */
+
+int synaptics_init(struct psmouse *psmouse)
+{
+	return -ENOSYS;
+}
+
+#endif /* CONFIG_MOUSE_PS2_SYNAPTICS */
 
