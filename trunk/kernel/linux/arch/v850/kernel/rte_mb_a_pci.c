@@ -70,8 +70,7 @@ static struct mb_pci_dev_irq mb_pci_dev_irqs[] = {
 	/* PCI slot 2 */
 	{ 9, 	IRQ_MB_A_PCI2(0),	1 }
 };
-#define NUM_MB_PCI_DEV_IRQS \
-  (sizeof mb_pci_dev_irqs / sizeof mb_pci_dev_irqs[0])
+#define NUM_MB_PCI_DEV_IRQS ARRAY_SIZE(mb_pci_dev_irqs)
 
 
 /* PCI configuration primitives.  */
@@ -180,7 +179,7 @@ static int __devinit pcibios_init (void)
 		   default uses.  */
 
 		/* Significant address bits used for decoding PCI GCS5 space
-		   accessess.  */
+		   accesses.  */
 		MB_A_PCI_DMRR = ~(MB_A_PCI_MEM_SIZE - 1);
 
 		/* I don't understand this, but the SolutionGear example code
@@ -365,7 +364,7 @@ static DEFINE_SPINLOCK(mb_sram_lock);
 static void *alloc_mb_sram (size_t size)
 {
 	struct mb_sram_free_area *prev, *fa;
-	int flags;
+	unsigned long flags;
 	void *mem = 0;
 
 	spin_lock_irqsave (mb_sram_lock, flags);
@@ -406,7 +405,7 @@ static void *alloc_mb_sram (size_t size)
 static void free_mb_sram (void *mem, size_t size)
 {
 	struct mb_sram_free_area *prev, *fa, *new_fa;
-	int flags;
+	unsigned long flags;
 	void *end = mem + size;
 
 	spin_lock_irqsave (mb_sram_lock, flags);
@@ -517,7 +516,7 @@ static DEFINE_SPINLOCK(dma_mappings_lock);
 
 static struct dma_mapping *new_dma_mapping (size_t size)
 {
-	int flags;
+	unsigned long flags;
 	struct dma_mapping *mapping;
 	void *mb_sram_block = alloc_mb_sram (size);
 
@@ -575,7 +574,7 @@ static struct dma_mapping *new_dma_mapping (size_t size)
 
 static struct dma_mapping *find_dma_mapping (void *mb_sram_addr)
 {
-	int flags;
+	unsigned long flags;
 	struct dma_mapping *mapping;
 
 	spin_lock_irqsave (dma_mappings_lock, flags);
@@ -592,7 +591,7 @@ static struct dma_mapping *find_dma_mapping (void *mb_sram_addr)
 
 static struct dma_mapping *deactivate_dma_mapping (void *mb_sram_addr)
 {
-	int flags;
+	unsigned long flags;
 	struct dma_mapping *mapping, *prev;
 
 	spin_lock_irqsave (dma_mappings_lock, flags);
@@ -622,7 +621,7 @@ static struct dma_mapping *deactivate_dma_mapping (void *mb_sram_addr)
 static inline void
 free_dma_mapping (struct dma_mapping *mapping)
 {
-	int flags;
+	unsigned long flags;
 
 	free_mb_sram (mapping->mb_sram_addr, mapping->size);
 
@@ -776,7 +775,7 @@ pci_alloc_consistent (struct pci_dev *pdev, size_t size, dma_addr_t *dma_addr)
 /* Free and unmap a consistent DMA buffer.  CPU_ADDR and DMA_ADDR must
    be values that were returned from pci_alloc_consistent.  SIZE must be
    the same as what as passed into pci_alloc_consistent.  References to
-   the memory and mappings assosciated with CPU_ADDR or DMA_ADDR past
+   the memory and mappings associated with CPU_ADDR or DMA_ADDR past
    this call are illegal.  */
 void
 pci_free_consistent (struct pci_dev *pdev, size_t size, void *cpu_addr,
