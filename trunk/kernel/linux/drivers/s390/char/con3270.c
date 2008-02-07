@@ -22,6 +22,7 @@
 #include <asm/ebcdic.h>
 
 #include "raw3270.h"
+#include "tty3270.h"
 #include "ctrlchar.h"
 
 #define CON3270_OUTPUT_BUFFER_SIZE 1024
@@ -69,8 +70,7 @@ static void con3270_update(struct con3270 *);
 /*
  * Setup timeout for a device. On timeout trigger an update.
  */
-void
-con3270_set_timer(struct con3270 *cp, int expires)
+static void con3270_set_timer(struct con3270 *cp, int expires)
 {
 	if (expires == 0) {
 		if (timer_pending(&cp->timer))
@@ -508,8 +508,6 @@ con3270_write(struct console *co, const char *str, unsigned int count)
 	spin_unlock_irqrestore(&cp->view.lock,flags);
 }
 
-extern struct tty_driver *tty3270_driver;
-
 static struct tty_driver *
 con3270_device(struct console *c, int *index)
 {
@@ -556,12 +554,6 @@ con3270_unblank(void)
 	spin_unlock_irqrestore(&cp->view.lock, flags);
 }
 
-static int __init 
-con3270_consetup(struct console *co, char *options)
-{
-	return 0;
-}
-
 /*
  *  The console structure for the 3270 console
  */
@@ -570,7 +562,6 @@ static struct console con3270 = {
 	.write	 = con3270_write,
 	.device	 = con3270_device,
 	.unblank = con3270_unblank,
-	.setup	 = con3270_consetup,
 	.flags	 = CON_PRINTBUFFER,
 };
 

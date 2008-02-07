@@ -25,8 +25,8 @@
 #include <asm/ebcdic.h>
 #include <asm/uaccess.h>
 
-
 #include "raw3270.h"
+#include "tty3270.h"
 #include "keyboard.h"
 
 #define TTY3270_CHAR_BUF_SIZE 256
@@ -36,7 +36,7 @@
 struct tty_driver *tty3270_driver;
 static int tty3270_max_index;
 
-struct raw3270_fn tty3270_fn;
+static struct raw3270_fn tty3270_fn;
 
 struct tty3270_cell {
 	unsigned char character;
@@ -119,8 +119,7 @@ static void tty3270_update(struct tty3270 *);
 /*
  * Setup timeout for a device. On timeout trigger an update.
  */
-void
-tty3270_set_timer(struct tty3270 *tp, int expires)
+static void tty3270_set_timer(struct tty3270 *tp, int expires)
 {
 	if (expires == 0) {
 		if (timer_pending(&tp->timer) && del_timer(&tp->timer))
@@ -698,7 +697,6 @@ tty3270_alloc_view(void)
 	if (!tp->freemem_pages)
 		goto out_tp;
 	INIT_LIST_HEAD(&tp->freemem);
-	init_timer(&tp->timer);
 	for (pages = 0; pages < TTY3270_STRING_PAGES; pages++) {
 		tp->freemem_pages[pages] = (void *)
 			__get_free_pages(GFP_KERNEL|GFP_DMA, 0);
@@ -842,7 +840,7 @@ tty3270_del_views(void)
 	}
 }
 
-struct raw3270_fn tty3270_fn = {
+static struct raw3270_fn tty3270_fn = {
 	.activate = tty3270_activate,
 	.deactivate = tty3270_deactivate,
 	.intv = (void *) tty3270_irq,
@@ -1340,8 +1338,11 @@ tty3270_getpar(struct tty3270 *tp, int ix)
 static void
 tty3270_goto_xy(struct tty3270 *tp, int cx, int cy)
 {
-	tp->cx = min_t(int, tp->view.cols - 1, max_t(int, 0, cx));
-	cy = min_t(int, tp->view.rows - 3, max_t(int, 0, cy));
+	int max_cx = max(0, cx);
+	int max_cy = max(0, cy);
+
+	tp->cx = min_t(int, tp->view.cols - 1, max_cx);
+	cy = min_t(int, tp->view.rows - 3, max_cy);
 	if (cy != tp->cy) {
 		tty3270_convert_line(tp, tp->cy);
 		tp->cy = cy;
@@ -1660,7 +1661,7 @@ tty3270_flush_buffer(struct tty_struct *tty)
  * Check for visible/invisible input switches
  */
 static void
-tty3270_set_termios(struct tty_struct *tty, struct termios *old)
+tty3270_set_termios(struct tty_struct *tty, struct ktermios *old)
 {
 	struct tty3270 *tp;
 	int new;
@@ -1738,7 +1739,7 @@ tty3270_ioctl(struct tty_struct *tty, struct file *file,
 	return kbd_ioctl(tp->kbd, file, cmd, arg);
 }
 
-static struct tty_operations tty3270_ops = {
+static const struct tty_operations tty3270_ops = {
 	.open = tty3270_open,
 	.close = tty3270_close,
 	.write = tty3270_write,
@@ -1755,8 +1756,7 @@ static struct tty_operations tty3270_ops = {
 	.set_termios = tty3270_set_termios
 };
 
-void
-tty3270_notifier(int index, int active)
+static void tty3270_notifier(int index, int active)
 {
 	if (active)
 		tty_register_device(tty3270_driver, index, NULL);
@@ -1768,8 +1768,7 @@ tty3270_notifier(int index, int active)
  * 3270 tty registration code called from tty_init().
  * Most kernel services (incl. kmalloc) are available at this poimt.
  */
-int __init
-tty3270_init(void)
+static int __init tty3270_init(void)
 {
 	struct tty_driver *driver;
 	int ret;
