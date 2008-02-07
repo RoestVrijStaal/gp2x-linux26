@@ -88,7 +88,7 @@ ahd_compose_id(u_int device, u_int vendor, u_int subdevice, u_int subvendor)
 
 #define SUBID_9005_LEGACYCONN_FUNC(id) ((id) & 0x20)
 
-#define SUBID_9005_SEEPTYPE(id) ((id) & 0x0C0) >> 6)
+#define SUBID_9005_SEEPTYPE(id) (((id) & 0x0C0) >> 6)
 #define		SUBID_9005_SEEPTYPE_NONE	0x0
 #define		SUBID_9005_SEEPTYPE_4K		0x1
 
@@ -97,7 +97,7 @@ static ahd_device_setup_t ahd_aic7901A_setup;
 static ahd_device_setup_t ahd_aic7902_setup;
 static ahd_device_setup_t ahd_aic790X_setup;
 
-struct ahd_pci_identity ahd_pci_ident_table [] =
+static struct ahd_pci_identity ahd_pci_ident_table [] =
 {
 	/* aic7901 based controllers */
 	{
@@ -109,7 +109,13 @@ struct ahd_pci_identity ahd_pci_ident_table [] =
 	{
 		ID_AHA_29320ALP,
 		ID_ALL_MASK,
-		"Adaptec 29320ALP Ultra320 SCSI adapter",
+		"Adaptec 29320ALP PCIx Ultra320 SCSI adapter",
+		ahd_aic7901_setup
+	},
+	{
+		ID_AHA_29320LPE,
+		ID_ALL_MASK,
+		"Adaptec 29320LPE PCIe Ultra320 SCSI adapter",
 		ahd_aic7901_setup
 	},
 	/* aic7901A based controllers */
@@ -201,7 +207,7 @@ struct ahd_pci_identity ahd_pci_ident_table [] =
 	}
 };
 
-const u_int ahd_num_pci_devs = ARRAY_SIZE(ahd_pci_ident_table);
+static const u_int ahd_num_pci_devs = ARRAY_SIZE(ahd_pci_ident_table);
 		
 #define	DEVCONFIG		0x40
 #define		PCIXINITPAT	0x0000E000ul
@@ -245,6 +251,7 @@ static int	ahd_check_extport(struct ahd_softc *ahd);
 static void	ahd_configure_termination(struct ahd_softc *ahd,
 					  u_int adapter_control);
 static void	ahd_pci_split_intr(struct ahd_softc *ahd, u_int intstat);
+static void	ahd_pci_intr(struct ahd_softc *ahd);
 
 struct ahd_pci_identity *
 ahd_find_pci_device(ahd_dev_softc_t pci)
@@ -380,6 +387,33 @@ ahd_pci_config(struct ahd_softc *ahd, struct ahd_pci_identity *entry)
 	if (!error)
 		ahd->init_level++;
 	return error;
+}
+
+void
+ahd_pci_suspend(struct ahd_softc *ahd)
+{
+	/*
+	 * Save chip register configuration data for chip resets
+	 * that occur during runtime and resume events.
+	 */
+	ahd->suspend_state.pci_state.devconfig =
+	    ahd_pci_read_config(ahd->dev_softc, DEVCONFIG, /*bytes*/4);
+	ahd->suspend_state.pci_state.command =
+	    ahd_pci_read_config(ahd->dev_softc, PCIR_COMMAND, /*bytes*/1);
+	ahd->suspend_state.pci_state.csize_lattime =
+	    ahd_pci_read_config(ahd->dev_softc, CSIZE_LATTIME, /*bytes*/1);
+
+}
+
+void
+ahd_pci_resume(struct ahd_softc *ahd)
+{
+	ahd_pci_write_config(ahd->dev_softc, DEVCONFIG,
+			     ahd->suspend_state.pci_state.devconfig, /*bytes*/4);
+	ahd_pci_write_config(ahd->dev_softc, PCIR_COMMAND,
+			     ahd->suspend_state.pci_state.command, /*bytes*/1);
+	ahd_pci_write_config(ahd->dev_softc, CSIZE_LATTIME,
+			     ahd->suspend_state.pci_state.csize_lattime, /*bytes*/1);
 }
 
 /*
@@ -757,7 +791,7 @@ static const char *pci_status_strings[] =
 	"%s: Address or Write Phase Parity Error Detected in %s.\n"
 };
 
-void
+static void
 ahd_pci_intr(struct ahd_softc *ahd)
 {
 	uint8_t		pci_status[8];
@@ -959,7 +993,7 @@ ahd_aic790X_setup(struct ahd_softc *ahd)
 			      |  AHD_BUSFREEREV_BUG;
 		ahd->bugs |= AHD_LQOOVERRUN_BUG|AHD_EARLY_REQ_BUG;
 
-		/* If the user requested the the SLOWCRC bit to be set. */
+		/* If the user requested that the SLOWCRC bit to be set. */
 		if (aic79xx_slowcrc)
 			ahd->features |= AHD_AIC79XXB_SLOWCRC;
 

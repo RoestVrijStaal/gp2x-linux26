@@ -50,6 +50,8 @@ static int	ahd_linux_pci_reserve_io_regions(struct ahd_softc *ahd,
 static int	ahd_linux_pci_reserve_mem_region(struct ahd_softc *ahd,
 						 u_long *bus_addr,
 						 uint8_t __iomem **maddr);
+static int	ahd_linux_pci_dev_suspend(struct pci_dev *pdev, pm_message_t mesg);
+static int	ahd_linux_pci_dev_resume(struct pci_dev *pdev);
 static void	ahd_linux_pci_dev_remove(struct pci_dev *pdev);
 
 /* Define the macro locally since it's different for different class of chips.
@@ -62,6 +64,7 @@ static struct pci_device_id ahd_linux_pci_id_table[] = {
 	/* aic7901 based controllers */
 	ID(ID_AHA_29320A),
 	ID(ID_AHA_29320ALP),
+	ID(ID_AHA_29320LPE),
 	/* aic7902 based controllers */
 	ID(ID_AHA_29320),
 	ID(ID_AHA_29320B),
@@ -82,12 +85,60 @@ static struct pci_device_id ahd_linux_pci_id_table[] = {
 
 MODULE_DEVICE_TABLE(pci, ahd_linux_pci_id_table);
 
-struct pci_driver aic79xx_pci_driver = {
+static struct pci_driver aic79xx_pci_driver = {
 	.name		= "aic79xx",
 	.probe		= ahd_linux_pci_dev_probe,
+#ifdef CONFIG_PM
+	.suspend	= ahd_linux_pci_dev_suspend,
+	.resume		= ahd_linux_pci_dev_resume,
+#endif
 	.remove		= ahd_linux_pci_dev_remove,
 	.id_table	= ahd_linux_pci_id_table
 };
+
+static int
+ahd_linux_pci_dev_suspend(struct pci_dev *pdev, pm_message_t mesg)
+{
+	struct ahd_softc *ahd = pci_get_drvdata(pdev);
+	int rc;
+
+	if ((rc = ahd_suspend(ahd)))
+		return rc;
+
+	ahd_pci_suspend(ahd);
+
+	pci_save_state(pdev);
+	pci_disable_device(pdev);
+
+	if (mesg.event == PM_EVENT_SUSPEND)
+		pci_set_power_state(pdev, PCI_D3hot);
+
+	return rc;
+}
+
+static int
+ahd_linux_pci_dev_resume(struct pci_dev *pdev)
+{
+	struct ahd_softc *ahd = pci_get_drvdata(pdev);
+	int rc;
+
+	pci_set_power_state(pdev, PCI_D0);
+	pci_restore_state(pdev);
+
+	if ((rc = pci_enable_device(pdev))) {
+		dev_printk(KERN_ERR, &pdev->dev,
+			   "failed to enable device after resume (%d)\n", rc);
+		return rc;
+	}
+
+	pci_set_master(pdev);
+
+	ahd_pci_resume(ahd);
+
+	ahd_resume(ahd);
+
+	return rc;
+}
 
 static void
 ahd_linux_pci_dev_remove(struct pci_dev *pdev)
@@ -131,6 +182,7 @@ ahd_linux_pci_dev_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	struct		 ahd_pci_identity *entry;
 	char		*name;
 	int		 error;
+	struct device	*dev = &pdev->dev;
 
 	pci = pdev;
 	entry = ahd_find_pci_device(pci);
@@ -160,20 +212,18 @@ ahd_linux_pci_dev_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	pci_set_master(pdev);
 
 	if (sizeof(dma_addr_t) > 4) {
-		uint64_t   memsize;
-		const uint64_t mask_39bit = 0x7FFFFFFFFFULL;
+		const u64 required_mask = dma_get_required_mask(dev);
 
-		memsize = ahd_linux_get_memsize();
-
-		if (memsize >= 0x8000000000ULL
-	 	 && pci_set_dma_mask(pdev, DMA_64BIT_MASK) == 0) {
+		if (required_mask > DMA_39BIT_MASK &&
+		    dma_set_mask(dev, DMA_64BIT_MASK) == 0)
 			ahd->flags |= AHD_64BIT_ADDRESSING;
-		} else if (memsize > 0x80000000
-			&& pci_set_dma_mask(pdev, mask_39bit) == 0) {
+		else if (required_mask > DMA_32BIT_MASK &&
+			 dma_set_mask(dev, DMA_39BIT_MASK) == 0)
 			ahd->flags |= AHD_39BIT_ADDRESSING;
-		}
+		else
+			dma_set_mask(dev, DMA_32BIT_MASK);
 	} else {
-		pci_set_dma_mask(pdev, DMA_32BIT_MASK);
+		dma_set_mask(dev, DMA_32BIT_MASK);
 	}
 	ahd->dev_softc = pci;
 	error = ahd_pci_config(ahd, entry);
@@ -198,7 +248,7 @@ ahd_linux_pci_dev_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 int
 ahd_linux_pci_init(void)
 {
-	return (pci_module_init(&aic79xx_pci_driver));
+	return pci_register_driver(&aic79xx_pci_driver);
 }
 
 void
