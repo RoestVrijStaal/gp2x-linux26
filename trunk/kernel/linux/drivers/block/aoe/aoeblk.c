@@ -1,4 +1,4 @@
-/* Copyright (c) 2004 Coraid, Inc.  See COPYING for GPL terms. */
+/* Copyright (c) 2006 Coraid, Inc.  See COPYING for GPL terms. */
 /*
  * aoeblk.c
  * block device routines
@@ -6,15 +6,15 @@
 
 #include <linux/hdreg.h>
 #include <linux/blkdev.h>
+#include <linux/backing-dev.h>
 #include <linux/fs.h>
 #include <linux/ioctl.h>
 #include <linux/genhd.h>
 #include <linux/netdevice.h>
 #include "aoe.h"
 
-static kmem_cache_t *buf_pool_cache;
+static struct kmem_cache *buf_pool_cache;
 
-/* add attributes for our block devices in sysfs */
 static ssize_t aoedisk_show_state(struct gendisk * disk, char *page)
 {
 	struct aoedev *d = disk->private_data;
@@ -64,21 +64,27 @@ static struct disk_attribute disk_attr_fwver = {
 	.show = aoedisk_show_fwver
 };
 
-static void
+static struct attribute *aoe_attrs[] = {
+	&disk_attr_state.attr,
+	&disk_attr_mac.attr,
+	&disk_attr_netif.attr,
+	&disk_attr_fwver.attr,
+	NULL
+};
+
+static const struct attribute_group attr_group = {
+	.attrs = aoe_attrs,
+};
+
+static int
 aoedisk_add_sysfs(struct aoedev *d)
 {
-	sysfs_create_file(&d->gd->kobj, &disk_attr_state.attr);
-	sysfs_create_file(&d->gd->kobj, &disk_attr_mac.attr);
-	sysfs_create_file(&d->gd->kobj, &disk_attr_netif.attr);
-	sysfs_create_file(&d->gd->kobj, &disk_attr_fwver.attr);
+	return sysfs_create_group(&d->gd->kobj, &attr_group);
 }
 void
 aoedisk_rm_sysfs(struct aoedev *d)
 {
-	sysfs_remove_link(&d->gd->kobj, "state");
-	sysfs_remove_link(&d->gd->kobj, "mac");
-	sysfs_remove_link(&d->gd->kobj, "netif");
-	sysfs_remove_link(&d->gd->kobj, "firmware-version");
+	sysfs_remove_group(&d->gd->kobj, &attr_group);
 }
 
 static int
@@ -120,7 +126,7 @@ aoeblk_release(struct inode *inode, struct file *filp)
 }
 
 static int
-aoeblk_make_request(request_queue_t *q, struct bio *bio)
+aoeblk_make_request(struct request_queue *q, struct bio *bio)
 {
 	struct aoedev *d;
 	struct buf *buf;
@@ -132,9 +138,8 @@ aoeblk_make_request(request_queue_t *q, struct bio *bio)
 	d = bio->bi_bdev->bd_disk->private_data;
 	buf = mempool_alloc(d->bufpool, GFP_NOIO);
 	if (buf == NULL) {
-		printk(KERN_INFO "aoe: aoeblk_make_request: buf allocation "
-			"failure\n");
-		bio_endio(bio, bio->bi_size, -ENOMEM);
+		printk(KERN_INFO "aoe: buf allocation failure\n");
+		bio_endio(bio, -ENOMEM);
 		return 0;
 	}
 	memset(buf, 0, sizeof(*buf));
@@ -143,18 +148,19 @@ aoeblk_make_request(request_queue_t *q, struct bio *bio)
 	buf->bio = bio;
 	buf->resid = bio->bi_size;
 	buf->sector = bio->bi_sector;
-	buf->bv = buf->bio->bi_io_vec;
+	buf->bv = &bio->bi_io_vec[bio->bi_idx];
+	WARN_ON(buf->bv->bv_len == 0);
 	buf->bv_resid = buf->bv->bv_len;
 	buf->bufaddr = page_address(buf->bv->bv_page) + buf->bv->bv_offset;
 
 	spin_lock_irqsave(&d->lock, flags);
 
 	if ((d->flags & DEVFL_UP) == 0) {
-		printk(KERN_INFO "aoe: aoeblk_make_request: device %ld.%ld is not up\n",
+		printk(KERN_INFO "aoe: device %ld.%ld is not up\n",
 			d->aoemajor, d->aoeminor);
 		spin_unlock_irqrestore(&d->lock, flags);
 		mempool_free(buf, d->bufpool);
-		bio_endio(bio, bio->bi_size, -ENXIO);
+		bio_endio(bio, -ENXIO);
 		return 0;
 	}
 
@@ -176,7 +182,7 @@ aoeblk_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	struct aoedev *d = bdev->bd_disk->private_data;
 
 	if ((d->flags & DEVFL_UP) == 0) {
-		printk(KERN_ERR "aoe: aoeblk_ioctl: disk not up\n");
+		printk(KERN_ERR "aoe: disk not up\n");
 		return -ENODEV;
 	}
 
@@ -203,27 +209,22 @@ aoeblk_gdalloc(void *vp)
 
 	gd = alloc_disk(AOE_PARTITIONS);
 	if (gd == NULL) {
-		printk(KERN_ERR "aoe: aoeblk_gdalloc: cannot allocate disk "
-			"structure for %ld.%ld\n", d->aoemajor, d->aoeminor);
-		spin_lock_irqsave(&d->lock, flags);
-		d->flags &= ~DEVFL_GDALLOC;
-		spin_unlock_irqrestore(&d->lock, flags);
-		return;
+		printk(KERN_ERR "aoe: cannot allocate disk structure for %ld.%ld\n",
+			d->aoemajor, d->aoeminor);
+		goto err;
 	}
 
 	d->bufpool = mempool_create_slab_pool(MIN_BUFS, buf_pool_cache);
 	if (d->bufpool == NULL) {
-		printk(KERN_ERR "aoe: aoeblk_gdalloc: cannot allocate bufpool "
-			"for %ld.%ld\n", d->aoemajor, d->aoeminor);
-		put_disk(gd);
-		spin_lock_irqsave(&d->lock, flags);
-		d->flags &= ~DEVFL_GDALLOC;
-		spin_unlock_irqrestore(&d->lock, flags);
-		return;
+		printk(KERN_ERR "aoe: cannot allocate bufpool for %ld.%ld\n",
+			d->aoemajor, d->aoeminor);
+		goto err_disk;
 	}
 
-	spin_lock_irqsave(&d->lock, flags);
 	blk_queue_make_request(&d->blkq, aoeblk_make_request);
+	if (bdi_init(&d->blkq.backing_dev_info))
+		goto err_mempool;
+	spin_lock_irqsave(&d->lock, flags);
 	gd->major = AOE_MAJOR;
 	gd->first_minor = d->sysminor * AOE_PARTITIONS;
 	gd->fops = &aoe_bdops;
@@ -241,6 +242,16 @@ aoeblk_gdalloc(void *vp)
 
 	add_disk(gd);
 	aoedisk_add_sysfs(d);
+	return;
+
+err_mempool:
+	mempool_destroy(d->bufpool);
+err_disk:
+	put_disk(gd);
+err:
+	spin_lock_irqsave(&d->lock, flags);
+	d->flags &= ~DEVFL_GDALLOC;
+	spin_unlock_irqrestore(&d->lock, flags);
 }
 
 void
@@ -252,9 +263,9 @@ aoeblk_exit(void)
 int __init
 aoeblk_init(void)
 {
-	buf_pool_cache = kmem_cache_create("aoe_bufs", 
+	buf_pool_cache = kmem_cache_create("aoe_bufs",
 					   sizeof(struct buf),
-					   0, 0, NULL, NULL);
+					   0, 0, NULL);
 	if (buf_pool_cache == NULL)
 		return -ENOMEM;
 
