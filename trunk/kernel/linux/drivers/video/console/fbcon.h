@@ -48,7 +48,7 @@ struct display {
     struct fb_bitfield green;
     struct fb_bitfield blue;
     struct fb_bitfield transp;
-    struct fb_videomode *mode;
+    const struct fb_videomode *mode;
 };
 
 struct fbcon_ops {
@@ -80,6 +80,8 @@ struct fbcon_ops {
 	char  *cursor_data;
 	u8    *fontbuffer;
 	u8    *fontdata;
+	u8    *cursor_src;
+	u32    cursor_size;
 	u32    fd_size;
 };
     /*
@@ -174,7 +176,6 @@ extern void fbcon_set_tileops(struct vc_data *vc, struct fb_info *info);
 #endif
 extern void fbcon_set_bitops(struct fbcon_ops *ops);
 extern int  soft_cursor(struct fb_info *info, struct fb_cursor *cursor);
-extern struct class *fb_class;
 
 #define FBCON_ATTRIBUTE_UNDERLINE 1
 #define FBCON_ATTRIBUTE_REVERSE   2
