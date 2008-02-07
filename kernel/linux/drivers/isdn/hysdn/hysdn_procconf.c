@@ -16,6 +16,7 @@
 #include <linux/proc_fs.h>
 #include <linux/pci.h>
 #include <linux/smp_lock.h>
+#include <net/net_namespace.h>
 
 #include "hysdn_defs.h"
 
@@ -275,7 +276,7 @@ hysdn_conf_open(struct inode *ino, struct file *filep)
 	} else if ((filep->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_READ) {
 		/* read access -> output card info data */
 
-		if (!(tmp = (char *) kmalloc(INFO_OUT_LEN * 2 + 2, GFP_KERNEL))) {
+		if (!(tmp = kmalloc(INFO_OUT_LEN * 2 + 2, GFP_KERNEL))) {
 			unlock_kernel();
 			return (-EFAULT);	/* out of memory */
 		}
@@ -367,7 +368,7 @@ hysdn_conf_close(struct inode *ino, struct file *filep)
 /******************************************************/
 /* table for conf filesystem functions defined above. */
 /******************************************************/
-static struct file_operations conf_fops =
+static const struct file_operations conf_fops =
 {
 	.llseek         = no_llseek,
 	.read           = hysdn_conf_read,
@@ -392,7 +393,7 @@ hysdn_procconf_init(void)
 	hysdn_card *card;
 	unsigned char conf_name[20];
 
-	hysdn_proc_entry = proc_mkdir(PROC_SUBDIR_NAME, proc_net);
+	hysdn_proc_entry = proc_mkdir(PROC_SUBDIR_NAME, init_net.proc_net);
 	if (!hysdn_proc_entry) {
 		printk(KERN_ERR "HYSDN: unable to create hysdn subdir\n");
 		return (-1);
@@ -437,5 +438,5 @@ hysdn_procconf_release(void)
 		card = card->next;	/* point to next card */
 	}
 
-	remove_proc_entry(PROC_SUBDIR_NAME, proc_net);
+	remove_proc_entry(PROC_SUBDIR_NAME, init_net.proc_net);
 }
