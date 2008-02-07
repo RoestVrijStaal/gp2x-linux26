@@ -33,7 +33,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <linux/usb_ch9.h>
 #include <linux/usb/input.h>
 #include "usb.h"
 #include "onetouch.h"
@@ -53,14 +52,15 @@ struct usb_onetouch {
 	unsigned int is_open:1;
 };
 
-static void usb_onetouch_irq(struct urb *urb, struct pt_regs *regs)
+static void usb_onetouch_irq(struct urb *urb)
 {
 	struct usb_onetouch *onetouch = urb->context;
 	signed char *data = onetouch->data;
 	struct input_dev *dev = onetouch->dev;
-	int status;
+	int status = urb->status;
+	int retval;
 
-	switch (urb->status) {
+	switch (status) {
 	case 0:			/* success */
 		break;
 	case -ECONNRESET:	/* unlink */
@@ -72,21 +72,20 @@ static void usb_onetouch_irq(struct urb *urb, struct pt_regs *regs)
 		goto resubmit;
 	}
 
-	input_regs(dev, regs);
 	input_report_key(dev, ONETOUCH_BUTTON, data[0] & 0x02);
 	input_sync(dev);
 
 resubmit:
-	status = usb_submit_urb (urb, SLAB_ATOMIC);
-	if (status)
-		err ("can't resubmit intr, %s-%s/input0, status %d",
+	retval = usb_submit_urb (urb, GFP_ATOMIC);
+	if (retval)
+		err ("can't resubmit intr, %s-%s/input0, retval %d",
 			onetouch->udev->bus->bus_name,
-			onetouch->udev->devpath, status);
+			onetouch->udev->devpath, retval);
 }
 
 static int usb_onetouch_open(struct input_dev *dev)
 {
-	struct usb_onetouch *onetouch = dev->private;
+	struct usb_onetouch *onetouch = input_get_drvdata(dev);
 
 	onetouch->is_open = 1;
 	onetouch->irq->dev = onetouch->udev;
@@ -100,7 +99,7 @@ static int usb_onetouch_open(struct input_dev *dev)
 
 static void usb_onetouch_close(struct input_dev *dev)
 {
-	struct usb_onetouch *onetouch = dev->private;
+	struct usb_onetouch *onetouch = input_get_drvdata(dev);
 
 	usb_kill_urb(onetouch->irq);
 	onetouch->is_open = 0;
@@ -135,6 +134,7 @@ int onetouch_connect_input(struct us_data *ss)
 	struct usb_onetouch *onetouch;
 	struct input_dev *input_dev;
 	int pipe, maxp;
+	int error = -ENOMEM;
 
 	interface = ss->pusb_intf->cur_altsetting;
 
@@ -142,10 +142,7 @@ int onetouch_connect_input(struct us_data *ss)
 		return -ENODEV;
 
 	endpoint = &interface->endpoint[2].desc;
-	if (!(endpoint->bEndpointAddress & USB_DIR_IN))
-		return -ENODEV;
-	if ((endpoint->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
-			!= USB_ENDPOINT_XFER_INT)
+	if (!usb_endpoint_is_int_in(endpoint))
 		return -ENODEV;
 
 	pipe = usb_rcvintpipe(udev, endpoint->bEndpointAddress);
@@ -157,7 +154,7 @@ int onetouch_connect_input(struct us_data *ss)
 		goto fail1;
 
 	onetouch->data = usb_buffer_alloc(udev, ONETOUCH_PKT_LEN,
-					  SLAB_ATOMIC, &onetouch->data_dma);
+					  GFP_ATOMIC, &onetouch->data_dma);
 	if (!onetouch->data)
 		goto fail1;
 
@@ -189,13 +186,14 @@ int onetouch_connect_input(struct us_data *ss)
 	input_dev->name = onetouch->name;
 	input_dev->phys = onetouch->phys;
 	usb_to_input_id(udev, &input_dev->id);
-	input_dev->cdev.dev = &udev->dev;
+	input_dev->dev.parent = &udev->dev;
 
 	set_bit(EV_KEY, input_dev->evbit);
 	set_bit(ONETOUCH_BUTTON, input_dev->keybit);
 	clear_bit(0, input_dev->keybit);
 
-	input_dev->private = onetouch;
+	input_set_drvdata(input_dev, onetouch);
+
 	input_dev->open = usb_onetouch_open;
 	input_dev->close = usb_onetouch_close;
 
@@ -211,15 +209,18 @@ int onetouch_connect_input(struct us_data *ss)
 	ss->suspend_resume_hook = usb_onetouch_pm_hook;
 #endif
 
-	input_register_device(onetouch->dev);
+	error = input_register_device(onetouch->dev);
+	if (error)
+		goto fail3;
 
 	return 0;
 
+ fail3:	usb_free_urb(onetouch->irq);
  fail2:	usb_buffer_free(udev, ONETOUCH_PKT_LEN,
 			onetouch->data, onetouch->data_dma);
  fail1:	kfree(onetouch);
 	input_free_device(input_dev);
-	return -ENOMEM;
+	return error;
 }
 
 void onetouch_release_input(void *onetouch_)

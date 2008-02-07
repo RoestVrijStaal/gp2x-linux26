@@ -50,7 +50,7 @@
 #include <linux/slab.h>
 
 #include <scsi/scsi.h>
-#include <scsi/scsi_cmnd.h>
+#include <scsi/scsi_eh.h>
 #include <scsi/scsi_device.h>
 
 #include "usb.h"
@@ -108,7 +108,7 @@
 /* This is the completion handler which will wake us up when an URB
  * completes.
  */
-static void usb_stor_blocking_completion(struct urb *urb, struct pt_regs *regs)
+static void usb_stor_blocking_completion(struct urb *urb)
 {
 	struct completion *urb_done_ptr = (struct completion *)urb->context;
 
@@ -294,11 +294,6 @@ static int interpret_urb_result(struct us_data *us, unsigned int pipe,
 			return USB_STOR_XFER_ERROR;
 		return USB_STOR_XFER_STALLED;
 
-	/* timeout or excessively long NAK */
-	case -ETIMEDOUT:
-		US_DEBUGP("-- timeout or NAK\n");
-		return USB_STOR_XFER_ERROR;
-
 	/* babble - the device tried to send more than we wanted to read */
 	case -EOVERFLOW:
 		US_DEBUGP("-- babble\n");
@@ -432,7 +427,7 @@ static int usb_stor_bulk_transfer_sglist(struct us_data *us, unsigned int pipe,
 	US_DEBUGP("%s: xfer %u bytes, %d entries\n", __FUNCTION__,
 			length, num_sg);
 	result = usb_sg_init(&us->current_sg, us->pusb_dev, pipe, 0,
-			sg, num_sg, length, SLAB_NOIO);
+			sg, num_sg, length, GFP_NOIO);
 	if (result) {
 		US_DEBUGP("usb_sg_init returned %d\n", result);
 		return USB_STOR_XFER_ERROR;
@@ -585,25 +580,11 @@ void usb_stor_invoke_transport(struct scsi_cmnd *srb, struct us_data *us)
 	/* Now, if we need to do the auto-sense, let's do it */
 	if (need_auto_sense) {
 		int temp_result;
-		void* old_request_buffer;
-		unsigned short old_sg;
-		unsigned old_request_bufflen;
-		unsigned char old_sc_data_direction;
-		unsigned char old_cmd_len;
-		unsigned char old_cmnd[MAX_COMMAND_SIZE];
-		int old_resid;
+		struct scsi_eh_save ses;
 
 		US_DEBUGP("Issuing auto-REQUEST_SENSE\n");
 
-		/* save the old command */
-		memcpy(old_cmnd, srb->cmnd, MAX_COMMAND_SIZE);
-		old_cmd_len = srb->cmd_len;
-
-		/* set the command and the LUN */
-		memset(srb->cmnd, 0, MAX_COMMAND_SIZE);
-		srb->cmnd[0] = REQUEST_SENSE;
-		srb->cmnd[1] = old_cmnd[1] & 0xE0;
-		srb->cmnd[4] = 18;
+		scsi_eh_prep_cmnd(srb, &ses, NULL, 0, US_SENSE_SIZE);
 
 		/* FIXME: we must do the protocol translation here */
 		if (us->subclass == US_SC_RBC || us->subclass == US_SC_SCSI)
@@ -611,36 +592,12 @@ void usb_stor_invoke_transport(struct scsi_cmnd *srb, struct us_data *us)
 		else
 			srb->cmd_len = 12;
 
-		/* set the transfer direction */
-		old_sc_data_direction = srb->sc_data_direction;
-		srb->sc_data_direction = DMA_FROM_DEVICE;
-
-		/* use the new buffer we have */
-		old_request_buffer = srb->request_buffer;
-		srb->request_buffer = us->sensebuf;
-
-		/* set the buffer length for transfer */
-		old_request_bufflen = srb->request_bufflen;
-		srb->request_bufflen = US_SENSE_SIZE;
-
-		/* set up for no scatter-gather use */
-		old_sg = srb->use_sg;
-		srb->use_sg = 0;
-
 		/* issue the auto-sense command */
-		old_resid = srb->resid;
 		srb->resid = 0;
 		temp_result = us->transport(us->srb, us);
 
 		/* let's clean up right away */
-		memcpy(srb->sense_buffer, us->sensebuf, US_SENSE_SIZE);
-		srb->resid = old_resid;
-		srb->request_buffer = old_request_buffer;
-		srb->request_bufflen = old_request_bufflen;
-		srb->use_sg = old_sg;
-		srb->sc_data_direction = old_sc_data_direction;
-		srb->cmd_len = old_cmd_len;
-		memcpy(srb->cmnd, old_cmnd, MAX_COMMAND_SIZE);
+		scsi_eh_restore_cmnd(srb, &ses);
 
 		if (test_bit(US_FLIDX_TIMED_OUT, &us->flags)) {
 			US_DEBUGP("-- auto-sense aborted\n");

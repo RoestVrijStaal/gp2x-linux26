@@ -72,12 +72,27 @@ static const char* host_info(struct Scsi_Host *host)
 
 static int slave_alloc (struct scsi_device *sdev)
 {
+	struct us_data *us = host_to_us(sdev->host);
+
 	/*
 	 * Set the INQUIRY transfer length to 36.  We don't use any of
 	 * the extra data and many devices choke if asked for more or
 	 * less than 36 bytes.
 	 */
 	sdev->inquiry_len = 36;
+
+	/*
+	 * The UFI spec treates the Peripheral Qualifier bits in an
+	 * INQUIRY result as reserved and requires devices to set them
+	 * to 0.  However the SCSI spec requires these bits to be set
+	 * to 3 to indicate when a LUN is not present.
+	 *
+	 * Let the scanning code know if this target merely sets
+	 * Peripheral Device Type to 0x1f to indicate no LUN.
+	 */
+	if (us->subclass == US_SC_UFI)
+		sdev->sdev_target->pdt_1f_for_no_lun = 1;
+
 	return 0;
 }
 
@@ -95,30 +110,19 @@ static int slave_configure(struct scsi_device *sdev)
 	 * the end, scatter-gather buffers follow page boundaries. */
 	blk_queue_dma_alignment(sdev->request_queue, (512 - 1));
 
-	/* Set the SCSI level to at least 2.  We'll leave it at 3 if that's
-	 * what is originally reported.  We need this to avoid confusing
-	 * the SCSI layer with devices that report 0 or 1, but need 10-byte
-	 * commands (ala ATAPI devices behind certain bridges, or devices
-	 * which simply have broken INQUIRY data).
-	 *
-	 * NOTE: This means /dev/sg programs (ala cdrecord) will get the
-	 * actual information.  This seems to be the preference for
-	 * programs like that.
-	 *
-	 * NOTE: This also means that /proc/scsi/scsi and sysfs may report
-	 * the actual value or the modified one, depending on where the
-	 * data comes from.
-	 */
-	if (sdev->scsi_level < SCSI_2)
-		sdev->scsi_level = sdev->sdev_target->scsi_level = SCSI_2;
-
 	/* Many devices have trouble transfering more than 32KB at a time,
 	 * while others have trouble with more than 64K. At this time we
 	 * are limiting both to 32K (64 sectores).
 	 */
-	if ((us->flags & US_FL_MAX_SECTORS_64) &&
-			sdev->request_queue->max_sectors > 64)
-		blk_queue_max_sectors(sdev->request_queue, 64);
+	if (us->flags & (US_FL_MAX_SECTORS_64 | US_FL_MAX_SECTORS_MIN)) {
+		unsigned int max_sectors = 64;
+
+		if (us->flags & US_FL_MAX_SECTORS_MIN)
+			max_sectors = PAGE_CACHE_SIZE >> 9;
+		if (sdev->request_queue->max_sectors > max_sectors)
+			blk_queue_max_sectors(sdev->request_queue,
+					      max_sectors);
+	}
 
 	/* We can't put these settings in slave_alloc() because that gets
 	 * called before the device type is known.  Consequently these
@@ -155,13 +159,21 @@ static int slave_configure(struct scsi_device *sdev)
 		if (us->flags & US_FL_FIX_CAPACITY)
 			sdev->fix_capacity = 1;
 
+		/* A few disks have two indistinguishable version, one of
+		 * which reports the correct capacity and the other does not.
+		 * The sd driver has to guess which is the case. */
+		if (us->flags & US_FL_CAPACITY_HEURISTICS)
+			sdev->guess_capacity = 1;
+
 		/* Some devices report a SCSI revision level above 2 but are
 		 * unable to handle the REPORT LUNS command (for which
 		 * support is mandatory at level 3).  Since we already have
 		 * a Get-Max-LUN request, we won't lose much by setting the
 		 * revision level down to 2.  The only devices that would be
 		 * affected are those with sparse LUNs. */
-		sdev->scsi_level = sdev->sdev_target->scsi_level = SCSI_2;
+		if (sdev->scsi_level > SCSI_2)
+			sdev->sdev_target->scsi_level =
+					sdev->scsi_level = SCSI_2;
 
 		/* USB-IDE bridges tend to report SK = 0x04 (Non-recoverable
 		 * Hardware Error) when any low-level error occurs,
@@ -171,6 +183,10 @@ static int slave_configure(struct scsi_device *sdev)
 		 * is an occasional series of retries that will all fail. */
 		sdev->retry_hwerror = 1;
 
+		/* USB disks should allow restart.  Some drives spin down
+		 * automatically, requiring a START-STOP UNIT command. */
+		sdev->allow_restart = 1;
+
 	} else {
 
 		/* Non-disk-type devices don't need to blacklist any pages
@@ -178,6 +194,16 @@ static int slave_configure(struct scsi_device *sdev)
 		 * But they do need to use MODE SENSE(10). */
 		sdev->use_10_for_ms = 1;
 	}
+
+	/* The CB and CBI transports have no way to pass LUN values
+	 * other than the bits in the second byte of a CDB.  But those
+	 * bits don't get set to the LUN value if the device reports
+	 * scsi_level == 0 (UNKNOWN).  Hence such devices must necessarily
+	 * be single-LUN.
+	 */
+	if ((us->protocol == US_PR_CB || us->protocol == US_PR_CBI) &&
+			sdev->scsi_level == SCSI_UNKNOWN)
+		us->max_lun = 0;
 
 	/* Some devices choke when they receive a PREVENT-ALLOW MEDIUM
 	 * REMOVAL command, so suppress those commands. */
@@ -305,10 +331,14 @@ void usb_stor_report_device_reset(struct us_data *us)
 
 /* Report a driver-initiated bus reset to the SCSI layer.
  * Calling this for a SCSI-initiated reset is unnecessary but harmless.
- * The caller must own the SCSI host lock. */
+ * The caller must not own the SCSI host lock. */
 void usb_stor_report_bus_reset(struct us_data *us)
 {
-	scsi_report_bus_reset(us_to_host(us), 0);
+	struct Scsi_Host *host = us_to_host(us);
+
+	scsi_lock(host);
+	scsi_report_bus_reset(host, 0);
+	scsi_unlock(host);
 }
 
 /***********************************************************************
