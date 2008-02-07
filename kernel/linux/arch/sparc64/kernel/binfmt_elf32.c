@@ -1,7 +1,7 @@
 /*
  * binfmt_elf32.c: Support 32-bit Sparc ELF binaries on Ultra.
  *
- * Copyright (C) 1995, 1996, 1997, 1998 David S. Miller	(davem@redhat.com)
+ * Copyright (C) 1995, 1996, 1997, 1998 David S. Miller	(davem@davemloft.net)
  * Copyright (C) 1995, 1996, 1997, 1998 Jakub Jelinek	(jj@ultra.linux.cz)
  */
 
@@ -133,7 +133,7 @@ struct elf_prpsinfo32
 
 #undef cputime_to_timeval
 #define cputime_to_timeval cputime_to_compat_timeval
-static __inline__ void
+static inline void
 cputime_to_compat_timeval(const cputime_t cputime, struct compat_timeval *value)
 {
 	unsigned long jiffies = cputime_to_jiffies(cputime);
@@ -141,7 +141,6 @@ cputime_to_compat_timeval(const cputime_t cputime, struct compat_timeval *value)
 	value->tv_sec = jiffies / HZ;
 }
 
-#define elf_addr_t	u32
 #undef start_thread
 #define start_thread start_thread32
 #define init_elf_binfmt init_elf32_binfmt

@@ -120,13 +120,6 @@ __spitfire_flush_tlb_mm_slow:
 /*
  * The following code flushes one page_size worth.
  */
-#if (PAGE_SHIFT == 13)
-#define ITAG_MASK 0xfe
-#elif (PAGE_SHIFT == 16)
-#define ITAG_MASK 0x7fe
-#else
-#error unsupported PAGE_SIZE
-#endif
 	.section .kprobes.text, "ax"
 	.align		32
 	.globl		__flush_icache_page
@@ -477,6 +470,10 @@ xcall_sync_tick:
 	sethi		%hi(109f), %g7
 	b,pt		%xcc, etrap_irq
 109:	 or		%g7, %lo(109b), %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	call		smp_synchronize_tick_client
 	 nop
 	clr		%l6
@@ -508,6 +505,10 @@ xcall_report_regs:
 	sethi		%hi(109f), %g7
 	b,pt		%xcc, etrap_irq
 109:	 or		%g7, %lo(109b), %g7
+#ifdef CONFIG_TRACE_IRQFLAGS
+	call		trace_hardirqs_off
+	 nop
+#endif
 	call		__show_regs
 	 add		%sp, PTREGS_OFF, %o0
 	clr		%l6
