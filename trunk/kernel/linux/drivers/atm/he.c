@@ -109,7 +109,7 @@ static int he_open(struct atm_vcc *vcc);
 static void he_close(struct atm_vcc *vcc);
 static int he_send(struct atm_vcc *vcc, struct sk_buff *skb);
 static int he_ioctl(struct atm_dev *dev, unsigned int cmd, void __user *arg);
-static irqreturn_t he_irq_handler(int irq, void *dev_id, struct pt_regs *regs);
+static irqreturn_t he_irq_handler(int irq, void *dev_id);
 static void he_tasklet(unsigned long data);
 static int he_proc_read(struct atm_dev *dev,loff_t *pos,char *page);
 static int he_start(struct atm_dev *dev);
@@ -383,19 +383,22 @@ he_init_one(struct pci_dev *pci_dev, const struct pci_device_id *pci_ent)
 	}
 	pci_set_drvdata(pci_dev, atm_dev);
 
-	he_dev = (struct he_dev *) kmalloc(sizeof(struct he_dev),
+	he_dev = kzalloc(sizeof(struct he_dev),
 							GFP_KERNEL);
 	if (!he_dev) {
 		err = -ENOMEM;
 		goto init_one_failure;
 	}
-	memset(he_dev, 0, sizeof(struct he_dev));
-
 	he_dev->pci_dev = pci_dev;
 	he_dev->atm_dev = atm_dev;
 	he_dev->atm_dev->dev_data = he_dev;
 	atm_dev->dev_data = he_dev;
 	he_dev->number = atm_dev->number;
+#ifdef USE_TASKLET
+	tasklet_init(&he_dev->tasklet, he_tasklet, (unsigned long) he_dev);
+#endif
+	spin_lock_init(&he_dev->global_lock);
+
 	if (he_start(atm_dev)) {
 		he_stop(he_dev);
 		err = -ENODEV;
@@ -454,7 +457,7 @@ rate_to_atmf(unsigned rate)		/* cps to atm forum format */
 	return (NONZERO | (exp << 9) | (rate & 0x1ff));
 }
 
-static void __init
+static void __devinit
 he_init_rx_lbfp0(struct he_dev *he_dev)
 {
 	unsigned i, lbm_offset, lbufd_index, lbuf_addr, lbuf_count;
@@ -485,7 +488,7 @@ he_init_rx_lbfp0(struct he_dev *he_dev)
 	he_writel(he_dev, he_dev->r0_numbuffs, RLBF0_C);
 }
 
-static void __init
+static void __devinit
 he_init_rx_lbfp1(struct he_dev *he_dev)
 {
 	unsigned i, lbm_offset, lbufd_index, lbuf_addr, lbuf_count;
@@ -516,7 +519,7 @@ he_init_rx_lbfp1(struct he_dev *he_dev)
 	he_writel(he_dev, he_dev->r1_numbuffs, RLBF1_C);
 }
 
-static void __init
+static void __devinit
 he_init_tx_lbfp(struct he_dev *he_dev)
 {
 	unsigned i, lbm_offset, lbufd_index, lbuf_addr, lbuf_count;
@@ -546,7 +549,7 @@ he_init_tx_lbfp(struct he_dev *he_dev)
 	he_writel(he_dev, lbufd_index - 1, TLBF_T);
 }
 
-static int __init
+static int __devinit
 he_init_tpdrq(struct he_dev *he_dev)
 {
 	he_dev->tpdrq_base = pci_alloc_consistent(he_dev->pci_dev,
@@ -568,7 +571,7 @@ he_init_tpdrq(struct he_dev *he_dev)
 	return 0;
 }
 
-static void __init
+static void __devinit
 he_init_cs_block(struct he_dev *he_dev)
 {
 	unsigned clock, rate, delta;
@@ -664,7 +667,7 @@ he_init_cs_block(struct he_dev *he_dev)
 
 }
 
-static int __init
+static int __devinit
 he_init_cs_block_rcm(struct he_dev *he_dev)
 {
 	unsigned (*rategrid)[16][16];
@@ -785,7 +788,7 @@ he_init_cs_block_rcm(struct he_dev *he_dev)
 	return 0;
 }
 
-static int __init
+static int __devinit
 he_init_group(struct he_dev *he_dev, int group)
 {
 	int i;
@@ -822,7 +825,7 @@ he_init_group(struct he_dev *he_dev, int group)
 		void *cpuaddr;
 
 #ifdef USE_RBPS_POOL 
-		cpuaddr = pci_pool_alloc(he_dev->rbps_pool, SLAB_KERNEL|SLAB_DMA, &dma_handle);
+		cpuaddr = pci_pool_alloc(he_dev->rbps_pool, GFP_KERNEL|GFP_DMA, &dma_handle);
 		if (cpuaddr == NULL)
 			return -ENOMEM;
 #else
@@ -886,7 +889,7 @@ he_init_group(struct he_dev *he_dev, int group)
 		void *cpuaddr;
 
 #ifdef USE_RBPL_POOL
-		cpuaddr = pci_pool_alloc(he_dev->rbpl_pool, SLAB_KERNEL|SLAB_DMA, &dma_handle);
+		cpuaddr = pci_pool_alloc(he_dev->rbpl_pool, GFP_KERNEL|GFP_DMA, &dma_handle);
 		if (cpuaddr == NULL)
 			return -ENOMEM;
 #else
@@ -955,7 +958,7 @@ he_init_group(struct he_dev *he_dev, int group)
 	return 0;
 }
 
-static int __init
+static int __devinit
 he_init_irq(struct he_dev *he_dev)
 {
 	int i;
@@ -1174,11 +1177,6 @@ he_start(struct atm_dev *dev)
 	/* 4.10 initialize the interrupt queues */
 	if ((err = he_init_irq(he_dev)) != 0)
 		return err;
-
-#ifdef USE_TASKLET
-	tasklet_init(&he_dev->tasklet, he_tasklet, (unsigned long) he_dev);
-#endif
-	spin_lock_init(&he_dev->global_lock);
 
 	/* 4.11 enable pci bus controller state machines */
 	host_cntl |= (OUTFF_ENB | CMDFF_ENB |
@@ -1726,7 +1724,7 @@ __alloc_tpd(struct he_dev *he_dev)
 	struct he_tpd *tpd;
 	dma_addr_t dma_handle; 
 
-	tpd = pci_pool_alloc(he_dev->tpd_pool, SLAB_ATOMIC|SLAB_DMA, &dma_handle);              
+	tpd = pci_pool_alloc(he_dev->tpd_pool, GFP_ATOMIC|GFP_DMA, &dma_handle);
 	if (tpd == NULL)
 		return NULL;
 			
@@ -1903,16 +1901,16 @@ he_service_rbrq(struct he_dev *he_dev, int group)
 			case ATM_AAL0:
 				/* 2.10.1.5 raw cell receive */
 				skb->len = ATM_AAL0_SDU;
-				skb->tail = skb->data + skb->len;
+				skb_set_tail_pointer(skb, skb->len);
 				break;
 			case ATM_AAL5:
 				/* 2.10.1.2 aal5 receive */
 
 				skb->len = AAL5_LEN(skb->data, he_vcc->pdu_len);
-				skb->tail = skb->data + skb->len;
+				skb_set_tail_pointer(skb, skb->len);
 #ifdef USE_CHECKSUM_HW
 				if (vcc->vpi == 0 && vcc->vci >= ATM_NOT_RSV_VCI) {
-					skb->ip_summed = CHECKSUM_HW;
+					skb->ip_summed = CHECKSUM_COMPLETE;
 					skb->csum = TCP_CKSUM(skb->data,
 							he_vcc->pdu_len);
 				}
@@ -2218,7 +2216,7 @@ he_tasklet(unsigned long data)
 }
 
 static irqreturn_t
-he_irq_handler(int irq, void *dev_id, struct pt_regs *regs)
+he_irq_handler(int irq, void *dev_id)
 {
 	unsigned long flags;
 	struct he_dev *he_dev = (struct he_dev * )dev_id;
@@ -2353,7 +2351,7 @@ he_open(struct atm_vcc *vcc)
 
 	cid = he_mkcid(he_dev, vpi, vci);
 
-	he_vcc = (struct he_vcc *) kmalloc(sizeof(struct he_vcc), GFP_ATOMIC);
+	he_vcc = kmalloc(sizeof(struct he_vcc), GFP_ATOMIC);
 	if (he_vcc == NULL) {
 		hprintk("unable to allocate he_vcc during open\n");
 		return -ENOMEM;
@@ -3019,7 +3017,7 @@ read_prom_byte(struct he_dev *he_dev, int addr)
 	he_writel(he_dev, val, HOST_CNTL);
        
 	/* Send READ instruction */
-	for (i = 0; i < sizeof(readtab)/sizeof(readtab[0]); i++) {
+	for (i = 0; i < ARRAY_SIZE(readtab); i++) {
 		he_writel(he_dev, val | readtab[i], HOST_CNTL);
 		udelay(EEPROM_DELAY);
 	}
