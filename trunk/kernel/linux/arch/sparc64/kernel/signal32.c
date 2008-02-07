@@ -17,7 +17,6 @@
 #include <linux/unistd.h>
 #include <linux/mm.h>
 #include <linux/tty.h>
-#include <linux/smp_lock.h>
 #include <linux/binfmts.h>
 #include <linux/compat.h>
 #include <linux/bitops.h>
@@ -29,6 +28,7 @@
 #include <asm/psrcompat.h>
 #include <asm/fpumacro.h>
 #include <asm/visasm.h>
+#include <asm/compat_signal.h>
 
 #define _BLOCKABLE (~(sigmask(SIGKILL) | sigmask(SIGSTOP)))
 

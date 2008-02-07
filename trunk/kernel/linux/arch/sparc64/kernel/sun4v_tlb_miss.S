@@ -142,9 +142,9 @@ sun4v_dtlb_prot:
 	rdpr	%tl, %g1
 	cmp	%g1, 1
 	bgu,pn	%xcc, winfix_trampoline
-	 nop
-	ba,pt	%xcc, sparc64_realfault_common
 	 mov	FAULT_CODE_DTLB | FAULT_CODE_WRITE, %g4
+	ba,pt	%xcc, sparc64_realfault_common
+	 nop
 
 	/* Called from trap table:
 	 * %g4:	vaddr
@@ -215,6 +215,7 @@ sun4v_itlb_error:
 
 1:	ba,pt	%xcc, etrap
 2:	 or	%g7, %lo(2b), %g7
+	mov	%l4, %o1
 	call	sun4v_itlb_error_report
 	 add	%sp, PTREGS_OFF, %o0
 
@@ -241,6 +242,7 @@ sun4v_dtlb_error:
 
 1:	ba,pt	%xcc, etrap
 2:	 or	%g7, %lo(2b), %g7
+	mov	%l4, %o1
 	call	sun4v_dtlb_error_report
 	 add	%sp, PTREGS_OFF, %o0
 

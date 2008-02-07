@@ -6,11 +6,11 @@
 
 #include <linux/module.h> 
 #include <linux/types.h>
-#include <linux/smp_lock.h>
 #include <linux/utsname.h>
 #include <linux/limits.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
+#include <linux/tty.h>
 #include <linux/mman.h>
 #include <linux/file.h>
 #include <linux/timex.h>
@@ -76,7 +76,7 @@ static u32 do_solaris_mmap(u32 addr, u32 len, u32 prot, u32 flags, u32 fd, u64 o
 		if (!file)
 			goto out;
 		else {
-			struct inode * inode = file->f_dentry->d_inode;
+			struct inode * inode = file->f_path.dentry->d_inode;
 			if(imajor(inode) == MEM_MAJOR &&
 			   iminor(inode) == 5) {
 				flags |= MAP_ANONYMOUS;
@@ -223,7 +223,8 @@ static char *serial(char *buffer, int sz)
 
 	*buffer = 0;
 	if (dp) {
-		char *val = of_get_property(dp, "system-board-serial#", &len);
+		const char *val =
+			of_get_property(dp, "system-board-serial#", &len);
 
 		if (val && len > 0) {
 			if (len > sz)
@@ -248,7 +249,7 @@ asmlinkage int solaris_utssys(u32 buf, u32 flags, int which, u32 buf2)
 		/* Let's cheat */
 		err  = set_utsfield(v->sysname, "SunOS", 1, 0);
 		down_read(&uts_sem);
-		err |= set_utsfield(v->nodename, system_utsname.nodename,
+		err |= set_utsfield(v->nodename, utsname()->nodename,
 				    1, 1);
 		up_read(&uts_sem);
 		err |= set_utsfield(v->release, "2.6", 0, 0);
@@ -272,7 +273,7 @@ asmlinkage int solaris_utsname(u32 buf)
 	/* Why should we not lie a bit? */
 	down_read(&uts_sem);
 	err  = set_utsfield(v->sysname, "SunOS", 0, 0);
-	err |= set_utsfield(v->nodename, system_utsname.nodename, 1, 1);
+	err |= set_utsfield(v->nodename, utsname()->nodename, 1, 1);
 	err |= set_utsfield(v->release, "5.6", 0, 0);
 	err |= set_utsfield(v->version, "Generic", 0, 0);
 	err |= set_utsfield(v->machine, machine(), 0, 0);
@@ -304,7 +305,7 @@ asmlinkage int solaris_sysinfo(int cmd, u32 buf, s32 count)
 	case SI_HOSTNAME:
 		r = buffer + 256;
 		down_read(&uts_sem);
-		for (p = system_utsname.nodename, q = buffer; 
+		for (p = utsname()->nodename, q = buffer;
 		     q < r && *p && *p != '.'; *q++ = *p++);
 		up_read(&uts_sem);
 		*q = 0;
@@ -362,8 +363,10 @@ asmlinkage int solaris_sysconf(int id)
 {
 	switch (id) {
 	case SOLARIS_CONFIG_NGROUPS:	return NGROUPS_MAX;
-	case SOLARIS_CONFIG_CHILD_MAX:	return -1; /* no limit */
-	case SOLARIS_CONFIG_OPEN_FILES:	return OPEN_MAX;
+	case SOLARIS_CONFIG_CHILD_MAX:
+		return current->signal->rlim[RLIMIT_NPROC].rlim_cur;
+	case SOLARIS_CONFIG_OPEN_FILES:
+		return current->signal->rlim[RLIMIT_NOFILE].rlim_cur;
 	case SOLARIS_CONFIG_POSIX_VER:	return 199309;
 	case SOLARIS_CONFIG_PAGESIZE:	return PAGE_SIZE;
 	case SOLARIS_CONFIG_XOPEN_VER:	return 3;
@@ -412,7 +415,7 @@ asmlinkage int solaris_procids(int cmd, s32 pid, s32 pgid)
 	
 	switch (cmd) {
 	case 0: /* getpgrp */
-		return process_group(current);
+		return task_pgrp_nr(current);
 	case 1: /* setpgrp */
 		{
 			int (*sys_setpgid)(pid_t,pid_t) =
@@ -422,8 +425,8 @@ asmlinkage int solaris_procids(int cmd, s32 pid, s32 pgid)
 			   Solaris setpgrp and setsid? */
 			ret = sys_setpgid(0, 0);
 			if (ret) return ret;
-			current->signal->tty = NULL;
-			return process_group(current);
+			proc_clear_tty(current);
+			return task_pgrp_nr(current);
 		}
 	case 2: /* getsid */
 		{
@@ -736,20 +739,15 @@ struct exec_domain solaris_exec_domain = {
 
 extern int init_socksys(void);
 
-#ifdef MODULE
-
 MODULE_AUTHOR("Jakub Jelinek (jj@ultra.linux.cz), Patrik Rak (prak3264@ss1000.ms.mff.cuni.cz)");
 MODULE_DESCRIPTION("Solaris binary emulation module");
 MODULE_LICENSE("GPL");
 
-#ifdef __sparc_v9__
 extern u32 tl0_solaris[8];
 #define update_ttable(x) 										\
 	tl0_solaris[3] = (((long)(x) - (long)tl0_solaris - 3) >> 2) | 0x40000000;			\
 	wmb();		\
 	__asm__ __volatile__ ("flush %0" : : "r" (&tl0_solaris[3]))
-#else
-#endif	
 
 extern u32 solaris_sparc_syscall[];
 extern u32 solaris_syscall[];
@@ -757,7 +755,7 @@ extern void cleanup_socksys(void);
 
 extern u32 entry64_personality_patch;
 
-int init_module(void)
+static int __init solaris_init(void)
 {
 	int ret;
 
@@ -777,19 +775,12 @@ int init_module(void)
 	return 0;
 }
 
-void cleanup_module(void)
+static void __exit solaris_exit(void)
 {
 	update_ttable(solaris_syscall);
 	cleanup_socksys();
 	unregister_exec_domain(&solaris_exec_domain);
 }
 
-#else
-int init_solaris_emul(void)
-{
-	register_exec_domain(&solaris_exec_domain);
-	init_socksys();
-	return 0;
-}
-#endif
-
+module_init(solaris_init);
+module_exit(solaris_exit);
