@@ -398,10 +398,10 @@ static inline uint32_t get_pending_intrs(struct ioc3_driver_data *idd)
 	return intrs;
 }
 
-static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t ioc3_intr_io(int irq, void *arg)
 {
 	unsigned long flags;
-	struct ioc3_driver_data *idd = (struct ioc3_driver_data *)arg;
+	struct ioc3_driver_data *idd = arg;
 	int handled = 1, id;
 	unsigned int pending;
 
@@ -412,7 +412,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 		if(ioc3_ethernet && idd->active[ioc3_ethernet->id] &&
 						ioc3_ethernet->intr) {
 			handled = handled && !ioc3_ethernet->intr(ioc3_ethernet,
-							idd, 0, regs);
+							idd, 0);
 		}
 	}
 	pending = get_pending_intrs(idd);	/* look at the IO IRQs */
@@ -424,8 +424,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 			write_ireg(idd, ioc3_submodules[id]->irq_mask,
 							IOC3_W_IEC);
 			if(!ioc3_submodules[id]->intr(ioc3_submodules[id],
-				   idd, pending & ioc3_submodules[id]->irq_mask,
-					regs))
+				   idd, pending & ioc3_submodules[id]->irq_mask))
 				pending &= ~ioc3_submodules[id]->irq_mask;
 			if (ioc3_submodules[id]->reset_mask)
 				write_ireg(idd, ioc3_submodules[id]->irq_mask,
@@ -442,7 +441,7 @@ static irqreturn_t ioc3_intr_io(int irq, void *arg, struct pt_regs *regs)
 	return handled?IRQ_HANDLED:IRQ_NONE;
 }
 
-static irqreturn_t ioc3_intr_eth(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t ioc3_intr_eth(int irq, void *arg)
 {
 	unsigned long flags;
 	struct ioc3_driver_data *idd = (struct ioc3_driver_data *)arg;
@@ -453,8 +452,7 @@ static irqreturn_t ioc3_intr_eth(int irq, void *arg, struct pt_regs *regs)
 	read_lock_irqsave(&ioc3_submodules_lock, flags);
 	if(ioc3_ethernet && idd->active[ioc3_ethernet->id]
 				&& ioc3_ethernet->intr)
-		handled = handled && !ioc3_ethernet->intr(ioc3_ethernet, idd, 0,
-								regs);
+		handled = handled && !ioc3_ethernet->intr(ioc3_ethernet, idd, 0);
 	read_unlock_irqrestore(&ioc3_submodules_lock, flags);
 	return handled?IRQ_HANDLED:IRQ_NONE;
 }
@@ -631,7 +629,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 #endif
 
 	/* Set up per-IOC3 data */
-	idd = kmalloc(sizeof(struct ioc3_driver_data), GFP_KERNEL);
+	idd = kzalloc(sizeof(struct ioc3_driver_data), GFP_KERNEL);
 	if (!idd) {
 		printk(KERN_WARNING
 		       "%s: Failed to allocate IOC3 data for pci_dev %s.\n",
@@ -639,7 +637,6 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		ret = -ENODEV;
 		goto out_idd;
 	}
-	memset(idd, 0, sizeof(struct ioc3_driver_data));
 	spin_lock_init(&idd->ir_lock);
 	spin_lock_init(&idd->gpio_lock);
 	idd->pdev = pdev;
@@ -656,7 +653,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 		ret = -ENODEV;
 		goto out_pci;
 	}
-	if (!request_region(idd->pma, IOC3_PCI_SIZE, "ioc3")) {
+	if (!request_mem_region(idd->pma, IOC3_PCI_SIZE, "ioc3")) {
 		printk(KERN_WARNING
 		       "%s: Unable to request IOC3 region "
 		       "for pci_dev %s.\n",
@@ -746,7 +743,7 @@ static int ioc3_probe(struct pci_dev *pdev, const struct pci_device_id *pci_id)
 	return 0;
 
 out_misc_region:
-	release_region(idd->pma, IOC3_PCI_SIZE);
+	release_mem_region(idd->pma, IOC3_PCI_SIZE);
 out_pci:
 	kfree(idd);
 out_idd:
@@ -787,7 +784,7 @@ static void ioc3_remove(struct pci_dev *pdev)
 	if(idd->dual_irq)
 		free_irq(idd->irq_eth, (void *)idd);
 	iounmap(idd->vma);
-	release_region(idd->pma, IOC3_PCI_SIZE);
+	release_mem_region(idd->pma, IOC3_PCI_SIZE);
 
 	/* Disable IOC3 and relinquish */
 	pci_disable_device(pdev);
