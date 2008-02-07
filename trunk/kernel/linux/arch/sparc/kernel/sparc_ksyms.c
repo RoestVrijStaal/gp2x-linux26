@@ -83,10 +83,8 @@ extern int __divdi3(int, int);
 /* Private functions with odd calling conventions. */
 extern void ___atomic24_add(void);
 extern void ___atomic24_sub(void);
-extern void ___set_bit(void);
-extern void ___clear_bit(void);
-extern void ___change_bit(void);
 extern void ___rw_read_enter(void);
+extern void ___rw_read_try(void);
 extern void ___rw_read_exit(void);
 extern void ___rw_write_enter(void);
 
@@ -104,8 +102,9 @@ extern unsigned _Urem(unsigned, unsigned);
 EXPORT_SYMBOL(sparc_cpu_model);
 EXPORT_SYMBOL(kernel_thread);
 #ifdef CONFIG_SMP
-// XXX find what uses (or used) these.
+// XXX find what uses (or used) these.   AV: see asm/spinlock.h
 EXPORT_SYMBOL(___rw_read_enter);
+EXPORT_SYMBOL(___rw_read_try);
 EXPORT_SYMBOL(___rw_read_exit);
 EXPORT_SYMBOL(___rw_write_enter);
 #endif
@@ -122,11 +121,6 @@ EXPORT_SYMBOL(pfn_base);
 /* Atomic operations. */
 EXPORT_SYMBOL(___atomic24_add);
 EXPORT_SYMBOL(___atomic24_sub);
-
-/* Bit operations. */
-EXPORT_SYMBOL(___set_bit);
-EXPORT_SYMBOL(___clear_bit);
-EXPORT_SYMBOL(___change_bit);
 
 /* Per-CPU information table */
 EXPORT_PER_CPU_SYMBOL(__cpu_data);
@@ -149,7 +143,6 @@ EXPORT_SYMBOL(mstk48t02_regs);
 EXPORT_SYMBOL(set_auxio);
 EXPORT_SYMBOL(get_auxio);
 #endif
-EXPORT_SYMBOL(request_fast_irq);
 EXPORT_SYMBOL(io_remap_pfn_range);
   /* P3: iounit_xxx may be needed, sun4d users */
 /* EXPORT_SYMBOL(iounit_map_dma_init); */
@@ -160,14 +153,14 @@ EXPORT_SYMBOL(BTFIXUP_CALL(___xchg32));
 #else
 EXPORT_SYMBOL(BTFIXUP_CALL(__hard_smp_processor_id));
 #endif
-EXPORT_SYMBOL(BTFIXUP_CALL(enable_irq));
-EXPORT_SYMBOL(BTFIXUP_CALL(disable_irq));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_unlockarea));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_lockarea));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_get_scsi_sgl));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_get_scsi_one));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_release_scsi_sgl));
 EXPORT_SYMBOL(BTFIXUP_CALL(mmu_release_scsi_one));
+
+EXPORT_SYMBOL(BTFIXUP_CALL(pgprot_noncached));
 
 #ifdef CONFIG_SBUS
 EXPORT_SYMBOL(sbus_root);
@@ -268,6 +261,7 @@ EXPORT_SYMBOL(__memmove);
 /* Moving data to/from userspace. */
 EXPORT_SYMBOL(__copy_user);
 EXPORT_SYMBOL(__strncpy_from_user);
+EXPORT_SYMBOL(__strnlen_user);
 
 /* Networking helper routines. */
 EXPORT_SYMBOL(__csum_partial_copy_sparc_generic);
