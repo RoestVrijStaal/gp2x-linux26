@@ -7,7 +7,7 @@
  *		2 of the License, or (at your option) any later version.
  *
  * Authors:	Thomas Graf <tgraf@suug.ch>
- * 		Pablo Neira Ayuso <pablo@eurodev.net>
+ * 		Pablo Neira Ayuso <pablo@netfilter.org>
  *
  * ==========================================================================
  *
@@ -40,7 +40,7 @@
  *       configuration according to the specified parameters.
  *   (3) User starts the search(es) by calling _find() or _next() to
  *       fetch subsequent occurrences. A state variable is provided
- *       to the algorihtm to store persistant variables.
+ *       to the algorithm to store persistent variables.
  *   (4) Core eventually resets the search offset and forwards the find()
  *       request to the algorithm.
  *   (5) Algorithm calls get_next_block() provided by the user continously
@@ -218,7 +218,7 @@ static unsigned int get_linear_data(unsigned int consumed, const u8 **dst,
  * Call textsearch_next() to retrieve subsequent matches.
  *
  * Returns the position of first occurrence of the pattern or
- * UINT_MAX if no occurrence was found.
+ * %UINT_MAX if no occurrence was found.
  */ 
 unsigned int textsearch_find_continuous(struct ts_config *conf,
 					struct ts_state *state,
@@ -250,7 +250,8 @@ unsigned int textsearch_find_continuous(struct ts_config *conf,
  *       the various search algorithms.
  *
  * Returns a new textsearch configuration according to the specified
- *         parameters or a ERR_PTR().
+ * parameters or a ERR_PTR(). If a zero length pattern is passed, this
+ * function returns EINVAL.
  */
 struct ts_config *textsearch_prepare(const char *algo, const void *pattern,
 				     unsigned int len, gfp_t gfp_mask, int flags)
@@ -259,6 +260,9 @@ struct ts_config *textsearch_prepare(const char *algo, const void *pattern,
 	struct ts_config *conf;
 	struct ts_ops *ops;
 	
+	if (len == 0)
+		return ERR_PTR(-EINVAL);
+
 	ops = lookup_ts_algo(algo);
 #ifdef CONFIG_KMOD
 	/*
