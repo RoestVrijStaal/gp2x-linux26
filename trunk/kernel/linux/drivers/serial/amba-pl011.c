@@ -107,12 +107,7 @@ static void pl011_enable_ms(struct uart_port *port)
 	writew(uap->im, uap->port.membase + UART011_IMSC);
 }
 
-static void
-#ifdef SUPPORT_SYSRQ
-pl011_rx_chars(struct uart_amba_port *uap, struct pt_regs *regs)
-#else
-pl011_rx_chars(struct uart_amba_port *uap)
-#endif
+static void pl011_rx_chars(struct uart_amba_port *uap)
 {
 	struct tty_struct *tty = uap->port.info->tty;
 	unsigned int status, ch, flag, max_count = 256;
@@ -150,7 +145,7 @@ pl011_rx_chars(struct uart_amba_port *uap)
 				flag = TTY_FRAME;
 		}
 
-		if (uart_handle_sysrq_char(&uap->port, ch & 255, regs))
+		if (uart_handle_sysrq_char(&uap->port, ch & 255))
 			goto ignore_char;
 
 		uart_insert_char(&uap->port, ch, UART011_DR_OE, ch, flag);
@@ -158,8 +153,9 @@ pl011_rx_chars(struct uart_amba_port *uap)
 	ignore_char:
 		status = readw(uap->port.membase + UART01x_FR);
 	}
+	spin_unlock(&uap->port.lock);
 	tty_flip_buffer_push(tty);
-	return;
+	spin_lock(&uap->port.lock);
 }
 
 static void pl011_tx_chars(struct uart_amba_port *uap)
@@ -218,7 +214,7 @@ static void pl011_modem_status(struct uart_amba_port *uap)
 	wake_up_interruptible(&uap->port.info->delta_msr_wait);
 }
 
-static irqreturn_t pl011_int(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t pl011_int(int irq, void *dev_id)
 {
 	struct uart_amba_port *uap = dev_id;
 	unsigned int status, pass_counter = AMBA_ISR_PASS_LIMIT;
@@ -234,11 +230,7 @@ static irqreturn_t pl011_int(int irq, void *dev_id, struct pt_regs *regs)
 			       uap->port.membase + UART011_ICR);
 
 			if (status & (UART011_RTIS|UART011_RXIS))
-#ifdef SUPPORT_SYSRQ
-				pl011_rx_chars(uap, regs);
-#else
 				pl011_rx_chars(uap);
-#endif
 			if (status & (UART011_DSRMIS|UART011_DCDMIS|
 				      UART011_CTSMIS|UART011_RIMIS))
 				pl011_modem_status(uap);
@@ -271,15 +263,15 @@ static unsigned int pl01x_get_mctrl(struct uart_port *port)
 	unsigned int result = 0;
 	unsigned int status = readw(uap->port.membase + UART01x_FR);
 
-#define BIT(uartbit, tiocmbit)		\
+#define TIOCMBIT(uartbit, tiocmbit)	\
 	if (status & uartbit)		\
 		result |= tiocmbit
 
-	BIT(UART01x_FR_DCD, TIOCM_CAR);
-	BIT(UART01x_FR_DSR, TIOCM_DSR);
-	BIT(UART01x_FR_CTS, TIOCM_CTS);
-	BIT(UART011_FR_RI, TIOCM_RNG);
-#undef BIT
+	TIOCMBIT(UART01x_FR_DCD, TIOCM_CAR);
+	TIOCMBIT(UART01x_FR_DSR, TIOCM_DSR);
+	TIOCMBIT(UART01x_FR_CTS, TIOCM_CTS);
+	TIOCMBIT(UART011_FR_RI, TIOCM_RNG);
+#undef TIOCMBIT
 	return result;
 }
 
@@ -290,18 +282,18 @@ static void pl011_set_mctrl(struct uart_port *port, unsigned int mctrl)
 
 	cr = readw(uap->port.membase + UART011_CR);
 
-#define	BIT(tiocmbit, uartbit)		\
+#define	TIOCMBIT(tiocmbit, uartbit)		\
 	if (mctrl & tiocmbit)		\
 		cr |= uartbit;		\
 	else				\
 		cr &= ~uartbit
 
-	BIT(TIOCM_RTS, UART011_CR_RTS);
-	BIT(TIOCM_DTR, UART011_CR_DTR);
-	BIT(TIOCM_OUT1, UART011_CR_OUT1);
-	BIT(TIOCM_OUT2, UART011_CR_OUT2);
-	BIT(TIOCM_LOOP, UART011_CR_LBE);
-#undef BIT
+	TIOCMBIT(TIOCM_RTS, UART011_CR_RTS);
+	TIOCMBIT(TIOCM_DTR, UART011_CR_DTR);
+	TIOCMBIT(TIOCM_OUT1, UART011_CR_OUT1);
+	TIOCMBIT(TIOCM_OUT2, UART011_CR_OUT2);
+	TIOCMBIT(TIOCM_LOOP, UART011_CR_LBE);
+#undef TIOCMBIT
 
 	writew(cr, uap->port.membase + UART011_CR);
 }
@@ -421,8 +413,8 @@ static void pl011_shutdown(struct uart_port *port)
 }
 
 static void
-pl011_set_termios(struct uart_port *port, struct termios *termios,
-		     struct termios *old)
+pl011_set_termios(struct uart_port *port, struct ktermios *termios,
+		     struct ktermios *old)
 {
 	unsigned int lcr_h, old_cr;
 	unsigned long flags;
@@ -670,6 +662,8 @@ static int __init pl011_console_setup(struct console *co, char *options)
 	if (co->index >= UART_NR)
 		co->index = 0;
 	uap = amba_ports[co->index];
+	if (!uap)
+		return -ENODEV;
 
 	uap->port.uartclk = clk_get_rate(uap->clk);
 
@@ -722,7 +716,7 @@ static int pl011_probe(struct amba_device *dev, void *id)
 		goto out;
 	}
 
-	uap = kmalloc(sizeof(struct uart_amba_port), GFP_KERNEL);
+	uap = kzalloc(sizeof(struct uart_amba_port), GFP_KERNEL);
 	if (uap == NULL) {
 		ret = -ENOMEM;
 		goto out;
@@ -734,7 +728,6 @@ static int pl011_probe(struct amba_device *dev, void *id)
 		goto free;
 	}
 
-	memset(uap, 0, sizeof(struct uart_amba_port));
 	uap->clk = clk_get(&dev->dev, "UARTCLK");
 	if (IS_ERR(uap->clk)) {
 		ret = PTR_ERR(uap->clk);

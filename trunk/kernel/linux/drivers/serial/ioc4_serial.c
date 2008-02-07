@@ -921,7 +921,7 @@ static void handle_dma_error_intr(void *arg, uint32_t other_ir)
 {
 	struct ioc4_port *port = (struct ioc4_port *)arg;
 	struct hooks *hooks = port->ip_hooks;
-	unsigned int flags;
+	unsigned long flags;
 
 	spin_lock_irqsave(&port->ip_lock, flags);
 
@@ -987,10 +987,9 @@ intr_connect(struct ioc4_soft *soft, int type,
  * ioc4_intr - Top level IOC4 interrupt handler.
  * @irq: irq value
  * @arg: handler arg
- * @regs: registers
  */
 
-static irqreturn_t ioc4_intr(int irq, void *arg, struct pt_regs *regs)
+static irqreturn_t ioc4_intr(int irq, void *arg)
 {
 	struct ioc4_soft *soft;
 	uint32_t this_ir, this_mir;
@@ -1077,13 +1076,12 @@ static int inline ioc4_attach_local(struct ioc4_driver_data *idd)
 	/* Create port structures for each port */
 	for (port_number = 0; port_number < IOC4_NUM_SERIAL_PORTS;
 							port_number++) {
-		port = kmalloc(sizeof(struct ioc4_port), GFP_KERNEL);
+		port = kzalloc(sizeof(struct ioc4_port), GFP_KERNEL);
 		if (!port) {
 			printk(KERN_WARNING
 				"IOC4 serial memory not available for port\n");
 			return -ENOMEM;
 		}
-		memset(port, 0, sizeof(struct ioc4_port));
 		spin_lock_init(&port->ip_lock);
 
 		/* we need to remember the previous ones, to point back to
@@ -1682,7 +1680,7 @@ static void transmit_chars(struct uart_port *the_port)
  */
 static void
 ioc4_change_speed(struct uart_port *the_port,
-		  struct termios *new_termios, struct termios *old_termios)
+		  struct ktermios *new_termios, struct ktermios *old_termios)
 {
 	struct ioc4_port *port = get_ioc4_port(the_port, 0);
 	int baud, bits;
@@ -1803,7 +1801,7 @@ static inline int ic4_startup_local(struct uart_port *the_port)
 	ioc4_set_proto(port, the_port->mapbase);
 
 	/* set the speed of the serial port */
-	ioc4_change_speed(the_port, info->tty->termios, (struct termios *)0);
+	ioc4_change_speed(the_port, info->tty->termios, (struct ktermios *)0);
 
 	return 0;
 }
@@ -1835,7 +1833,7 @@ static void handle_intr(void *arg, uint32_t sio_ir)
 	struct ioc4_port *port = (struct ioc4_port *)arg;
 	struct hooks *hooks = port->ip_hooks;
 	unsigned int rx_high_rd_aborted = 0;
-	unsigned int flags;
+	unsigned long flags;
 	struct uart_port *the_port;
 	int loop_counter;
 
@@ -2571,7 +2569,7 @@ static int ic4_startup(struct uart_port *the_port)
  */
 static void
 ic4_set_termios(struct uart_port *the_port,
-		struct termios *termios, struct termios *old_termios)
+		struct ktermios *termios, struct ktermios *old_termios)
 {
 	unsigned long port_flags;
 
@@ -2685,7 +2683,8 @@ static int ioc4_serial_remove_one(struct ioc4_driver_data *idd)
 	if (soft) {
 		free_irq(control->ic_irq, soft);
 		if (soft->is_ioc4_serial_addr) {
-			release_region((unsigned long)
+			iounmap(soft->is_ioc4_serial_addr);
+			release_mem_region((unsigned long)
 			     soft->is_ioc4_serial_addr,
 				sizeof(struct ioc4_serial));
 		}
@@ -2790,7 +2789,7 @@ ioc4_serial_attach_one(struct ioc4_driver_data *idd)
 	/* request serial registers */
 	tmp_addr1 = idd->idd_bar0 + IOC4_SERIAL_OFFSET;
 
-	if (!request_region(tmp_addr1, sizeof(struct ioc4_serial),
+	if (!request_mem_region(tmp_addr1, sizeof(struct ioc4_serial),
 					"sioc4_uart")) {
 		printk(KERN_WARNING
 			"ioc4 (%p): unable to get request region for "
@@ -2811,7 +2810,7 @@ ioc4_serial_attach_one(struct ioc4_driver_data *idd)
 				(void *)serial));
 
 	/* Get memory for the new card */
-	control = kmalloc(sizeof(struct ioc4_control), GFP_KERNEL);
+	control = kzalloc(sizeof(struct ioc4_control), GFP_KERNEL);
 
 	if (!control) {
 		printk(KERN_WARNING "ioc4_attach_one"
@@ -2819,11 +2818,10 @@ ioc4_serial_attach_one(struct ioc4_driver_data *idd)
 		ret = -ENOMEM;
 		goto out2;
 	}
-	memset(control, 0, sizeof(struct ioc4_control));
 	idd->idd_serial_data = control;
 
 	/* Allocate the soft structure */
-	soft = kmalloc(sizeof(struct ioc4_soft), GFP_KERNEL);
+	soft = kzalloc(sizeof(struct ioc4_soft), GFP_KERNEL);
 	if (!soft) {
 		printk(KERN_WARNING
 		       "ioc4 (%p): unable to get memory for the soft struct\n",
@@ -2831,7 +2829,6 @@ ioc4_serial_attach_one(struct ioc4_driver_data *idd)
 		ret = -ENOMEM;
 		goto out3;
 	}
-	memset(soft, 0, sizeof(struct ioc4_soft));
 
 	spin_lock_init(&soft->is_ir_lock);
 	soft->is_ioc4_misc_addr = idd->idd_misc_regs;
@@ -2887,7 +2884,9 @@ out4:
 out3:
 	kfree(control);
 out2:
-	release_region(tmp_addr1, sizeof(struct ioc4_serial));
+	if (serial)
+		iounmap(serial);
+	release_mem_region(tmp_addr1, sizeof(struct ioc4_serial));
 out1:
 
 	return ret;
@@ -2933,7 +2932,7 @@ static void __devexit ioc4_serial_exit(void)
 	uart_unregister_driver(&ioc4_uart_rs422);
 }
 
-module_init(ioc4_serial_init);
+late_initcall(ioc4_serial_init); /* Call only after tty init is done */
 module_exit(ioc4_serial_exit);
 
 MODULE_AUTHOR("Pat Gefre - Silicon Graphics Inc. (SGI) <pfg@sgi.com>");

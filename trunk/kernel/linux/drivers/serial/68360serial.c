@@ -612,7 +612,7 @@ static _INLINE_ void check_modem_status(struct async_struct *info)
  * This is the serial driver's interrupt routine for a single port
  */
 /* static void rs_360_interrupt(void *dev_id) */ /* until and if we start servicing irqs here */
-static void rs_360_interrupt(int vec, void *dev_id, struct pt_regs *fp)
+static void rs_360_interrupt(int vec, void *dev_id)
 {
 	u_char	events;
 	int	idx;
@@ -620,7 +620,7 @@ static void rs_360_interrupt(int vec, void *dev_id, struct pt_regs *fp)
 	volatile struct smc_regs *smcp;
 	volatile struct scc_regs *sccp;
 	
-	info = (ser_info_t *)dev_id;
+	info = dev_id;
 
 	idx = PORT_NUM(info->state->smc_scc_num);
 	if (info->state->smc_scc_num & NUM_IS_SCC) {
@@ -934,8 +934,6 @@ static void change_speed(ser_info_t *info)
 	/*
 	 * Set up parity check flag
 	 */
-#define RELEVANT_IFLAG(iflag) (iflag & (IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK))
-
 	info->read_status_mask = (BD_SC_EMPTY | BD_SC_OV);
 	if (I_INPCK(info->tty))
 		info->read_status_mask |= BD_SC_FR | BD_SC_PR;
@@ -1523,14 +1521,9 @@ static int rs_360_ioctl(struct tty_struct *tty, struct file * file,
 
 /* FIX UP modem control here someday......
 */
-static void rs_360_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void rs_360_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
 	ser_info_t *info = (ser_info_t *)tty->driver_data;
-
-	if (   (tty->termios->c_cflag == old_termios->c_cflag)
-	    && (   RELEVANT_IFLAG(tty->termios->c_iflag) 
-		== RELEVANT_IFLAG(old_termios->c_iflag)))
-	  return;
 
 	change_speed(info);
 
@@ -2424,7 +2417,7 @@ long console_360_init(long kmem_start, long kmem_end)
 */
 static	int	baud_idx;
 
-static struct tty_operations rs_360_ops = {
+static const struct tty_operations rs_360_ops = {
 	.owner = THIS_MODULE,
 	.open = rs_360_open,
 	.close = rs_360_close,

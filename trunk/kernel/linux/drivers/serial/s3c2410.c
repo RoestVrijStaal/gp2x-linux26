@@ -20,8 +20,8 @@
  *		     - S3C2410 and S3C2440 serial support
  *		     - Power Management support
  *		     - Fix console via IrDA devices
- *		     - SysReq (Herbert Pötzl)
- *		     - Break character handling (Herbert Pötzl)
+ *		     - SysReq (Herbert PÃ¶tzl)
+ *		     - Break character handling (Herbert PÃ¶tzl)
  *		     - spin-lock initialisation (Dimitry Andric)
  *		     - added clock control
  *		     - updated init code to use platform_device info
@@ -78,7 +78,7 @@
 
 #include <asm/hardware.h>
 
-#include <asm/arch/regs-serial.h>
+#include <asm/plat-s3c/regs-serial.h>
 #include <asm/arch/regs-gpio.h>
 
 /* structures */
@@ -310,7 +310,7 @@ static int s3c24xx_serial_rx_fifocnt(struct s3c24xx_uart_port *ourport,
 #define S3C2410_UERSTAT_PARITY (0x1000)
 
 static irqreturn_t
-s3c24xx_serial_rx_chars(int irq, void *dev_id, struct pt_regs *regs)
+s3c24xx_serial_rx_chars(int irq, void *dev_id)
 {
 	struct s3c24xx_uart_port *ourport = dev_id;
 	struct uart_port *port = &ourport->port;
@@ -379,7 +379,7 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id, struct pt_regs *regs)
 				flag = TTY_FRAME;
 		}
 
-		if (uart_handle_sysrq_char(port, ch, regs))
+		if (uart_handle_sysrq_char(port, ch))
 			goto ignore_char;
 
 		uart_insert_char(port, uerstat, S3C2410_UERSTAT_OVERRUN, ch, flag);
@@ -393,7 +393,7 @@ s3c24xx_serial_rx_chars(int irq, void *dev_id, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id, struct pt_regs *regs)
+static irqreturn_t s3c24xx_serial_tx_chars(int irq, void *id)
 {
 	struct s3c24xx_uart_port *ourport = id;
 	struct uart_port *port = &ourport->port;
@@ -738,8 +738,8 @@ static unsigned int s3c24xx_serial_getclk(struct uart_port *port,
 }
 
 static void s3c24xx_serial_set_termios(struct uart_port *port,
-				       struct termios *termios,
-				       struct termios *old)
+				       struct ktermios *termios,
+				       struct ktermios *old)
 {
 	struct s3c2410_uartcfg *cfg = s3c24xx_port_to_cfg(port);
 	struct s3c24xx_uart_port *ourport = to_ourport(port);
@@ -957,7 +957,7 @@ static struct uart_driver s3c24xx_uart_drv = {
 static struct s3c24xx_uart_port s3c24xx_serial_ports[NR_PORTS] = {
 	[0] = {
 		.port = {
-			.lock		= SPIN_LOCK_UNLOCKED,
+			.lock		= __SPIN_LOCK_UNLOCKED(s3c24xx_serial_ports[0].port.lock),
 			.iotype		= UPIO_MEM,
 			.irq		= IRQ_S3CUART_RX0,
 			.uartclk	= 0,
@@ -969,7 +969,7 @@ static struct s3c24xx_uart_port s3c24xx_serial_ports[NR_PORTS] = {
 	},
 	[1] = {
 		.port = {
-			.lock		= SPIN_LOCK_UNLOCKED,
+			.lock		= __SPIN_LOCK_UNLOCKED(s3c24xx_serial_ports[1].port.lock),
 			.iotype		= UPIO_MEM,
 			.irq		= IRQ_S3CUART_RX1,
 			.uartclk	= 0,
@@ -983,7 +983,7 @@ static struct s3c24xx_uart_port s3c24xx_serial_ports[NR_PORTS] = {
 
 	[2] = {
 		.port = {
-			.lock		= SPIN_LOCK_UNLOCKED,
+			.lock		= __SPIN_LOCK_UNLOCKED(s3c24xx_serial_ports[2].port.lock),
 			.iotype		= UPIO_MEM,
 			.irq		= IRQ_S3CUART_RX2,
 			.uartclk	= 0,
