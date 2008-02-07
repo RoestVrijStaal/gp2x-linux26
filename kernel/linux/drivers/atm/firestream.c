@@ -171,8 +171,8 @@ static char *res_strings[] = {
 	"packet purged", 
 	"packet ageing timeout", 
 	"channel ageing timeout", 
-	"calculated lenght error", 
-	"programmed lenght limit error", 
+	"calculated length error", 
+	"programmed length limit error", 
 	"aal5 crc32 error", 
 	"oam transp or transpc crc10 error", 
 	"reserved 25", 
@@ -512,7 +512,7 @@ static unsigned int make_rate (unsigned int rate, int r,
 		}
 		case ROUND_UP: {
 			/* check all bits that we are discarding */
-			if (man & (-1>>9)) {
+			if (man & (~0U>>9)) {
 				man = (man>>(32-9)) + 1;
 				if (man == (1<<9)) {
 					/* no need to check for round up outside of range */
@@ -1002,6 +1002,10 @@ static int fs_open(struct atm_vcc *atm_vcc)
 					r = ROUND_UP;
 				}
 				error = make_rate (pcr, r, &tmc0, NULL);
+				if (error) {
+					kfree(tc);
+					return error;
+				}
 			}
 			fs_dprintk (FS_DEBUG_OPEN, "pcr = %d.\n", pcr);
 		}
@@ -1291,7 +1295,7 @@ static const struct atmdev_ops ops = {
 
 static void __devinit undocumented_pci_fix (struct pci_dev *pdev)
 {
-	int tint;
+	u32 tint;
 
 	/* The Windows driver says: */
 	/* Switch off FireStream Retry Limit Threshold 
@@ -1471,6 +1475,7 @@ static void top_off_fp (struct fs_dev *dev, struct freepool *fp,
 	struct FS_BPENTRY *qe, *ne;
 	struct sk_buff *skb;
 	int n = 0;
+	u32 qe_tmp;
 
 	fs_dprintk (FS_DEBUG_QUEUE, "Topping off queue at %x (%d-%d/%d)\n", 
 		    fp->offset, read_fs (dev, FP_CNT (fp->offset)), fp->n, 
@@ -1498,10 +1503,16 @@ static void top_off_fp (struct fs_dev *dev, struct freepool *fp,
 		ne->skb = skb;
 		ne->fp = fp;
 
-		qe = (struct FS_BPENTRY *) (read_fs (dev, FP_EA(fp->offset)));
-		fs_dprintk (FS_DEBUG_QUEUE, "link at %p\n", qe);
-		if (qe) {
-			qe = bus_to_virt ((long) qe);
+		/*
+		 * FIXME: following code encodes and decodes
+		 * machine pointers (could be 64-bit) into a
+		 * 32-bit register.
+		 */
+
+		qe_tmp = read_fs (dev, FP_EA(fp->offset));
+		fs_dprintk (FS_DEBUG_QUEUE, "link at %x\n", qe_tmp);
+		if (qe_tmp) {
+			qe = bus_to_virt ((long) qe_tmp);
 			qe->next = virt_to_bus(ne);
 			qe->flags &= ~FP_FLAGS_EPI;
 		} else
@@ -1546,7 +1557,7 @@ static void __devexit free_freepool (struct fs_dev *dev, struct freepool *fp)
 
 
 
-static irqreturn_t fs_irq (int irq, void *dev_id,  struct pt_regs * pt_regs) 
+static irqreturn_t fs_irq (int irq, void *dev_id) 
 {
 	int i;
 	u32 status;
@@ -1585,7 +1596,7 @@ static irqreturn_t fs_irq (int irq, void *dev_id,  struct pt_regs * pt_regs)
 
 	/* print the bits in the ISR register. */
 	if (fs_debug & FS_DEBUG_IRQ) {
-		/* The FS_DEBUG things are unneccesary here. But this way it is
+		/* The FS_DEBUG things are unnecessary here. But this way it is
 		   clear for grep that these are debug prints. */
 		fs_dprintk (FS_DEBUG_IRQ,  "IRQ status:");
 		for (i=0;i<27;i++) 
@@ -1643,7 +1654,7 @@ static void fs_poll (unsigned long data)
 {
 	struct fs_dev *dev = (struct fs_dev *) data;
   
-	fs_irq (0, dev, NULL);
+	fs_irq (0, dev);
 	dev->timer.expires = jiffies + FS_POLL_FREQ;
 	add_timer (&dev->timer);
 }
@@ -1699,7 +1710,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 		/* This bit is documented as "RESERVED" */
 		if (isr & ISR_INIT_ERR) {
 			printk (KERN_ERR "Error initializing the FS... \n");
-			return 1;
+			goto unmap;
 		}
 		if (isr & ISR_INIT) {
 			fs_dprintk (FS_DEBUG_INIT, "Ha! Initialized OK!\n");
@@ -1712,7 +1723,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 
 	if (!to) {
 		printk (KERN_ERR "timeout initializing the FS... \n");
-		return 1;
+		goto unmap;
 	}
 
 	/* XXX fix for fs155 */
@@ -1784,7 +1795,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 		write_fs (dev, RAM, (1 << (28 - FS155_VPI_BITS - FS155_VCI_BITS)) - 1);
 		dev->nchannels = FS155_NR_CHANNELS;
 	}
-	dev->atm_vccs = kmalloc (dev->nchannels * sizeof (struct atm_vcc *), 
+	dev->atm_vccs = kcalloc (dev->nchannels, sizeof (struct atm_vcc *),
 				 GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc atmvccs: %p(%Zd)\n",
 		    dev->atm_vccs, dev->nchannels * sizeof (struct atm_vcc *));
@@ -1792,21 +1803,18 @@ static int __devinit fs_init (struct fs_dev *dev)
 	if (!dev->atm_vccs) {
 		printk (KERN_WARNING "Couldn't allocate memory for VCC buffers. Woops!\n");
 		/* XXX Clean up..... */
-		return 1;
+		goto unmap;
 	}
-	memset (dev->atm_vccs, 0, dev->nchannels * sizeof (struct atm_vcc *));
 
-	dev->tx_inuse = kmalloc (dev->nchannels / 8 /* bits/byte */ , GFP_KERNEL);
+	dev->tx_inuse = kzalloc (dev->nchannels / 8 /* bits/byte */ , GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc tx_inuse: %p(%d)\n", 
 		    dev->atm_vccs, dev->nchannels / 8);
 
 	if (!dev->tx_inuse) {
 		printk (KERN_WARNING "Couldn't allocate memory for tx_inuse bits!\n");
 		/* XXX Clean up..... */
-		return 1;
+		goto unmap;
 	}
-	memset (dev->tx_inuse, 0, dev->nchannels / 8);
-
 	/* -- RAS1 : FS155 and 50 differ. Default (0) should be OK for both */
 	/* -- RAS2 : FS50 only: Default is OK. */
 
@@ -1832,7 +1840,7 @@ static int __devinit fs_init (struct fs_dev *dev)
 	if (request_irq (dev->irq, fs_irq, IRQF_SHARED, "firestream", dev)) {
 		printk (KERN_WARNING "couldn't get irq %d for firestream.\n", pci_dev->irq);
 		/* XXX undo all previous stuff... */
-		return 1;
+		goto unmap;
 	}
 	fs_dprintk (FS_DEBUG_INIT, "Grabbed irq %d for dev at %p.\n", dev->irq, dev);
   
@@ -1882,6 +1890,9 @@ static int __devinit fs_init (struct fs_dev *dev)
   
 	func_exit ();
 	return 0;
+unmap:
+	iounmap(dev->base);
+	return 1;
 }
 
 static int __devinit firestream_init_one (struct pci_dev *pci_dev,
@@ -1893,14 +1904,11 @@ static int __devinit firestream_init_one (struct pci_dev *pci_dev,
 	if (pci_enable_device(pci_dev)) 
 		goto err_out;
 
-	fs_dev = kmalloc (sizeof (struct fs_dev), GFP_KERNEL);
+	fs_dev = kzalloc (sizeof (struct fs_dev), GFP_KERNEL);
 	fs_dprintk (FS_DEBUG_ALLOC, "Alloc fs-dev: %p(%Zd)\n",
 		    fs_dev, sizeof (struct fs_dev));
 	if (!fs_dev)
 		goto err_out;
-
-	memset (fs_dev, 0, sizeof (struct fs_dev));
-  
 	atm_dev = atm_dev_register("fs", &ops, -1, NULL);
 	if (!atm_dev)
 		goto err_out_free_fs_dev;
@@ -2007,6 +2015,7 @@ static void __devexit firestream_remove_one (struct pci_dev *pdev)
 		for (i=0;i < FS_NR_RX_QUEUES;i++)
 			free_queue (dev, &dev->rx_rq[i]);
 
+		iounmap(dev->base);
 		fs_dprintk (FS_DEBUG_ALLOC, "Free fs-dev: %p\n", dev);
 		nxtdev = dev->next;
 		kfree (dev);
