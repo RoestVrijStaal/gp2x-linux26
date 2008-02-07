@@ -25,26 +25,25 @@
  * Check for any kind of channel or interface control check but don't
  * issue the message for the console device
  */
-static inline void
+static void
 ccw_device_msg_control_check(struct ccw_device *cdev, struct irb *irb)
 {
 	if (!(irb->scsw.cstat & (SCHN_STAT_CHN_DATA_CHK |
 				 SCHN_STAT_CHN_CTRL_CHK |
 				 SCHN_STAT_INTF_CTRL_CHK)))
 		return;
-		
 	CIO_MSG_EVENT(0, "Channel-Check or Interface-Control-Check "
 		      "received"
 		      " ... device %04x on subchannel 0.%x.%04x, dev_stat "
 		      ": %02X sch_stat : %02X\n",
-		      cdev->private->devno, cdev->private->ssid,
-		      cdev->private->sch_no,
+		      cdev->private->dev_id.devno, cdev->private->schid.ssid,
+		      cdev->private->schid.sch_no,
 		      irb->scsw.dstat, irb->scsw.cstat);
 
 	if (irb->scsw.cc != 3) {
 		char dbf_text[15];
 
-		sprintf(dbf_text, "chk%x", cdev->private->sch_no);
+		sprintf(dbf_text, "chk%x", cdev->private->schid.sch_no);
 		CIO_TRACE_EVENT(0, dbf_text);
 		CIO_HEX_EVENT(0, irb, sizeof (struct irb));
 	}
@@ -73,7 +72,7 @@ ccw_device_path_notoper(struct ccw_device *cdev)
 /*
  * Copy valid bits from the extended control word to device irb.
  */
-static inline void
+static void
 ccw_device_accumulate_ecw(struct ccw_device *cdev, struct irb *irb)
 {
 	/*
@@ -95,7 +94,7 @@ ccw_device_accumulate_ecw(struct ccw_device *cdev, struct irb *irb)
 /*
  * Check if extended status word is valid.
  */
-static inline int
+static int
 ccw_device_accumulate_esw_valid(struct irb *irb)
 {
 	if (!irb->scsw.eswf && irb->scsw.stctl == SCSW_STCTL_STATUS_PEND)
@@ -110,7 +109,7 @@ ccw_device_accumulate_esw_valid(struct irb *irb)
 /*
  * Copy valid bits from the extended status word to device irb.
  */
-static inline void
+static void
 ccw_device_accumulate_esw(struct ccw_device *cdev, struct irb *irb)
 {
 	struct irb *cdev_irb;
@@ -222,6 +221,14 @@ ccw_device_accumulate_irb(struct ccw_device *cdev, struct irb *irb)
 
 	cdev_irb = &cdev->private->irb;
 
+	/*
+	 * If the clear function had been performed, all formerly pending
+	 * status at the subchannel has been cleared and we must not pass
+	 * intermediate accumulated status to the device driver.
+	 */
+	if (irb->scsw.fctl & SCSW_FCTL_CLEAR_FUNC)
+		memset(&cdev->private->irb, 0, sizeof(struct irb));
+
 	/* Copy bits which are valid only for the start function. */
 	if (irb->scsw.fctl & SCSW_FCTL_START_FUNC) {
 		/* Copy key. */
@@ -264,7 +271,11 @@ ccw_device_accumulate_irb(struct ccw_device *cdev, struct irb *irb)
 		cdev_irb->scsw.cpa = irb->scsw.cpa;
 	/* Accumulate device status, but not the device busy flag. */
 	cdev_irb->scsw.dstat &= ~DEV_STAT_BUSY;
-	cdev_irb->scsw.dstat |= irb->scsw.dstat;
+	/* dstat is not always valid. */
+	if (irb->scsw.stctl &
+	    (SCSW_STCTL_PRIM_STATUS | SCSW_STCTL_SEC_STATUS
+	     | SCSW_STCTL_INTER_STATUS | SCSW_STCTL_ALERT_STATUS))
+		cdev_irb->scsw.dstat |= irb->scsw.dstat;
 	/* Accumulate subchannel status. */
 	cdev_irb->scsw.cstat |= irb->scsw.cstat;
 	/* Copy residual count if it is valid. */
@@ -319,6 +330,9 @@ ccw_device_do_sense(struct ccw_device *cdev, struct irb *irb)
 	sch->sense_ccw.cda = (__u32) __pa(cdev->private->irb.ecw);
 	sch->sense_ccw.count = SENSE_MAX_COUNT;
 	sch->sense_ccw.flags = CCW_FLAG_SLI;
+
+	/* Reset internal retry indication. */
+	cdev->private->flags.intretry = 0;
 
 	return cio_start (sch, &sch->sense_ccw, 0xff);
 }
