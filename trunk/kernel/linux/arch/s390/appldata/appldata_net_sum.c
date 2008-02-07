@@ -16,6 +16,7 @@
 #include <linux/errno.h>
 #include <linux/kernel_stat.h>
 #include <linux/netdevice.h>
+#include <net/net_namespace.h>
 
 #include "appldata.h"
 
@@ -34,7 +35,7 @@
  * book:
  * http://oss.software.ibm.com/developerworks/opensource/linux390/index.shtml
  */
-struct appldata_net_sum_data {
+static struct appldata_net_sum_data {
 	u64 timestamp;
 	u32 sync_count_1;	/* after VM collected the record data, */
 	u32 sync_count_2;	/* sync_count_1 and sync_count_2 should be the
@@ -107,10 +108,7 @@ static void appldata_get_net_sum_data(void *data)
 	tx_dropped = 0;
 	collisions = 0;
 	read_lock(&dev_base_lock);
-	for (dev = dev_base; dev != NULL; dev = dev->next) {
-		if (dev->get_stats == NULL) {
-			continue;
-		}
+	for_each_netdev(&init_net, dev) {
 		stats = dev->get_stats(dev);
 		rx_packets += stats->rx_packets;
 		tx_packets += stats->tx_packets;
@@ -144,7 +142,6 @@ static void appldata_get_net_sum_data(void *data)
 
 
 static struct appldata_ops ops = {
-	.ctl_nr    = CTL_APPLDATA_NET_SUM,
 	.name	   = "net_sum",
 	.record_nr = APPLDATA_RECORD_NET_SUM_ID,
 	.size	   = sizeof(struct appldata_net_sum_data),
