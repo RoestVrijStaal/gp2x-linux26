@@ -38,7 +38,7 @@
 #include <acpi/acpi_drivers.h>
 
 #define _COMPONENT		ACPI_PCI_COMPONENT
-ACPI_MODULE_NAME("pci_irq")
+ACPI_MODULE_NAME("pci_irq");
 
 static struct acpi_prt_list acpi_prt;
 static DEFINE_SPINLOCK(acpi_prt_lock);
@@ -89,10 +89,9 @@ acpi_pci_irq_add_entry(acpi_handle handle,
 	if (!prt)
 		return -EINVAL;
 
-	entry = kmalloc(sizeof(struct acpi_prt_entry), GFP_KERNEL);
+	entry = kzalloc(sizeof(struct acpi_prt_entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
-	memset(entry, 0, sizeof(struct acpi_prt_entry));
 
 	entry->id.segment = segment;
 	entry->id.bus = bus;
@@ -161,10 +160,9 @@ int acpi_pci_irq_add_prt(acpi_handle handle, int segment, int bus)
 	static int first_time = 1;
 
 
-	pathname = (char *)kmalloc(ACPI_PATHNAME_MAX, GFP_KERNEL);
+	pathname = kzalloc(ACPI_PATHNAME_MAX, GFP_KERNEL);
 	if (!pathname)
 		return -ENOMEM;
-	memset(pathname, 0, ACPI_PATHNAME_MAX);
 
 	if (first_time) {
 		acpi_prt.count = 0;
@@ -198,11 +196,10 @@ int acpi_pci_irq_add_prt(acpi_handle handle, int segment, int bus)
 		return -ENODEV;
 	}
 
-	prt = kmalloc(buffer.length, GFP_KERNEL);
+	prt = kzalloc(buffer.length, GFP_KERNEL);
 	if (!prt) {
 		return -ENOMEM;
 	}
-	memset(prt, 0, buffer.length);
 	buffer.pointer = prt;
 
 	status = acpi_get_irq_routing_table(handle, &buffer);
@@ -432,6 +429,15 @@ int acpi_pci_irq_enable(struct pci_dev *dev)
 					  &polarity, &link,
 					  acpi_pci_allocate_irq);
 
+	if (irq < 0) {
+		/*
+		 * IDE legacy mode controller IRQs are magic. Why do compat
+		 * extensions always make such a nasty mess.
+		 */
+		if (dev->class >> 8 == PCI_CLASS_STORAGE_IDE &&
+				(dev->class & 0x05) == 0)
+			return 0;
+	}
 	/*
 	 * No IRQ known to the ACPI subsystem - maybe the BIOS / 
 	 * driver reported one, then use it. Exit in any case.
