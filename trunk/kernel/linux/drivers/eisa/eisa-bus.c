@@ -35,9 +35,9 @@ static struct eisa_device_info __initdata eisa_table[] = {
 #define EISA_MAX_FORCED_DEV 16
 
 static int enable_dev[EISA_MAX_FORCED_DEV];
-static int enable_dev_count;
+static unsigned int enable_dev_count;
 static int disable_dev[EISA_MAX_FORCED_DEV];
-static int disable_dev_count;
+static unsigned int disable_dev_count;
 
 static int is_forced_dev (int *forced_tab,
 			  int forced_count,
@@ -128,9 +128,18 @@ static int eisa_bus_match (struct device *dev, struct device_driver *drv)
 	return 0;
 }
 
+static int eisa_bus_uevent(struct device *dev, struct kobj_uevent_env *env)
+{
+	struct eisa_device *edev = to_eisa_device(dev);
+
+	add_uevent_var(env, "MODALIAS=" EISA_DEVICE_MODALIAS_FMT, edev->id.sig);
+	return 0;
+}
+
 struct bus_type eisa_bus_type = {
 	.name  = "eisa",
 	.match = eisa_bus_match,
+	.uevent = eisa_bus_uevent,
 };
 
 int eisa_driver_register (struct eisa_driver *edrv)
@@ -159,6 +168,14 @@ static ssize_t eisa_show_state (struct device *dev, struct device_attribute *att
 }
 
 static DEVICE_ATTR(enabled, S_IRUGO, eisa_show_state, NULL);
+
+static ssize_t eisa_show_modalias (struct device *dev, struct device_attribute *attr, char *buf)
+{
+        struct eisa_device *edev = to_eisa_device (dev);
+        return sprintf (buf, EISA_DEVICE_MODALIAS_FMT "\n", edev->id.sig);
+}
+
+static DEVICE_ATTR(modalias, S_IRUGO, eisa_show_modalias, NULL);
 
 static int __init eisa_init_device (struct eisa_root_device *root,
 				    struct eisa_device *edev,
@@ -204,13 +221,26 @@ static int __init eisa_init_device (struct eisa_root_device *root,
 
 static int __init eisa_register_device (struct eisa_device *edev)
 {
-	if (device_register (&edev->dev))
-		return -1;
+	int rc = device_register (&edev->dev);
+	if (rc)
+		return rc;
 
-	device_create_file (&edev->dev, &dev_attr_signature);
-	device_create_file (&edev->dev, &dev_attr_enabled);
+	rc = device_create_file (&edev->dev, &dev_attr_signature);
+	if (rc) goto err_devreg;
+	rc = device_create_file (&edev->dev, &dev_attr_enabled);
+	if (rc) goto err_sig;
+	rc = device_create_file (&edev->dev, &dev_attr_modalias);
+	if (rc) goto err_enab;
 
 	return 0;
+
+err_enab:
+	device_remove_file (&edev->dev, &dev_attr_enabled);
+err_sig:
+	device_remove_file (&edev->dev, &dev_attr_signature);
+err_devreg:
+	device_unregister(&edev->dev);
+	return rc;
 }
 
 static int __init eisa_request_resources (struct eisa_root_device *root,
