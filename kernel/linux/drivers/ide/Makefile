@@ -20,8 +20,9 @@ ide-core-$(CONFIG_BLK_DEV_CMD640)	+= pci/cmd640.o
 # Core IDE code - must come before legacy
 ide-core-$(CONFIG_BLK_DEV_IDEPCI)	+= setup-pci.o
 ide-core-$(CONFIG_BLK_DEV_IDEDMA)	+= ide-dma.o
-ide-core-$(CONFIG_PROC_FS)		+= ide-proc.o
+ide-core-$(CONFIG_IDE_PROC_FS)		+= ide-proc.o
 ide-core-$(CONFIG_BLK_DEV_IDEPNP)	+= ide-pnp.o
+ide-core-$(CONFIG_BLK_DEV_IDEACPI)	+= ide-acpi.o
 
 # built-in only drivers from arm/
 ide-core-$(CONFIG_IDE_ARM)		+= arm/ide_arm.o
@@ -38,7 +39,7 @@ ide-core-$(CONFIG_BLK_DEV_MPC8xx_IDE)	+= ppc/mpc8xx.o
 ide-core-$(CONFIG_BLK_DEV_IDE_PMAC)	+= ppc/pmac.o
 
 # built-in only drivers from h8300/
-ide-core-$(CONFIG_H8300)		+= h8300/ide-h8300.o
+ide-core-$(CONFIG_IDE_H8300)		+= h8300/ide-h8300.o
 
 obj-$(CONFIG_BLK_DEV_IDE)		+= ide-core.o
 obj-$(CONFIG_IDE_GENERIC)		+= ide-generic.o
