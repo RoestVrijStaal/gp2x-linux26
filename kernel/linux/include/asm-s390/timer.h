@@ -26,7 +26,7 @@ struct vtimer_list {
 	spinlock_t lock;
 	unsigned long magic;
 
-	void (*function)(unsigned long, struct pt_regs*);
+	void (*function)(unsigned long);
 	unsigned long data;
 };
 
@@ -44,6 +44,9 @@ extern void add_virt_timer(void *new);
 extern void add_virt_timer_periodic(void *new);
 extern int mod_virt_timer(struct vtimer_list *timer, __u64 expires);
 extern int del_virt_timer(struct vtimer_list *timer);
+
+extern void init_cpu_vtimer(void);
+extern void vtime_init(void);
 
 #endif /* __KERNEL__ */
 

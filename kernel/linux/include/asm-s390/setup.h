@@ -2,22 +2,20 @@
  *  include/asm-s390/setup.h
  *
  *  S390 version
- *    Copyright (C) 1999 IBM Deutschland Entwicklung GmbH, IBM Corporation
+ *    Copyright IBM Corp. 1999,2006
  */
 
 #ifndef _ASM_S390_SETUP_H
 #define _ASM_S390_SETUP_H
+
+#define COMMAND_LINE_SIZE 	896
 
 #ifdef __KERNEL__
 
 #include <asm/types.h>
 
 #define PARMAREA		0x10400
-#define COMMAND_LINE_SIZE 	896
-#define RAMDISK_ORIGIN		0x800000
-#define RAMDISK_SIZE		0x800000
 #define MEMORY_CHUNKS		16	/* max 0x7fff */
-#define IPL_PARMBLOCK_ORIGIN	0x2000
 
 #ifndef __ASSEMBLY__
 
@@ -32,6 +30,30 @@
 #endif /* __s390x__ */
 #define COMMAND_LINE      ((char *)            (0x10480))
 
+#define CHUNK_READ_WRITE 0
+#define CHUNK_READ_ONLY  1
+
+struct mem_chunk {
+	unsigned long addr;
+	unsigned long size;
+	unsigned long type;
+};
+
+extern struct mem_chunk memory_chunk[];
+extern unsigned long real_memory_size;
+
+#ifdef CONFIG_S390_SWITCH_AMODE
+extern unsigned int switch_amode;
+#else
+#define switch_amode	(0)
+#endif
+
+#ifdef CONFIG_S390_EXEC_PROTECT
+extern unsigned int s390_noexec;
+#else
+#define s390_noexec	(0)
+#endif
+
 /*
  * Machine features detected in head.S
  */
@@ -41,19 +63,22 @@ extern unsigned long machine_flags;
 #define MACHINE_IS_P390		(machine_flags & 4)
 #define MACHINE_HAS_MVPG	(machine_flags & 16)
 #define MACHINE_HAS_IDTE	(machine_flags & 128)
+#define MACHINE_HAS_DIAG9C	(machine_flags & 256)
 
 #ifndef __s390x__
 #define MACHINE_HAS_IEEE	(machine_flags & 2)
 #define MACHINE_HAS_CSP		(machine_flags & 8)
 #define MACHINE_HAS_DIAG44	(1)
+#define MACHINE_HAS_MVCOS	(0)
 #else /* __s390x__ */
 #define MACHINE_HAS_IEEE	(1)
 #define MACHINE_HAS_CSP		(1)
 #define MACHINE_HAS_DIAG44	(machine_flags & 32)
+#define MACHINE_HAS_MVCOS	(machine_flags & 512)
 #endif /* __s390x__ */
 
-
 #define MACHINE_HAS_SCLP	(!MACHINE_IS_P390)
+#define ZFCPDUMP_HSA_SIZE	(32UL<<20)
 
 /*
  * Console mode. Override with conmode=
@@ -61,6 +86,9 @@ extern unsigned long machine_flags;
 extern unsigned int console_mode;
 extern unsigned int console_devno;
 extern unsigned int console_irq;
+
+extern char vmhalt_cmd[];
+extern char vmpoff_cmd[];
 
 #define CONSOLE_IS_UNDEFINED	(console_mode == 0)
 #define CONSOLE_IS_SCLP		(console_mode == 1)
@@ -70,52 +98,8 @@ extern unsigned int console_irq;
 #define SET_CONSOLE_3215	do { console_mode = 2; } while (0)
 #define SET_CONSOLE_3270	do { console_mode = 3; } while (0)
 
-struct ipl_list_header {
-	u32 length;
-	u8  reserved[3];
-	u8  version;
-} __attribute__((packed));
-
-struct ipl_block_fcp {
-	u32 length;
-	u8  pbt;
-	u8  reserved1[322-1];
-	u16 devno;
-	u8  reserved2[4];
-	u64 wwpn;
-	u64 lun;
-	u32 bootprog;
-	u8  reserved3[12];
-	u64 br_lba;
-	u32 scp_data_len;
-	u8  reserved4[260];
-	u8  scp_data[];
-} __attribute__((packed));
-
-struct ipl_parameter_block {
-	union {
-		u32 length;
-		struct ipl_list_header header;
-	} hdr;
-	struct ipl_block_fcp fcp;
-} __attribute__((packed));
-
-#define IPL_MAX_SUPPORTED_VERSION (0)
-
-#define IPL_TYPE_FCP (0)
-
-/*
- * IPL validity flags and parameters as detected in head.S
- */
-extern u32 ipl_parameter_flags;
-extern u16 ipl_devno;
-
-#define IPL_DEVNO_VALID		(ipl_parameter_flags & 1)
-#define IPL_PARMBLOCK_VALID	(ipl_parameter_flags & 2)
-
-#define IPL_PARMBLOCK_START	((struct ipl_parameter_block *) \
-				 IPL_PARMBLOCK_ORIGIN)
-#define IPL_PARMBLOCK_SIZE	(IPL_PARMBLOCK_START->hdr.length)
+#define NSS_NAME_SIZE	8
+extern char kernel_nss_name[];
 
 #else /* __ASSEMBLY__ */
 
