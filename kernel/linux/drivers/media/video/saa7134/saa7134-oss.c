@@ -25,7 +25,6 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/slab.h>
@@ -240,17 +239,14 @@ static int dsp_rec_stop(struct saa7134_dev *dev)
 static int dsp_open(struct inode *inode, struct file *file)
 {
 	int minor = iminor(inode);
-	struct saa7134_dev *h,*dev = NULL;
-	struct list_head *list;
+	struct saa7134_dev *dev;
 	int err;
 
-	list_for_each(list,&saa7134_devlist) {
-		h = list_entry(list, struct saa7134_dev, devlist);
-		if (h->dmasound.minor_dsp == minor)
-			dev = h;
-	}
-	if (NULL == dev)
-		return -ENODEV;
+	list_for_each_entry(dev, &saa7134_devlist, devlist)
+		if (dev->dmasound.minor_dsp == minor)
+			goto found;
+	return -ENODEV;
+ found:
 
 	mutex_lock(&dev->dmasound.lock);
 	err = -EBUSY;
@@ -563,7 +559,7 @@ static unsigned int dsp_poll(struct file *file, struct poll_table_struct *wait)
 	return mask;
 }
 
-struct file_operations saa7134_dsp_fops = {
+const struct file_operations saa7134_dsp_fops = {
 	.owner   = THIS_MODULE,
 	.open    = dsp_open,
 	.release = dsp_release,
@@ -681,19 +677,14 @@ mixer_level(struct saa7134_dev *dev, enum saa7134_audio_in src, int level)
 static int mixer_open(struct inode *inode, struct file *file)
 {
 	int minor = iminor(inode);
-	struct saa7134_dev *h,*dev = NULL;
-	struct list_head *list;
+	struct saa7134_dev *dev;
 
-	list_for_each(list,&saa7134_devlist) {
-		h = list_entry(list, struct saa7134_dev, devlist);
-		if (h->dmasound.minor_mixer == minor)
-			dev = h;
-	}
-	if (NULL == dev)
-		return -ENODEV;
-
-	file->private_data = dev;
-	return 0;
+	list_for_each_entry(dev, &saa7134_devlist, devlist)
+		if (dev->dmasound.minor_mixer == minor) {
+			file->private_data = dev;
+			return 0;
+		}
+	return -ENODEV;
 }
 
 static int mixer_release(struct inode *inode, struct file *file)
@@ -804,7 +795,7 @@ static int mixer_ioctl(struct inode *inode, struct file *file,
 	}
 }
 
-struct file_operations saa7134_mixer_fops = {
+const struct file_operations saa7134_mixer_fops = {
 	.owner   = THIS_MODULE,
 	.open    = mixer_open,
 	.release = mixer_release,
@@ -814,7 +805,7 @@ struct file_operations saa7134_mixer_fops = {
 
 /* ------------------------------------------------------------------ */
 
-static irqreturn_t saa7134_oss_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t saa7134_oss_irq(int irq, void *dev_id)
 {
 	struct saa7134_dmasound *dmasound = dev_id;
 	struct saa7134_dev *dev = dmasound->priv_data;
@@ -1023,18 +1014,14 @@ static int saa7134_oss_init(void)
 
 static void saa7134_oss_exit(void)
 {
-	struct saa7134_dev *dev = NULL;
-	struct list_head *list;
+	struct saa7134_dev *dev;
 
-	list_for_each(list,&saa7134_devlist) {
-		dev = list_entry(list, struct saa7134_dev, devlist);
-
+	list_for_each_entry(dev, &saa7134_devlist, devlist) {
 		/* Device isn't registered by OSS, probably ALSA's */
 		if (!dev->dmasound.minor_dsp)
 			continue;
 
 		oss_device_exit(dev);
-
 	}
 
 	saa7134_dmasound_init = NULL;

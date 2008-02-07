@@ -153,15 +153,10 @@ static int mxb_probe(struct saa7146_dev* dev)
 {
 	struct mxb* mxb = NULL;
 	struct i2c_client *client;
-	struct list_head *item;
 	int result;
 
 	if ((result = request_module("saa7111")) < 0) {
 		printk("mxb: saa7111 i2c module not available.\n");
-		return -ENODEV;
-	}
-	if ((result = request_module("tuner")) < 0) {
-		printk("mxb: tuner i2c module not available.\n");
 		return -ENODEV;
 	}
 	if ((result = request_module("tea6420")) < 0) {
@@ -174,6 +169,10 @@ static int mxb_probe(struct saa7146_dev* dev)
 	}
 	if ((result = request_module("tda9840")) < 0) {
 		printk("mxb: tda9840 i2c module not available.\n");
+		return -ENODEV;
+	}
+	if ((result = request_module("tuner")) < 0) {
+		printk("mxb: tuner i2c module not available.\n");
 		return -ENODEV;
 	}
 
@@ -196,8 +195,7 @@ static int mxb_probe(struct saa7146_dev* dev)
 	}
 
 	/* loop through all i2c-devices on the bus and look who is there */
-	list_for_each(item,&mxb->i2c_adapter.clients) {
-		client = list_entry(item, struct i2c_client, list);
+	list_for_each_entry(client, &mxb->i2c_adapter.clients, list) {
 		if( I2C_ADDR_TEA6420_1 == client->addr )
 			mxb->tea6420_1 = client;
 		if( I2C_ADDR_TEA6420_2 == client->addr )

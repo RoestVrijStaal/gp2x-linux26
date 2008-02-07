@@ -50,6 +50,7 @@ extern int msp_stereo_thresh;
 
 struct msp_state {
 	int rev1, rev2;
+	int ident;
 	u8 has_nicam;
 	u8 has_radio;
 	u8 has_headphones;
@@ -64,6 +65,7 @@ struct msp_state {
 	u8 has_sound_processing;
 	u8 has_virtual_dolby_surround;
 	u8 has_dolby_pro_logic;
+	u8 force_btsc;
 
 	int radio;
 	int opmode;

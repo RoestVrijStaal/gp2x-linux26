@@ -222,6 +222,7 @@ static void konicawc_adjust_picture(struct uvd *uvd)
 static void konicawc_register_input(struct konicawc *cam, struct usb_device *dev)
 {
 	struct input_dev *input_dev;
+	int error;
 
 	usb_make_path(dev, cam->input_physname, sizeof(cam->input_physname));
 	strncat(cam->input_physname, "/input0", sizeof(cam->input_physname));
@@ -235,14 +236,20 @@ static void konicawc_register_input(struct konicawc *cam, struct usb_device *dev
 	input_dev->name = "Konicawc snapshot button";
 	input_dev->phys = cam->input_physname;
 	usb_to_input_id(dev, &input_dev->id);
-	input_dev->cdev.dev = &dev->dev;
+	input_dev->dev.parent = &dev->dev;
 
-	input_dev->evbit[0] = BIT(EV_KEY);
-	input_dev->keybit[LONG(BTN_0)] = BIT(BTN_0);
+	input_dev->evbit[0] = BIT_MASK(EV_KEY);
+	input_dev->keybit[BIT_WORD(BTN_0)] = BIT_MASK(BTN_0);
 
 	input_dev->private = cam;
 
-	input_register_device(cam->input);
+	error = input_register_device(cam->input);
+	if (error) {
+		warn("Failed to register camera's input device, err: %d\n",
+		     error);
+		input_free_device(cam->input);
+		cam->input = NULL;
+	}
 }
 
 static void konicawc_unregister_input(struct konicawc *cam)
@@ -380,7 +387,7 @@ static void resubmit_urb(struct uvd *uvd, struct urb *urb)
 }
 
 
-static void konicawc_isoc_irq(struct urb *urb, struct pt_regs *regs)
+static void konicawc_isoc_irq(struct urb *urb)
 {
 	struct uvd *uvd = urb->context;
 	struct konicawc *cam = (struct konicawc *)uvd->user_data;

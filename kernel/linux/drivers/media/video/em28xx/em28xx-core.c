@@ -24,7 +24,6 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/module.h>
-#include <linux/moduleparam.h>
 #include <linux/usb.h>
 #include <linux/vmalloc.h>
 
@@ -382,7 +381,7 @@ int em28xx_resolution_set(struct em28xx *dev)
 /******************* isoc transfer handling ****************************/
 
 #ifdef ENABLE_DEBUG_ISOC_FRAMES
-static void em28xx_isoc_dump(struct urb *urb, struct pt_regs *regs)
+static void em28xx_isoc_dump(struct urb *urb)
 {
 	int len = 0;
 	int ntrans = 0;
@@ -534,7 +533,7 @@ static inline void em28xx_isoc_video_copy(struct em28xx *dev,
  * em28xx_isoIrq()
  * handles the incoming isoc urbs and fills the frames from our inqueue
  */
-static void em28xx_isocIrq(struct urb *urb, struct pt_regs *regs)
+static void em28xx_isocIrq(struct urb *urb)
 {
 	struct em28xx *dev = urb->context;
 	int i, status;
@@ -545,7 +544,7 @@ static void em28xx_isocIrq(struct urb *urb, struct pt_regs *regs)
 		return;
 #ifdef ENABLE_DEBUG_ISOC_FRAMES
 	if (isoc_debug>1)
-		em28xx_isoc_dump(urb, regs);
+		em28xx_isoc_dump(urb);
 #endif
 
 	if (urb->status == -ENOENT)
@@ -649,7 +648,7 @@ void em28xx_uninit_isoc(struct em28xx *dev)
  */
 int em28xx_init_isoc(struct em28xx *dev)
 {
-	/* change interface to 3 which allowes the biggest packet sizes */
+	/* change interface to 3 which allows the biggest packet sizes */
 	int i, errCode;
 	const int sb_size = EM28XX_NUM_PACKETS * dev->max_pkt_size;
 
@@ -674,6 +673,7 @@ int em28xx_init_isoc(struct em28xx *dev)
 					("unable to allocate %i bytes for transfer buffer %i\n",
 					 sb_size, i);
 			em28xx_uninit_isoc(dev);
+			usb_free_urb(urb);
 			return -ENOMEM;
 		}
 		memset(dev->transfer_buffer[i], 0, sb_size);

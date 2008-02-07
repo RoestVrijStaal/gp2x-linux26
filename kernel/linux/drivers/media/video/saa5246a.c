@@ -40,7 +40,6 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/init.h>
 #include <linux/i2c.h>
@@ -112,7 +111,7 @@ static int saa5246a_attach(struct i2c_adapter *adap, int addr, int kind)
 	for (pgbuf = 0; pgbuf < NUM_DAUS; pgbuf++)
 	{
 		memset(t->pgbuf[pgbuf], ' ', sizeof(t->pgbuf[0]));
-		t->is_searching[pgbuf] = FALSE;
+		t->is_searching[pgbuf] = false;
 	}
 	vd->priv=t;
 
@@ -188,19 +187,21 @@ static int i2c_senddata(struct saa5246a_device *t, ...)
 {
 	unsigned char buf[64];
 	int v;
-	int ct=0;
+	int ct = 0;
 	va_list argp;
-	va_start(argp,t);
+	va_start(argp, t);
 
-	while((v=va_arg(argp,int))!=-1)
-		buf[ct++]=v;
+	while ((v = va_arg(argp, int)) != -1)
+		buf[ct++] = v;
+
+	va_end(argp);
 	return i2c_sendbuf(t, buf[0], ct-1, buf+1);
 }
 
-/* Get count number of bytes from I²C-device at address adr, store them in buf.
+/* Get count number of bytes from IÂ²C-device at address adr, store them in buf.
  * Start & stop handshaking is done by this routine, ack will be sent after the
- * last byte to inhibit further sending of data. If uaccess is TRUE, data is
- * written to user-space with put_user. Returns -1 if I²C-device didn't send
+ * last byte to inhibit further sending of data. If uaccess is 'true', data is
+ * written to user-space with put_user. Returns -1 if IÂ²C-device didn't send
  * acknowledge, 0 otherwise
  */
 static int i2c_getdata(struct saa5246a_device *t, int count, u8 *buf)
@@ -339,7 +340,7 @@ static int saa5246a_request_page(struct saa5246a_device *t,
 		return -EIO;
 	}
 
-	t->is_searching[req->pgbuf] = TRUE;
+	t->is_searching[req->pgbuf] = true;
 	return 0;
 }
 
@@ -453,7 +454,7 @@ static inline int saa5246a_get_status(struct saa5246a_device *t,
 		}
 	}
 	if (!info->hamming && !info->notfound)
-		t->is_searching[dau_no] = FALSE;
+		t->is_searching[dau_no] = false;
 	return 0;
 }
 
@@ -565,7 +566,7 @@ static inline int saa5246a_stop_dau(struct saa5246a_device *t,
 	{
 		return -EIO;
 	}
-	t->is_searching[dau_no] = FALSE;
+	t->is_searching[dau_no] = false;
 	return 0;
 }
 
@@ -817,7 +818,7 @@ static void __exit cleanup_saa_5246a (void)
 module_init(init_saa_5246a);
 module_exit(cleanup_saa_5246a);
 
-static struct file_operations saa_fops = {
+static const struct file_operations saa_fops = {
 	.owner	 = THIS_MODULE,
 	.open	 = saa5246a_open,
 	.release = saa5246a_release,
@@ -830,7 +831,6 @@ static struct video_device saa_template =
 	.owner	  = THIS_MODULE,
 	.name	  = IF_NAME,
 	.type	  = VID_TYPE_TELETEXT,
-	.hardware = VID_HARDWARE_SAA5249,
 	.fops	  = &saa_fops,
 	.release  = video_device_release,
 	.minor    = -1,

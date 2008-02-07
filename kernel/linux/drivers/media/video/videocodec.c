@@ -86,8 +86,8 @@ videocodec_attach (struct videocodec_master *master)
 	}
 
 	dprintk(2,
-		"videocodec_attach: '%s', type: %x, flags %lx, magic %lx\n",
-		master->name, master->type, master->flags, master->magic);
+		"videocodec_attach: '%s', flags %lx, magic %lx\n",
+		master->name, master->flags, master->magic);
 
 	if (!h) {
 		dprintk(1,
@@ -346,7 +346,10 @@ videocodec_build_table (void)
 		size);
 
 	kfree(videocodec_buf);
-	videocodec_buf = (char *) kmalloc(size, GFP_KERNEL);
+	videocodec_buf = kmalloc(size, GFP_KERNEL);
+
+	if (!videocodec_buf)
+		return 0;
 
 	i = 0;
 	i += scnprintf(videocodec_buf + i, size - 1,

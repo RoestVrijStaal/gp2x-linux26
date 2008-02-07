@@ -37,7 +37,6 @@
 #include <linux/major.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
-#include <linux/pci.h>
 #include <linux/signal.h>
 #include <asm/io.h>
 #include <asm/pgtable.h>
@@ -65,7 +64,7 @@ MODULE_LICENSE("GPL");
 struct bt866 {
 	struct i2c_client *i2c;
 	int addr;
-	unsigned char reg[128];
+	unsigned char reg[256];
 
 	int norm;
 	int enable;
@@ -258,7 +257,7 @@ static int bt866_write(struct bt866 *encoder,
 		printk(KERN_WARNING "%s: I/O error #%d "
 		       "(write 0x%02x/0x%02x)\n",
 		       encoder->i2c->name, err, encoder->addr, subaddr);
-		schedule_timeout_interruptible(HZ/10);
+		schedule_timeout_interruptible(msecs_to_jiffies(100));
 	}
 	if (err == 3) {
 		printk(KERN_WARNING "%s: giving up\n",
@@ -301,7 +300,6 @@ static struct i2c_client bt866_client_tmpl =
 	.addr = 0,
 	.adapter = NULL,
 	.driver = &i2c_driver_bt866,
-	.usage_count = 0
 };
 
 static int bt866_found_proc(struct i2c_adapter *adapter,

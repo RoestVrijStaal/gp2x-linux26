@@ -406,7 +406,7 @@ static void send_osd_data(struct saa7146 *saa)
 	}
 }
 
-static irqreturn_t saa7146_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t saa7146_irq(int irq, void *dev_id)
 {
 	struct saa7146 *saa = dev_id;
 	u32 stat, astat;
@@ -1321,7 +1321,7 @@ static int saa_ioctl(struct inode *inode, struct file *file,
 			u32 format;
 			if (copy_from_user(&p, arg, sizeof(p)))
 				return -EFAULT;
-			if (p.palette < sizeof(palette2fmt) / sizeof(u32)) {
+			if (p.palette < ARRAY_SIZE(palette2fmt)) {
 				format = palette2fmt[p.palette];
 				saa->win.color_fmt = format;
 				saawrite(format | 0x60,
@@ -1901,7 +1901,7 @@ static int saa_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-static struct file_operations saa_fops = {
+static const struct file_operations saa_fops = {
 	.owner = THIS_MODULE,
 	.open = saa_open,
 	.release = saa_release,
@@ -1917,7 +1917,6 @@ static struct file_operations saa_fops = {
 static struct video_device saa_template = {
 	.name = "SAA7146A",
 	.type = VID_TYPE_CAPTURE | VID_TYPE_OVERLAY,
-	.hardware = VID_HARDWARE_SAA7146,
 	.fops = &saa_fops,
 	.minor = -1,
 };

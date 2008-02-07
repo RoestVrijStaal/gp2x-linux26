@@ -20,10 +20,10 @@
 #include <linux/fs.h>
 #include <linux/kthread.h>
 #include <linux/file.h>
-#include <linux/suspend.h>
+#include <linux/freezer.h>
 
-#include <media/video-buf.h>
-#include <media/video-buf-dvb.h>
+#include <media/videobuf-dma-sg.h>
+#include <media/videobuf-dvb.h>
 
 /* ------------------------------------------------------------------ */
 
@@ -45,8 +45,10 @@ static int videobuf_dvb_thread(void *data)
 	struct videobuf_buffer *buf;
 	unsigned long flags;
 	int err;
+	struct videobuf_dmabuf *dma;
 
 	dprintk("dvb thread started\n");
+	set_freezable();
 	videobuf_read_start(&dvb->dvbq);
 
 	for (;;) {
@@ -55,7 +57,6 @@ static int videobuf_dvb_thread(void *data)
 				 struct videobuf_buffer, stream);
 		list_del(&buf->stream);
 		err = videobuf_waiton(buf,0,1);
-		BUG_ON(0 != err);
 
 		/* no more feeds left or stop_feed() asked us to quit */
 		if (0 == dvb->nfeeds)
@@ -65,8 +66,9 @@ static int videobuf_dvb_thread(void *data)
 		try_to_freeze();
 
 		/* feed buffer data to demux */
+		dma=videobuf_to_dma(buf);
 		if (buf->state == STATE_DONE)
-			dvb_dmx_swfilter(&dvb->demux, buf->dma.vmalloc,
+			dvb_dmx_swfilter(&dvb->demux, dma->vmalloc,
 					 buf->size);
 
 		/* requeue buffer */
@@ -223,6 +225,7 @@ fail_dmxdev:
 fail_dmx:
 	dvb_unregister_frontend(dvb->frontend);
 fail_frontend:
+	dvb_frontend_detach(dvb->frontend);
 	dvb_unregister_adapter(&dvb->adapter);
 fail_adapter:
 	return result;
@@ -236,6 +239,7 @@ void videobuf_dvb_unregister(struct videobuf_dvb *dvb)
 	dvb_dmxdev_release(&dvb->dmxdev);
 	dvb_dmx_release(&dvb->demux);
 	dvb_unregister_frontend(dvb->frontend);
+	dvb_frontend_detach(dvb->frontend);
 	dvb_unregister_adapter(&dvb->adapter);
 }
 
