@@ -6,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2006, R. Byron Moore
+ * Copyright (C) 2000 - 2007, R. Byron Moore
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -43,6 +43,7 @@
  */
 
 #include <acpi/acpi.h>
+#include <acpi/actables.h>
 
 #define _COMPONENT          ACPI_HARDWARE
 ACPI_MODULE_NAME("hwsleep")
@@ -62,17 +63,32 @@ ACPI_MODULE_NAME("hwsleep")
 acpi_status
 acpi_set_firmware_waking_vector(acpi_physical_address physical_address)
 {
+	struct acpi_table_facs *facs;
+	acpi_status status;
 
 	ACPI_FUNCTION_TRACE(acpi_set_firmware_waking_vector);
 
+	/* Get the FACS */
+
+	status =
+	    acpi_get_table_by_index(ACPI_TABLE_INDEX_FACS,
+				    (struct acpi_table_header **)&facs);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
 	/* Set the vector */
 
-	if (acpi_gbl_common_fACS.vector_width == 32) {
-		*(ACPI_CAST_PTR
-		  (u32, acpi_gbl_common_fACS.firmware_waking_vector))
-		    = (u32) physical_address;
+	if ((facs->length < 32) || (!(facs->xfirmware_waking_vector))) {
+		/*
+		 * ACPI 1.0 FACS or short table or optional X_ field is zero
+		 */
+		facs->firmware_waking_vector = (u32) physical_address;
 	} else {
-		*acpi_gbl_common_fACS.firmware_waking_vector = physical_address;
+		/*
+		 * ACPI 2.0 FACS with valid X_ field
+		 */
+		facs->xfirmware_waking_vector = physical_address;
 	}
 
 	return_ACPI_STATUS(AE_OK);
@@ -97,6 +113,8 @@ ACPI_EXPORT_SYMBOL(acpi_set_firmware_waking_vector)
 acpi_status
 acpi_get_firmware_waking_vector(acpi_physical_address * physical_address)
 {
+	struct acpi_table_facs *facs;
+	acpi_status status;
 
 	ACPI_FUNCTION_TRACE(acpi_get_firmware_waking_vector);
 
@@ -104,16 +122,29 @@ acpi_get_firmware_waking_vector(acpi_physical_address * physical_address)
 		return_ACPI_STATUS(AE_BAD_PARAMETER);
 	}
 
+	/* Get the FACS */
+
+	status =
+	    acpi_get_table_by_index(ACPI_TABLE_INDEX_FACS,
+				    (struct acpi_table_header **)&facs);
+	if (ACPI_FAILURE(status)) {
+		return_ACPI_STATUS(status);
+	}
+
 	/* Get the vector */
 
-	if (acpi_gbl_common_fACS.vector_width == 32) {
-		*physical_address = (acpi_physical_address)
-		    *
-		    (ACPI_CAST_PTR
-		     (u32, acpi_gbl_common_fACS.firmware_waking_vector));
-	} else {
+	if ((facs->length < 32) || (!(facs->xfirmware_waking_vector))) {
+		/*
+		 * ACPI 1.0 FACS or short table or optional X_ field is zero
+		 */
 		*physical_address =
-		    *acpi_gbl_common_fACS.firmware_waking_vector;
+		    (acpi_physical_address) facs->firmware_waking_vector;
+	} else {
+		/*
+		 * ACPI 2.0 FACS with valid X_ field
+		 */
+		*physical_address =
+		    (acpi_physical_address) facs->xfirmware_waking_vector;
 	}
 
 	return_ACPI_STATUS(AE_OK);
@@ -121,7 +152,6 @@ acpi_get_firmware_waking_vector(acpi_physical_address * physical_address)
 
 ACPI_EXPORT_SYMBOL(acpi_get_firmware_waking_vector)
 #endif
-
 /*******************************************************************************
  *
  * FUNCTION:    acpi_enter_sleep_state_prep
@@ -204,7 +234,11 @@ acpi_status acpi_enter_sleep_state_prep(u8 sleep_state)
 				"While executing method _SST"));
 	}
 
-	return_ACPI_STATUS(AE_OK);
+	/* Disable/Clear all GPEs */
+
+	status = acpi_hw_disable_all_gpes();
+
+	return_ACPI_STATUS(status);
 }
 
 ACPI_EXPORT_SYMBOL(acpi_enter_sleep_state_prep)
@@ -246,27 +280,26 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	/* Clear wake status */
 
-	status =
-	    acpi_set_register(ACPI_BITREG_WAKE_STATUS, 1, ACPI_MTX_DO_NOT_LOCK);
+	status = acpi_set_register(ACPI_BITREG_WAKE_STATUS, 1);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
 	/* Clear all fixed and general purpose status bits */
 
-	status = acpi_hw_clear_acpi_status(ACPI_MTX_DO_NOT_LOCK);
+	status = acpi_hw_clear_acpi_status();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
 	/*
-	 * 1) Disable/Clear all GPEs
 	 * 2) Enable all wakeup GPEs
 	 */
 	status = acpi_hw_disable_all_gpes();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
+
 	acpi_gbl_system_awake_and_running = FALSE;
 
 	status = acpi_hw_enable_all_wakeup_gpes();
@@ -276,8 +309,7 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	/* Get current value of PM1A control */
 
-	status = acpi_hw_register_read(ACPI_MTX_DO_NOT_LOCK,
-				       ACPI_REGISTER_PM1_CONTROL, &PM1Acontrol);
+	status = acpi_hw_register_read(ACPI_REGISTER_PM1_CONTROL, &PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
@@ -304,15 +336,13 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	/* Write #1: fill in SLP_TYP data */
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1A_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 					PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1B_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 					PM1Bcontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
@@ -327,15 +357,13 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 
 	ACPI_FLUSH_CPU_CACHE();
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1A_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 					PM1Acontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
-	status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-					ACPI_REGISTER_PM1B_CONTROL,
+	status = acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 					PM1Bcontrol);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
@@ -355,8 +383,7 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 		 */
 		acpi_os_stall(10000000);
 
-		status = acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						ACPI_REGISTER_PM1_CONTROL,
+		status = acpi_hw_register_write(ACPI_REGISTER_PM1_CONTROL,
 						sleep_enable_reg_info->
 						access_bit_mask);
 		if (ACPI_FAILURE(status)) {
@@ -367,8 +394,8 @@ acpi_status asmlinkage acpi_enter_sleep_state(u8 sleep_state)
 	/* Wait until we enter sleep state */
 
 	do {
-		status = acpi_get_register(ACPI_BITREG_WAKE_STATUS, &in_value,
-					   ACPI_MTX_DO_NOT_LOCK);
+		status = acpi_get_register_unlocked(ACPI_BITREG_WAKE_STATUS,
+						    &in_value);
 		if (ACPI_FAILURE(status)) {
 			return_ACPI_STATUS(status);
 		}
@@ -401,13 +428,12 @@ acpi_status asmlinkage acpi_enter_sleep_state_s4bios(void)
 
 	ACPI_FUNCTION_TRACE(acpi_enter_sleep_state_s4bios);
 
-	status =
-	    acpi_set_register(ACPI_BITREG_WAKE_STATUS, 1, ACPI_MTX_DO_NOT_LOCK);
+	status = acpi_set_register(ACPI_BITREG_WAKE_STATUS, 1);
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
-	status = acpi_hw_clear_acpi_status(ACPI_MTX_DO_NOT_LOCK);
+	status = acpi_hw_clear_acpi_status();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
@@ -429,13 +455,12 @@ acpi_status asmlinkage acpi_enter_sleep_state_s4bios(void)
 
 	ACPI_FLUSH_CPU_CACHE();
 
-	status = acpi_os_write_port(acpi_gbl_FADT->smi_cmd,
-				    (u32) acpi_gbl_FADT->S4bios_req, 8);
+	status = acpi_os_write_port(acpi_gbl_FADT.smi_command,
+				    (u32) acpi_gbl_FADT.S4bios_request, 8);
 
 	do {
 		acpi_os_stall(1000);
-		status = acpi_get_register(ACPI_BITREG_WAKE_STATUS, &in_value,
-					   ACPI_MTX_DO_NOT_LOCK);
+		status = acpi_get_register(ACPI_BITREG_WAKE_STATUS, &in_value);
 		if (ACPI_FAILURE(status)) {
 			return_ACPI_STATUS(status);
 		}
@@ -486,8 +511,7 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 
 		/* Get current value of PM1A control */
 
-		status = acpi_hw_register_read(ACPI_MTX_DO_NOT_LOCK,
-					       ACPI_REGISTER_PM1_CONTROL,
+		status = acpi_hw_register_read(ACPI_REGISTER_PM1_CONTROL,
 					       &PM1Acontrol);
 		if (ACPI_SUCCESS(status)) {
 
@@ -509,11 +533,9 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 
 			/* Just ignore any errors */
 
-			(void)acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						     ACPI_REGISTER_PM1A_CONTROL,
+			(void)acpi_hw_register_write(ACPI_REGISTER_PM1A_CONTROL,
 						     PM1Acontrol);
-			(void)acpi_hw_register_write(ACPI_MTX_DO_NOT_LOCK,
-						     ACPI_REGISTER_PM1B_CONTROL,
+			(void)acpi_hw_register_write(ACPI_REGISTER_PM1B_CONTROL,
 						     PM1Bcontrol);
 		}
 	}
@@ -542,13 +564,10 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 		ACPI_EXCEPTION((AE_INFO, status, "During Method _BFS"));
 	}
 
-	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
-	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
-		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
-	}
-	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
-
 	/*
+	 * GPEs must be enabled before _WAK is called as GPEs
+	 * might get fired there
+	 *
 	 * Restore the GPEs:
 	 * 1) Disable/Clear all GPEs
 	 * 2) Enable all runtime GPEs
@@ -557,24 +576,28 @@ acpi_status acpi_leave_sleep_state(u8 sleep_state)
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
-	acpi_gbl_system_awake_and_running = TRUE;
-
 	status = acpi_hw_enable_all_runtime_gpes();
 	if (ACPI_FAILURE(status)) {
 		return_ACPI_STATUS(status);
 	}
 
+	status = acpi_evaluate_object(NULL, METHOD_NAME__WAK, &arg_list, NULL);
+	if (ACPI_FAILURE(status) && status != AE_NOT_FOUND) {
+		ACPI_EXCEPTION((AE_INFO, status, "During Method _WAK"));
+	}
+	/* TBD: _WAK "sometimes" returns stuff - do we want to look at it? */
+
+	acpi_gbl_system_awake_and_running = TRUE;
+
 	/* Enable power button */
 
 	(void)
 	    acpi_set_register(acpi_gbl_fixed_event_info
-			      [ACPI_EVENT_POWER_BUTTON].enable_register_id, 1,
-			      ACPI_MTX_DO_NOT_LOCK);
+			      [ACPI_EVENT_POWER_BUTTON].enable_register_id, 1);
 
 	(void)
 	    acpi_set_register(acpi_gbl_fixed_event_info
-			      [ACPI_EVENT_POWER_BUTTON].status_register_id, 1,
-			      ACPI_MTX_DO_NOT_LOCK);
+			      [ACPI_EVENT_POWER_BUTTON].status_register_id, 1);
 
 	arg.integer.value = ACPI_SST_WORKING;
 	status = acpi_evaluate_object(NULL, METHOD_NAME__SST, &arg_list, NULL);

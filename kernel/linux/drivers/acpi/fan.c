@@ -36,35 +36,36 @@
 
 #define ACPI_FAN_COMPONENT		0x00200000
 #define ACPI_FAN_CLASS			"fan"
-#define ACPI_FAN_DRIVER_NAME		"ACPI Fan Driver"
 #define ACPI_FAN_FILE_STATE		"state"
 
 #define _COMPONENT		ACPI_FAN_COMPONENT
-ACPI_MODULE_NAME("acpi_fan")
+ACPI_MODULE_NAME("fan");
 
-    MODULE_AUTHOR("Paul Diefenbaugh");
-MODULE_DESCRIPTION(ACPI_FAN_DRIVER_NAME);
+MODULE_AUTHOR("Paul Diefenbaugh");
+MODULE_DESCRIPTION("ACPI Fan Driver");
 MODULE_LICENSE("GPL");
 
 static int acpi_fan_add(struct acpi_device *device);
 static int acpi_fan_remove(struct acpi_device *device, int type);
-static int acpi_fan_suspend(struct acpi_device *device, int state);
-static int acpi_fan_resume(struct acpi_device *device, int state);
+static int acpi_fan_suspend(struct acpi_device *device, pm_message_t state);
+static int acpi_fan_resume(struct acpi_device *device);
+
+static const struct acpi_device_id fan_device_ids[] = {
+	{"PNP0C0B", 0},
+	{"", 0},
+};
+MODULE_DEVICE_TABLE(acpi, fan_device_ids);
 
 static struct acpi_driver acpi_fan_driver = {
-	.name = ACPI_FAN_DRIVER_NAME,
+	.name = "fan",
 	.class = ACPI_FAN_CLASS,
-	.ids = "PNP0C0B",
+	.ids = fan_device_ids,
 	.ops = {
 		.add = acpi_fan_add,
 		.remove = acpi_fan_remove,
 		.suspend = acpi_fan_suspend,
 		.resume = acpi_fan_resume,
 		},
-};
-
-struct acpi_fan {
-	struct acpi_device * device;
 };
 
 /* --------------------------------------------------------------------------
@@ -75,12 +76,12 @@ static struct proc_dir_entry *acpi_fan_dir;
 
 static int acpi_fan_read_state(struct seq_file *seq, void *offset)
 {
-	struct acpi_fan *fan = seq->private;
+	struct acpi_device *device = seq->private;
 	int state = 0;
 
 
-	if (fan) {
-		if (acpi_bus_get_power(fan->device->handle, &state))
+	if (device) {
+		if (acpi_bus_get_power(device->handle, &state))
 			seq_printf(seq, "status:                  ERROR\n");
 		else
 			seq_printf(seq, "status:                  %s\n",
@@ -99,12 +100,11 @@ acpi_fan_write_state(struct file *file, const char __user * buffer,
 		     size_t count, loff_t * ppos)
 {
 	int result = 0;
-	struct seq_file *m = (struct seq_file *)file->private_data;
-	struct acpi_fan *fan = (struct acpi_fan *)m->private;
+	struct seq_file *m = file->private_data;
+	struct acpi_device *device = m->private;
 	char state_string[12] = { '\0' };
 
-
-	if (!fan || (count > sizeof(state_string) - 1))
+	if (count > sizeof(state_string) - 1)
 		return -EINVAL;
 
 	if (copy_from_user(state_string, buffer, count))
@@ -112,7 +112,7 @@ acpi_fan_write_state(struct file *file, const char __user * buffer,
 
 	state_string[count] = '\0';
 
-	result = acpi_bus_set_power(fan->device->handle,
+	result = acpi_bus_set_power(device->handle,
 				    simple_strtoul(state_string, NULL, 0));
 	if (result)
 		return result;
@@ -153,7 +153,7 @@ static int acpi_fan_add_fs(struct acpi_device *device)
 		return -ENODEV;
 	else {
 		entry->proc_fops = &acpi_fan_state_ops;
-		entry->data = acpi_driver_data(device);
+		entry->data = device;
 		entry->owner = THIS_MODULE;
 	}
 
@@ -186,15 +186,8 @@ static int acpi_fan_add(struct acpi_device *device)
 	if (!device)
 		return -EINVAL;
 
-	fan = kmalloc(sizeof(struct acpi_fan), GFP_KERNEL);
-	if (!fan)
-		return -ENOMEM;
-	memset(fan, 0, sizeof(struct acpi_fan));
-
-	fan->device = device;
 	strcpy(acpi_device_name(device), "Fan");
 	strcpy(acpi_device_class(device), ACPI_FAN_CLASS);
-	acpi_driver_data(device) = fan;
 
 	result = acpi_bus_get_power(device->handle, &state);
 	if (result) {
@@ -223,22 +216,15 @@ static int acpi_fan_add(struct acpi_device *device)
 
 static int acpi_fan_remove(struct acpi_device *device, int type)
 {
-	struct acpi_fan *fan = NULL;
-
-
 	if (!device || !acpi_driver_data(device))
 		return -EINVAL;
 
-	fan = (struct acpi_fan *)acpi_driver_data(device);
-
 	acpi_fan_remove_fs(device);
-
-	kfree(fan);
 
 	return 0;
 }
 
-static int acpi_fan_suspend(struct acpi_device *device, int state)
+static int acpi_fan_suspend(struct acpi_device *device, pm_message_t state)
 {
 	if (!device)
 		return -EINVAL;
@@ -248,7 +234,7 @@ static int acpi_fan_suspend(struct acpi_device *device, int state)
 	return AE_OK;
 }
 
-static int acpi_fan_resume(struct acpi_device *device, int state)
+static int acpi_fan_resume(struct acpi_device *device)
 {
 	int result = 0;
 	int power_state = 0;
