@@ -37,19 +37,12 @@
  * 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include <linux/sched.h>
 #include <linux/errno.h>
 
 #include "usb.h"
 #include "initializers.h"
 #include "debug.h"
 #include "transport.h"
-
-#define RIO_MSC 0x08
-#define RIOP_INIT "RIOP\x00\x01\x08"
-#define RIOP_INIT_LEN 7
-#define RIO_SEND_LEN 40
-#define RIO_RECV_LEN 0x200
 
 /* This places the Shuttle/SCM USB<->SCSI bridge devices in multi-target
  * mode */
@@ -98,69 +91,16 @@ int usb_stor_ucr61s2b_init(struct us_data *us)
 	return (res ? -1 : 0);
 }
 
-/* Place the Rio Karma into mass storage mode.
- *
- * The initialization begins by sending 40 bytes starting
- * RIOP\x00\x01\x08\x00, which the device will ack with a 512-byte
- * packet with the high four bits set and everything else null.
- *
- * Next, we send RIOP\x80\x00\x08\x00.  Each time, a 512 byte response
- * must be read, but we must loop until byte 5 in the response is 0x08,
- * indicating success.  */
-int rio_karma_init(struct us_data *us)
+/* This places the HUAWEI E220 devices in multi-port mode */
+int usb_stor_huawei_e220_init(struct us_data *us)
 {
-	int result, partial;
-	char *recv;
-	unsigned long timeout;
+	int result;
 
-	// us->iobuf is big enough to hold cmd but not receive
-	if (!(recv = kmalloc(RIO_RECV_LEN, GFP_KERNEL)))
-		goto die_nomem;
-
-	US_DEBUGP("Initializing Karma...\n");
-
-	memset(us->iobuf, 0, RIO_SEND_LEN);
-	memcpy(us->iobuf, RIOP_INIT, RIOP_INIT_LEN);
-
-	result = usb_stor_bulk_transfer_buf(us, us->send_bulk_pipe,
-		us->iobuf, RIO_SEND_LEN, &partial);
-	if (result != USB_STOR_XFER_GOOD)
-		goto die;
-
-	result = usb_stor_bulk_transfer_buf(us, us->recv_bulk_pipe,
-		recv, RIO_RECV_LEN, &partial);
-	if (result != USB_STOR_XFER_GOOD)
-		goto die;
-
-	us->iobuf[4] = 0x80;
-	us->iobuf[5] = 0;
-	timeout = jiffies + msecs_to_jiffies(3000);
-	for (;;) {
-		US_DEBUGP("Sending init command\n");
-		result = usb_stor_bulk_transfer_buf(us, us->send_bulk_pipe,
-			us->iobuf, RIO_SEND_LEN, &partial);
-		if (result != USB_STOR_XFER_GOOD)
-			goto die;
-
-		result = usb_stor_bulk_transfer_buf(us, us->recv_bulk_pipe,
-			recv, RIO_RECV_LEN, &partial);
-		if (result != USB_STOR_XFER_GOOD)
-			goto die;
-
-		if (recv[5] == RIO_MSC)
-			break;
-		if (time_after(jiffies, timeout))
-			goto die;
-		msleep(10);
-	}
-	US_DEBUGP("Karma initialized.\n");
-	kfree(recv);
-	return 0;
-
-die:
-	kfree(recv);
-die_nomem:
-	US_DEBUGP("Could not initialize karma.\n");
-	return USB_STOR_TRANSPORT_FAILED;
+	us->iobuf[0] = 0x1;
+	result = usb_stor_control_msg(us, us->send_ctrl_pipe,
+				      USB_REQ_SET_FEATURE,
+				      USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+				      0x01, 0x0, us->iobuf, 0x1, 1000);
+	US_DEBUGP("usb_control_msg performing result is %d\n", result);
+	return (result ? 0 : -1);
 }
-
