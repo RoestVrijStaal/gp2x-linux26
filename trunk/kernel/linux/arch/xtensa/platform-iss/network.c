@@ -34,7 +34,7 @@
 #include <linux/timer.h>
 #include <linux/platform_device.h>
 
-#include <xtensa/simcall.h>
+#include <asm/platform/simcall.h>
 
 #define DRIVER_NAME "iss-netdev"
 #define ETH_MAX_PACKET 1500
@@ -201,7 +201,7 @@ static void dev_ip_addr(void *d, char *buf, char *bin_buf)
 	struct net_device *dev = d;
 	struct in_device *ip = dev->ip_ptr;
 	struct in_ifaddr *in;
-	u32 addr;
+	__be32 addr;
 
 	if ((ip == NULL) || ((in = ip->ifa_list) == NULL)) {
 		printk(KERN_WARNING "Device not assigned an IP address!\n");
@@ -251,7 +251,7 @@ static int tuntap_open(struct iss_net_private *lp)
 
 	memset(&ifr, 0, sizeof ifr);
 	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
-	strlcpy(ifr.ifr_name, dev_name, sizeof ifr.ifr_name - 1);
+	strlcpy(ifr.ifr_name, dev_name, sizeof ifr.ifr_name);
 
 	if ((err = simc_ioctl(fd, TUNSETIFF, (void*) &ifr)) < 0) {
 		printk("Failed to set interface, returned %d "
@@ -386,18 +386,18 @@ static int iss_net_rx(struct net_device *dev)
 	/* Setup skb */
 
 	skb->dev = dev;
-	skb->mac.raw = skb->data;
+	skb_reset_mac_header(skb);
 	pkt_len = lp->tp.read(lp, &skb);
 	skb_put(skb, pkt_len);
 
 	if (pkt_len > 0) {
 		skb_trim(skb, pkt_len);
 		skb->protocol = lp->tp.protocol(skb);
-	//	netif_rx(skb);
-		netif_rx_ni(skb);
 
 		lp->stats.rx_bytes += skb->len;
 		lp->stats.rx_packets++;
+	//	netif_rx(skb);
+		netif_rx_ni(skb);
 		return pkt_len;
 	}
 	kfree_skb(skb);
@@ -473,7 +473,7 @@ static int iss_net_open(struct net_device *dev)
 	netif_start_queue(dev);
 
 	/* clear buffer - it can happen that the host side of the interface
-	 * is full when we gethere. In this case, new data is never queued,
+	 * is full when we get here. In this case, new data is never queued,
 	 * SIGIOs never arrive, and the net never works.
 	 */
 	while ((err = iss_net_rx(dev)) > 0)
@@ -798,7 +798,7 @@ static int iss_net_setup(char *str)
 
 #undef ERR
 
-__setup("eth", iss_net_setup);
+__setup("eth=", iss_net_setup);
 
 /*
  * Initialize all ISS Ethernet devices previously registered in iss_net_setup.
