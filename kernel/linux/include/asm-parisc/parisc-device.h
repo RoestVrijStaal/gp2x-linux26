@@ -1,3 +1,6 @@
+#ifndef _ASM_PARISC_PARISC_DEVICE_H_
+#define _ASM_PARISC_PARISC_DEVICE_H_
+
 #include <linux/device.h>
 
 struct parisc_device {
@@ -12,7 +15,7 @@ struct parisc_device {
 	unsigned int	num_addrs;	/* some devices have additional address ranges. */
 	unsigned long	*addr;          /* which will be stored here */
  
-#ifdef __LP64__
+#ifdef CONFIG_64BIT
 	/* parms for pdc_pat_cell_module() call */
 	unsigned long	pcell_loc;	/* Physical Cell location */
 	unsigned long	mod_index;	/* PAT specific - Misc Module info */
@@ -57,3 +60,5 @@ parisc_get_drvdata(struct parisc_device *d)
 }
 
 extern struct bus_type parisc_bus_type;
+
+#endif /*_ASM_PARISC_PARISC_DEVICE_H_*/

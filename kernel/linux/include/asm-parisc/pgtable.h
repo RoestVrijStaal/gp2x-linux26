@@ -10,11 +10,10 @@
  * we simulate an x86-style page table for the linux mm code
  */
 
-#include <linux/spinlock.h>
 #include <linux/mm.h>		/* for vm_area_struct */
+#include <linux/bitops.h>
 #include <asm/processor.h>
 #include <asm/cache.h>
-#include <asm/bitops.h>
 
 /*
  * kern_addr_valid(ADDR) tests if ADDR is pointing to valid kernel
@@ -49,14 +48,6 @@
 	printk("%s:%d: bad pmd %08lx.\n", __FILE__, __LINE__, (unsigned long)pmd_val(e))
 #define pgd_ERROR(e) \
 	printk("%s:%d: bad pgd %08lx.\n", __FILE__, __LINE__, (unsigned long)pgd_val(e))
-
- /* Note: If you change ISTACK_SIZE, you need to change the corresponding
-  * values in vmlinux.lds and vmlinux64.lds (init_istack section). Also,
-  * the "order" and size need to agree.
-  */
-
-#define  ISTACK_SIZE  32768 /* Interrupt Stack Size */
-#define  ISTACK_ORDER 3
 
 /* This is the size of the initially mapped kernel memory */
 #ifdef CONFIG_64BIT
@@ -303,7 +294,8 @@ static inline void pmd_clear(pmd_t *pmd) {
 
 
 #if PT_NLEVELS == 3
-#define pgd_page(pgd) ((unsigned long) __va(pgd_address(pgd)))
+#define pgd_page_vaddr(pgd) ((unsigned long) __va(pgd_address(pgd)))
+#define pgd_page(pgd)	virt_to_page((void *)pgd_page_vaddr(pgd))
 
 /* For 64 bit we have three level tables */
 
@@ -325,31 +317,27 @@ static inline void pgd_clear(pgd_t *pgd) {
  * setup: the pgd is never bad, and a pmd always exists (as it's folded
  * into the pgd entry)
  */
-extern inline int pgd_none(pgd_t pgd)		{ return 0; }
-extern inline int pgd_bad(pgd_t pgd)		{ return 0; }
-extern inline int pgd_present(pgd_t pgd)	{ return 1; }
-extern inline void pgd_clear(pgd_t * pgdp)	{ }
+static inline int pgd_none(pgd_t pgd)		{ return 0; }
+static inline int pgd_bad(pgd_t pgd)		{ return 0; }
+static inline int pgd_present(pgd_t pgd)	{ return 1; }
+static inline void pgd_clear(pgd_t * pgdp)	{ }
 #endif
 
 /*
  * The following only work if pte_present() is true.
  * Undefined behaviour if not..
  */
-extern inline int pte_read(pte_t pte)		{ return pte_val(pte) & _PAGE_READ; }
-extern inline int pte_dirty(pte_t pte)		{ return pte_val(pte) & _PAGE_DIRTY; }
-extern inline int pte_young(pte_t pte)		{ return pte_val(pte) & _PAGE_ACCESSED; }
-extern inline int pte_write(pte_t pte)		{ return pte_val(pte) & _PAGE_WRITE; }
-extern inline int pte_file(pte_t pte)		{ return pte_val(pte) & _PAGE_FILE; }
-extern inline int pte_user(pte_t pte) 		{ return pte_val(pte) & _PAGE_USER; }
+static inline int pte_dirty(pte_t pte)		{ return pte_val(pte) & _PAGE_DIRTY; }
+static inline int pte_young(pte_t pte)		{ return pte_val(pte) & _PAGE_ACCESSED; }
+static inline int pte_write(pte_t pte)		{ return pte_val(pte) & _PAGE_WRITE; }
+static inline int pte_file(pte_t pte)		{ return pte_val(pte) & _PAGE_FILE; }
 
-extern inline pte_t pte_rdprotect(pte_t pte)	{ pte_val(pte) &= ~_PAGE_READ; return pte; }
-extern inline pte_t pte_mkclean(pte_t pte)	{ pte_val(pte) &= ~_PAGE_DIRTY; return pte; }
-extern inline pte_t pte_mkold(pte_t pte)	{ pte_val(pte) &= ~_PAGE_ACCESSED; return pte; }
-extern inline pte_t pte_wrprotect(pte_t pte)	{ pte_val(pte) &= ~_PAGE_WRITE; return pte; }
-extern inline pte_t pte_mkread(pte_t pte)	{ pte_val(pte) |= _PAGE_READ; return pte; }
-extern inline pte_t pte_mkdirty(pte_t pte)	{ pte_val(pte) |= _PAGE_DIRTY; return pte; }
-extern inline pte_t pte_mkyoung(pte_t pte)	{ pte_val(pte) |= _PAGE_ACCESSED; return pte; }
-extern inline pte_t pte_mkwrite(pte_t pte)	{ pte_val(pte) |= _PAGE_WRITE; return pte; }
+static inline pte_t pte_mkclean(pte_t pte)	{ pte_val(pte) &= ~_PAGE_DIRTY; return pte; }
+static inline pte_t pte_mkold(pte_t pte)	{ pte_val(pte) &= ~_PAGE_ACCESSED; return pte; }
+static inline pte_t pte_wrprotect(pte_t pte)	{ pte_val(pte) &= ~_PAGE_WRITE; return pte; }
+static inline pte_t pte_mkdirty(pte_t pte)	{ pte_val(pte) |= _PAGE_DIRTY; return pte; }
+static inline pte_t pte_mkyoung(pte_t pte)	{ pte_val(pte) |= _PAGE_ACCESSED; return pte; }
+static inline pte_t pte_mkwrite(pte_t pte)	{ pte_val(pte) |= _PAGE_WRITE; return pte; }
 
 /*
  * Conversion functions: convert a page and protection to a page entry,
@@ -373,7 +361,7 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t pgprot)
 	return pte;
 }
 
-extern inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
+static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 { pte_val(pte) = (pte_val(pte) & _PAGE_CHG_MASK) | pgprot_val(newprot); return pte; }
 
 /* Permanent address of a page.  On parisc we don't have highmem. */
@@ -382,7 +370,7 @@ extern inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 
 #define pte_page(pte)		(pfn_to_page(pte_pfn(pte)))
 
-#define pmd_page_kernel(pmd)	((unsigned long) __va(pmd_address(pmd)))
+#define pmd_page_vaddr(pmd)	((unsigned long) __va(pmd_address(pmd)))
 
 #define __pmd_page(pmd) ((unsigned long) __va(pmd_address(pmd)))
 #define pmd_page(pmd)	virt_to_page((void *)__pmd_page(pmd))
@@ -400,7 +388,7 @@ extern inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 
 #if PT_NLEVELS == 3
 #define pmd_offset(dir,address) \
-((pmd_t *) pgd_page(*(dir)) + (((address)>>PMD_SHIFT) & (PTRS_PER_PMD-1)))
+((pmd_t *) pgd_page_vaddr(*(dir)) + (((address)>>PMD_SHIFT) & (PTRS_PER_PMD-1)))
 #else
 #define pmd_offset(dir,addr) ((pmd_t *) dir)
 #endif
@@ -408,7 +396,7 @@ extern inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 /* Find an entry in the third-level page table.. */ 
 #define pte_index(address) (((address) >> PAGE_SHIFT) & (PTRS_PER_PTE-1))
 #define pte_offset_kernel(pmd, address) \
-	((pte_t *) pmd_page_kernel(*(pmd)) + pte_index(address))
+	((pte_t *) pmd_page_vaddr(*(pmd)) + pte_index(address))
 #define pte_offset_map(pmd, address) pte_offset_kernel(pmd, address)
 #define pte_offset_map_nested(pmd, address) pte_offset_kernel(pmd, address)
 #define pte_unmap(pte) do { } while (0)
@@ -447,21 +435,6 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma, unsigned
 	if (!pte_young(pte))
 		return 0;
 	set_pte_at(vma->vm_mm, addr, ptep, pte_mkold(pte));
-	return 1;
-#endif
-}
-
-static inline int ptep_test_and_clear_dirty(struct vm_area_struct *vma, unsigned long addr, pte_t *ptep)
-{
-#ifdef CONFIG_SMP
-	if (!pte_dirty(*ptep))
-		return 0;
-	return test_and_clear_bit(xlate_pabit(_PAGE_DIRTY_BIT), &pte_val(*ptep));
-#else
-	pte_t pte = *ptep;
-	if (!pte_dirty(pte))
-		return 0;
-	set_pte_at(vma->vm_mm, addr, ptep, pte_mkclean(pte));
 	return 1;
 #endif
 }
@@ -528,16 +501,11 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm, unsigned long addr, 
 
 #define pgprot_noncached(prot) __pgprot(pgprot_val(prot) | _PAGE_NO_CACHE)
 
-#define MK_IOSPACE_PFN(space, pfn)	(pfn)
-#define GET_IOSPACE(pfn)		0
-#define GET_PFN(pfn)			(pfn)
-
 /* We provide our own get_unmapped_area to provide cache coherency */
 
 #define HAVE_ARCH_UNMAPPED_AREA
 
 #define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_YOUNG
-#define __HAVE_ARCH_PTEP_TEST_AND_CLEAR_DIRTY
 #define __HAVE_ARCH_PTEP_GET_AND_CLEAR
 #define __HAVE_ARCH_PTEP_SET_WRPROTECT
 #define __HAVE_ARCH_PTE_SAME
