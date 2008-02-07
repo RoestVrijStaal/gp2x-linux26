@@ -25,9 +25,22 @@ config RWSEM_GENERIC_SPINLOCK
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 
+config ARCH_HAS_ILOG2_U32
+	bool
+	default n
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
+
 config GENERIC_FIND_NEXT_BIT
 	bool
 	default y
+
+config GENERIC_BUG
+	bool
+	default y
+	depends on BUG
 
 config GENERIC_HWEIGHT
 	bool
@@ -37,13 +50,14 @@ config GENERIC_CALIBRATE_DELAY
 	bool
 	default y
 
+config GENERIC_TIME
+	bool
+	default y
+
 config TIME_LOW_RES
 	bool
 	depends on SMP
 	default y
-
-config GENERIC_ISA_DMA
-	bool
 
 config GENERIC_HARDIRQS
 	def_bool y
@@ -127,7 +141,7 @@ config PA11
 
 config PREFETCH
 	def_bool y
-	depends on PA8X00
+	depends on PA8X00 || PA7200
 
 config 64BIT
 	bool "64-bit kernel"
@@ -253,7 +267,7 @@ source "drivers/Kconfig"
 
 source "fs/Kconfig"
 
-source "arch/parisc/oprofile/Kconfig"
+source "kernel/Kconfig.instrumentation"
 
 source "arch/parisc/Kconfig.debug"
 

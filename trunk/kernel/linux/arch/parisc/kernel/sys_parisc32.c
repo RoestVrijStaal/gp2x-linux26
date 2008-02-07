@@ -111,13 +111,14 @@ struct __sysctl_args32 {
 
 asmlinkage long sys32_sysctl(struct __sysctl_args32 __user *args)
 {
+#ifndef CONFIG_SYSCTL_SYSCALL
+	return -ENOSYS;
+#else
 	struct __sysctl_args32 tmp;
 	int error;
 	unsigned int oldlen32;
-	size_t oldlen, *oldlenp = NULL;
+	size_t oldlen, __user *oldlenp = NULL;
 	unsigned long addr = (((long __force)&args->__unused[0]) + 7) & ~7;
-	extern int do_sysctl(int *name, int nlen, void *oldval, size_t *oldlenp,
-	       void *newval, size_t newlen);
 
 	DBG(("sysctl32(%p)\n", args));
 
@@ -144,8 +145,9 @@ asmlinkage long sys32_sysctl(struct __sysctl_args32 __user *args)
 	}
 
 	lock_kernel();
-	error = do_sysctl((int *)(u64)tmp.name, tmp.nlen, (void *)(u64)tmp.oldval,
-			  oldlenp, (void *)(u64)tmp.newval, tmp.newlen);
+	error = do_sysctl((int __user *)(u64)tmp.name, tmp.nlen,
+			  (void __user *)(u64)tmp.oldval, oldlenp,
+			  (void __user *)(u64)tmp.newval, tmp.newlen);
 	unlock_kernel();
 	if (oldlenp) {
 		if (!error) {
@@ -157,10 +159,11 @@ asmlinkage long sys32_sysctl(struct __sysctl_args32 __user *args)
 					error = -EFAULT;
 			}
 		}
-		if (copy_to_user(&args->__unused[0], tmp.__unused, sizeof(tmp.__unused)))
+		if (copy_to_user(args->__unused, tmp.__unused, sizeof(tmp.__unused)))
 			error = -EFAULT;
 	}
 	return error;
+#endif
 }
 
 #endif /* CONFIG_SYSCTL */
@@ -237,14 +240,19 @@ int sys32_settimeofday(struct compat_timeval __user *tv, struct timezone __user 
 
 int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 {
+	compat_ino_t ino;
 	int err;
 
 	if (stat->size > MAX_NON_LFS || !new_valid_dev(stat->dev) ||
 	    !new_valid_dev(stat->rdev))
 		return -EOVERFLOW;
 
+	ino = stat->ino;
+	if (sizeof(ino) < sizeof(stat->ino) && ino != stat->ino)
+		return -EOVERFLOW;
+
 	err  = put_user(new_encode_dev(stat->dev), &statbuf->st_dev);
-	err |= put_user(stat->ino, &statbuf->st_ino);
+	err |= put_user(ino, &statbuf->st_ino);
 	err |= put_user(stat->mode, &statbuf->st_mode);
 	err |= put_user(stat->nlink, &statbuf->st_nlink);
 	err |= put_user(0, &statbuf->st_reserved1);
@@ -275,136 +283,6 @@ int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 	err |= put_user(0, &statbuf->st_spare4[2]);
 
 	return err;
-}
-
-struct linux32_dirent {
-	u32		d_ino;
-	compat_off_t	d_off;
-	u16		d_reclen;
-	char		d_name[1];
-};
-
-struct old_linux32_dirent {
-	u32	d_ino;
-	u32	d_offset;
-	u16	d_namlen;
-	char	d_name[1];
-};
-
-struct getdents32_callback {
-	struct linux32_dirent __user * current_dir;
-	struct linux32_dirent __user * previous;
-	int count;
-	int error;
-};
-
-struct readdir32_callback {
-	struct old_linux32_dirent __user * dirent;
-	int count;
-};
-
-#define ROUND_UP(x,a)	((__typeof__(x))(((unsigned long)(x) + ((a) - 1)) & ~((a) - 1)))
-#define NAME_OFFSET(de) ((int) ((de)->d_name - (char __user *) (de)))
-static int
-filldir32 (void *__buf, const char *name, int namlen, loff_t offset, ino_t ino,
-	   unsigned int d_type)
-{
-	struct linux32_dirent __user * dirent;
-	struct getdents32_callback * buf = (struct getdents32_callback *) __buf;
-	int reclen = ROUND_UP(NAME_OFFSET(dirent) + namlen + 1, 4);
-
-	buf->error = -EINVAL;	/* only used if we fail.. */
-	if (reclen > buf->count)
-		return -EINVAL;
-	dirent = buf->previous;
-	if (dirent)
-		put_user(offset, &dirent->d_off);
-	dirent = buf->current_dir;
-	buf->previous = dirent;
-	put_user(ino, &dirent->d_ino);
-	put_user(reclen, &dirent->d_reclen);
-	copy_to_user(dirent->d_name, name, namlen);
-	put_user(0, dirent->d_name + namlen);
-	dirent = ((void __user *)dirent) + reclen;
-	buf->current_dir = dirent;
-	buf->count -= reclen;
-	return 0;
-}
-
-asmlinkage long
-sys32_getdents (unsigned int fd, void __user * dirent, unsigned int count)
-{
-	struct file * file;
-	struct linux32_dirent __user * lastdirent;
-	struct getdents32_callback buf;
-	int error;
-
-	error = -EBADF;
-	file = fget(fd);
-	if (!file)
-		goto out;
-
-	buf.current_dir = (struct linux32_dirent __user *) dirent;
-	buf.previous = NULL;
-	buf.count = count;
-	buf.error = 0;
-
-	error = vfs_readdir(file, filldir32, &buf);
-	if (error < 0)
-		goto out_putf;
-	error = buf.error;
-	lastdirent = buf.previous;
-	if (lastdirent) {
-		put_user(file->f_pos, &lastdirent->d_off);
-		error = count - buf.count;
-	}
-
-out_putf:
-	fput(file);
-out:
-	return error;
-}
-
-static int
-fillonedir32 (void * __buf, const char * name, int namlen, loff_t offset, ino_t ino,
-	      unsigned int d_type)
-{
-	struct readdir32_callback * buf = (struct readdir32_callback *) __buf;
-	struct old_linux32_dirent __user * dirent;
-
-	if (buf->count)
-		return -EINVAL;
-	buf->count++;
-	dirent = buf->dirent;
-	put_user(ino, &dirent->d_ino);
-	put_user(offset, &dirent->d_offset);
-	put_user(namlen, &dirent->d_namlen);
-	copy_to_user(dirent->d_name, name, namlen);
-	put_user(0, dirent->d_name + namlen);
-	return 0;
-}
-
-asmlinkage long
-sys32_readdir (unsigned int fd, void __user * dirent, unsigned int count)
-{
-	int error;
-	struct file * file;
-	struct readdir32_callback buf;
-
-	error = -EBADF;
-	file = fget(fd);
-	if (!file)
-		goto out;
-
-	buf.count = 0;
-	buf.dirent = dirent;
-
-	error = vfs_readdir(file, fillonedir32, &buf);
-	if (error >= 0)
-		error = buf.count;
-	fput(file);
-out:
-	return error;
 }
 
 /*** copied from mips64 ***/
@@ -565,70 +443,6 @@ asmlinkage int sys32_sendfile64(int out_fd, int in_fd, compat_loff_t __user *off
 }
 
 
-struct sysinfo32 {
-	s32 uptime;
-	u32 loads[3];
-	u32 totalram;
-	u32 freeram;
-	u32 sharedram;
-	u32 bufferram;
-	u32 totalswap;
-	u32 freeswap;
-	unsigned short procs;
-	u32 totalhigh;
-	u32 freehigh;
-	u32 mem_unit;
-	char _f[12];
-};
-
-/* We used to call sys_sysinfo and translate the result.  But sys_sysinfo
- * undoes the good work done elsewhere, and rather than undoing the
- * damage, I decided to just duplicate the code from sys_sysinfo here.
- */
-
-asmlinkage int sys32_sysinfo(struct sysinfo32 __user *info)
-{
-	struct sysinfo val;
-	int err;
-	unsigned long seq;
-
-	/* We don't need a memset here because we copy the
-	 * struct to userspace once element at a time.
-	 */
-
-	do {
-		seq = read_seqbegin(&xtime_lock);
-		val.uptime = jiffies / HZ;
-
-		val.loads[0] = avenrun[0] << (SI_LOAD_SHIFT - FSHIFT);
-		val.loads[1] = avenrun[1] << (SI_LOAD_SHIFT - FSHIFT);
-		val.loads[2] = avenrun[2] << (SI_LOAD_SHIFT - FSHIFT);
-
-		val.procs = nr_threads;
-	} while (read_seqretry(&xtime_lock, seq));
-
-
-	si_meminfo(&val);
-	si_swapinfo(&val);
-	
-	err = put_user (val.uptime, &info->uptime);
-	err |= __put_user (val.loads[0], &info->loads[0]);
-	err |= __put_user (val.loads[1], &info->loads[1]);
-	err |= __put_user (val.loads[2], &info->loads[2]);
-	err |= __put_user (val.totalram, &info->totalram);
-	err |= __put_user (val.freeram, &info->freeram);
-	err |= __put_user (val.sharedram, &info->sharedram);
-	err |= __put_user (val.bufferram, &info->bufferram);
-	err |= __put_user (val.totalswap, &info->totalswap);
-	err |= __put_user (val.freeswap, &info->freeswap);
-	err |= __put_user (val.procs, &info->procs);
-	err |= __put_user (val.totalhigh, &info->totalhigh);
-	err |= __put_user (val.freehigh, &info->freehigh);
-	err |= __put_user (val.mem_unit, &info->mem_unit);
-	return err ? -EFAULT : 0;
-}
-
-
 /* lseek() needs a wrapper because 'offset' can be negative, but the top
  * half of the argument has been zeroed by syscall.S.
  */
@@ -658,4 +472,11 @@ long sys32_lookup_dcookie(u32 cookie_high, u32 cookie_low, char __user *buf,
 {
 	return sys_lookup_dcookie((u64)cookie_high << 32 | cookie_low,
 				  buf, len);
+}
+
+asmlinkage long compat_sys_fallocate(int fd, int mode, u32 offhi, u32 offlo,
+				u32 lenhi, u32 lenlo)
+{
+        return sys_fallocate(fd, mode, ((loff_t)offhi << 32) | offlo,
+                             ((loff_t)lenhi << 32) | lenlo);
 }

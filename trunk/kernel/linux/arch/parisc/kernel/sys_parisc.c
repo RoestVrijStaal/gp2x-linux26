@@ -29,8 +29,9 @@
 #include <linux/mm.h>
 #include <linux/mman.h>
 #include <linux/shm.h>
-#include <linux/smp_lock.h>
 #include <linux/syscalls.h>
+#include <linux/utsname.h>
+#include <linux/personality.h>
 
 int sys_pipe(int __user *fildes)
 {
@@ -104,6 +105,11 @@ unsigned long arch_get_unmapped_area(struct file *filp, unsigned long addr,
 {
 	if (len > TASK_SIZE)
 		return -ENOMEM;
+	/* Might want to check for cache aliasing issues for MAP_FIXED case
+	 * like ARM or MIPS ??? --BenH.
+	 */
+	if (flags & MAP_FIXED)
+		return addr;
 	if (!addr)
 		addr = TASK_UNMAPPED_BASE;
 
@@ -247,4 +253,34 @@ asmlinkage unsigned long sys_alloc_hugepages(int key, unsigned long addr, unsign
 asmlinkage int sys_free_hugepages(unsigned long addr)
 {
 	return -EINVAL;
+}
+
+long parisc_personality(unsigned long personality)
+{
+	long err;
+
+	if (personality(current->personality) == PER_LINUX32
+	    && personality == PER_LINUX)
+		personality = PER_LINUX32;
+
+	err = sys_personality(personality);
+	if (err == PER_LINUX32)
+		err = PER_LINUX;
+
+	return err;
+}
+
+long parisc_newuname(struct new_utsname __user *name)
+{
+	int err = sys_newuname(name);
+
+#ifdef CONFIG_COMPAT
+	if (!err && personality(current->personality) == PER_LINUX32) {
+		if (__put_user(0, name->machine + 6) ||
+		    __put_user(0, name->machine + 7))
+			err = -EFAULT;
+	}
+#endif
+
+	return err;
 }

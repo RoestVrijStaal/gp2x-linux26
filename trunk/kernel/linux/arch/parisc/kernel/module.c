@@ -27,7 +27,7 @@
  *    - SEGREL32 handling
  *      We are not doing SEGREL32 handling correctly. According to the ABI, we
  *      should do a value offset, like this:
- *			if (is_init(me, (void *)val))
+ *			if (in_init(me, (void *)val))
  *				val -= (uint32_t)me->module_init;
  *			else
  *				val -= (uint32_t)me->module_core;
@@ -46,6 +46,7 @@
 #include <linux/fs.h>
 #include <linux/string.h>
 #include <linux/kernel.h>
+#include <linux/bug.h>
 
 #include <asm/unwind.h>
 
@@ -72,31 +73,31 @@
 
 /* three functions to determine where in the module core
  * or init pieces the location is */
-static inline int is_init(struct module *me, void *loc)
+static inline int in_init(struct module *me, void *loc)
 {
 	return (loc >= me->module_init &&
 		loc <= (me->module_init + me->init_size));
 }
 
-static inline int is_core(struct module *me, void *loc)
+static inline int in_core(struct module *me, void *loc)
 {
 	return (loc >= me->module_core &&
 		loc <= (me->module_core + me->core_size));
 }
 
-static inline int is_local(struct module *me, void *loc)
+static inline int in_local(struct module *me, void *loc)
 {
-	return is_init(me, loc) || is_core(me, loc);
+	return in_init(me, loc) || in_core(me, loc);
 }
 
-static inline int is_local_section(struct module *me, void *loc, void *dot)
+static inline int in_local_section(struct module *me, void *loc, void *dot)
 {
-	return (is_init(me, loc) && is_init(me, dot)) ||
-		(is_core(me, loc) && is_core(me, dot));
+	return (in_init(me, loc) && in_init(me, dot)) ||
+		(in_core(me, loc) && in_core(me, dot));
 }
 
 
-#ifndef __LP64__
+#ifndef CONFIG_64BIT
 struct got_entry {
 	Elf32_Addr addr;
 };
@@ -176,7 +177,7 @@ void *module_alloc(unsigned long size)
 	return vmalloc(size);
 }
 
-#ifndef __LP64__
+#ifndef CONFIG_64BIT
 static inline unsigned long count_gots(const Elf_Rela *rela, unsigned long n)
 {
 	return 0;
@@ -319,7 +320,7 @@ int module_frob_arch_sections(CONST Elf_Ehdr *hdr,
 	return 0;
 }
 
-#ifdef __LP64__
+#ifdef CONFIG_64BIT
 static Elf64_Word get_got(struct module *me, unsigned long value, long addend)
 {
 	unsigned int i;
@@ -342,9 +343,9 @@ static Elf64_Word get_got(struct module *me, unsigned long value, long addend)
 	       value);
 	return i * sizeof(struct got_entry);
 }
-#endif /* __LP64__ */
+#endif /* CONFIG_64BIT */
 
-#ifdef __LP64__
+#ifdef CONFIG_64BIT
 static Elf_Addr get_fdesc(struct module *me, unsigned long value)
 {
 	Elf_Fdesc *fdesc = me->module_core + me->arch.fdesc_offset;
@@ -368,7 +369,7 @@ static Elf_Addr get_fdesc(struct module *me, unsigned long value)
 	fdesc->gp = (Elf_Addr)me->module_core + me->arch.got_offset;
 	return (Elf_Addr)fdesc;
 }
-#endif /* __LP64__ */
+#endif /* CONFIG_64BIT */
 
 enum elf_stub_type {
 	ELF_STUB_GOT,
@@ -394,7 +395,7 @@ static Elf_Addr get_stub(struct module *me, unsigned long value, long addend,
 			i * sizeof(struct stub_entry);
 	}
 
-#ifndef __LP64__
+#ifndef CONFIG_64BIT
 /* for 32-bit the stub looks like this:
  * 	ldil L'XXX,%r1
  * 	be,n R'XXX(%sr4,%r1)
@@ -472,7 +473,7 @@ int apply_relocate(Elf_Shdr *sechdrs,
 	return -ENOEXEC;
 }
 
-#ifndef __LP64__
+#ifndef CONFIG_64BIT
 int apply_relocate_add(Elf_Shdr *sechdrs,
 		       const char *strtab,
 		       unsigned int symindex,
@@ -566,14 +567,14 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			break;
 		case R_PARISC_PCREL17F:
 			/* 17-bit PC relative address */
-			val = get_stub(me, val, addend, ELF_STUB_GOT, is_init(me, loc));
+			val = get_stub(me, val, addend, ELF_STUB_GOT, in_init(me, loc));
 			val = (val - dot - 8)/4;
 			CHECK_RELOC(val, 17)
 			*loc = (*loc & ~0x1f1ffd) | reassemble_17(val);
 			break;
 		case R_PARISC_PCREL22F:
 			/* 22-bit PC relative address; only defined for pa20 */
-			val = get_stub(me, val, addend, ELF_STUB_GOT, is_init(me, loc));
+			val = get_stub(me, val, addend, ELF_STUB_GOT, in_init(me, loc));
 			DEBUGP("STUB FOR %s loc %lx+%lx at %lx\n", 
 			       strtab + sym->st_name, (unsigned long)loc, addend, 
 			       val)
@@ -670,9 +671,9 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			       strtab + sym->st_name,
 			       loc, val);
 			/* can we reach it locally? */
-			if(!is_local_section(me, (void *)val, (void *)dot)) {
+			if(!in_local_section(me, (void *)val, (void *)dot)) {
 
-				if (is_local(me, (void *)val))
+				if (in_local(me, (void *)val))
 					/* this is the case where the
 					 * symbol is local to the
 					 * module, but in a different
@@ -680,14 +681,14 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 					 * in case it's more than 22
 					 * bits away */
 					val = get_stub(me, val, addend, ELF_STUB_DIRECT,
-						       is_init(me, loc));
+						       in_init(me, loc));
 				else if (strncmp(strtab + sym->st_name, "$$", 2)
 				    == 0)
 					val = get_stub(me, val, addend, ELF_STUB_MILLI,
-						       is_init(me, loc));
+						       in_init(me, loc));
 				else
 					val = get_stub(me, val, addend, ELF_STUB_GOT,
-						       is_init(me, loc));
+						       in_init(me, loc));
 			}
 			DEBUGP("STUB FOR %s loc %lx, val %lx+%lx at %lx\n", 
 			       strtab + sym->st_name, loc, sym->st_value,
@@ -720,7 +721,7 @@ int apply_relocate_add(Elf_Shdr *sechdrs,
 			break;
 		case R_PARISC_FPTR64:
 			/* 64-bit function address */
-			if(is_local(me, (void *)(val + addend))) {
+			if(in_local(me, (void *)(val + addend))) {
 				*loc64 = get_fdesc(me, val+addend);
 				DEBUGP("FDESC for %s at %p points to %lx\n",
 				       strtab + sym->st_name, *loc64,
@@ -822,7 +823,8 @@ int module_finalize(const Elf_Ehdr *hdr,
 	       me->name, strtab, symhdr);
 
 	if(me->arch.got_count > MAX_GOTS) {
-		printk(KERN_ERR "%s: Global Offset Table overflow (used %ld, allowed %d\n", me->name, me->arch.got_count, MAX_GOTS);
+		printk(KERN_ERR "%s: Global Offset Table overflow (used %ld, allowed %d)\n",
+				me->name, me->arch.got_count, MAX_GOTS);
 		return -EINVAL;
 	}
 	
@@ -850,10 +852,11 @@ int module_finalize(const Elf_Ehdr *hdr,
 	nsyms = newptr - (Elf_Sym *)symhdr->sh_addr;
 	DEBUGP("NEW num_symtab %lu\n", nsyms);
 	symhdr->sh_size = nsyms * sizeof(Elf_Sym);
-	return 0;
+	return module_bug_finalize(hdr, sechdrs, me);
 }
 
 void module_arch_cleanup(struct module *mod)
 {
 	deregister_unwind_table(mod);
+	module_bug_cleanup(mod);
 }

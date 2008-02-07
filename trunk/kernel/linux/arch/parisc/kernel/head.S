@@ -2,7 +2,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (C) 1999 by Helge Deller
+ * Copyright (C) 1999-2007 by Helge Deller <deller@gmx.de>
  * Copyright 1999 SuSE GmbH (Philipp Rumpf)
  * Copyright 1999 Philipp Rumpf (prumpf@tux.org)
  * Copyright 2000 Hewlett Packard (Paul Bame, bame@puffin.external.hp.com)
@@ -12,8 +12,6 @@
  * Initial Version 04-23-1999 by Helge Deller <deller@gmx.de>
  */
 
-#include <linux/config.h>	/* for CONFIG_SMP */
-
 #include <asm/asm-offsets.h>
 #include <asm/psw.h>
 #include <asm/pdc.h>
@@ -21,16 +19,17 @@
 #include <asm/assembly.h>
 #include <asm/pgtable.h>
 
+#include <linux/linkage.h>
+
 	.level	LEVEL
 
 	.data
-
-	.export boot_args
-boot_args:
+ENTRY(boot_args)
 	.word 0 /* arg0 */
 	.word 0 /* arg1 */
 	.word 0 /* arg2 */
 	.word 0 /* arg3 */
+END(boot_args)
 
 	.text
 	.align	4
@@ -40,10 +39,9 @@ boot_args:
         .import fault_vector_11,code    /* IVA parisc 1.1 32 bit */
 	.import	$global$		/* forward declaration */
 #endif /*!CONFIG_64BIT*/
-	.export stext
 	.export _stext,data		/* Kernel want it this way! */
 _stext:
-stext:
+ENTRY(stext)
 	.proc
 	.callinfo
 
@@ -97,7 +95,7 @@ $bss_loop:
 
 1:
 	stw		%r3,0(%r4)
-	ldo		(ASM_PAGE_SIZE >> PxD_VALUE_SHIFT)(%r3),%r3
+	ldo		(PAGE_SIZE >> PxD_VALUE_SHIFT)(%r3),%r3
 	addib,>		-1,%r1,1b
 #if PT_NLEVELS == 3
 	ldo             ASM_PMD_ENTRY_SIZE(%r4),%r4
@@ -129,10 +127,6 @@ $pgt_fill_loop:
 
 	/* And the stack pointer too */
 	ldo             THREAD_SZ_ALGN(%r6),%sp
-
-	/* And the interrupt stack */
-	load32		interrupt_stack,%r6
-	mtctl           %r6,%cr31
 
 #ifdef CONFIG_SMP
 	/* Set the smp rendevous address into page zero.
@@ -345,6 +339,9 @@ smp_slave_stext:
 
 	.procend
 #endif /* CONFIG_SMP */
+
+ENDPROC(stext)
+
 #ifndef CONFIG_64BIT
 	.data
 
