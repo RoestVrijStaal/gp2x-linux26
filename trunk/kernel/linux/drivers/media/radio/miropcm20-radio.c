@@ -216,7 +216,7 @@ static struct pcm20_device pcm20_unit = {
 	.muted  = 1,
 };
 
-static struct file_operations pcm20_fops = {
+static const struct file_operations pcm20_fops = {
 	.owner		= THIS_MODULE,
 	.open           = video_exclusive_open,
 	.release        = video_exclusive_release,
@@ -229,7 +229,6 @@ static struct video_device pcm20_radio = {
 	.owner		= THIS_MODULE,
 	.name		= "Miro PCM 20 radio",
 	.type		= VID_TYPE_TUNER,
-	.hardware	= VID_HARDWARE_RTRACK,
 	.fops           = &pcm20_fops,
 	.priv		= &pcm20_unit
 };
