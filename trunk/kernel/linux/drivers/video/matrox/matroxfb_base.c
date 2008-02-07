@@ -93,7 +93,7 @@
  *     (c) 1998 Gerd Knorr <kraxel@cs.tu-berlin.de>
  *
  * (following author is not in any relation with this code, but his ideas
- *  were used when writting this driver)
+ *  were used when writing this driver)
  *
  *		 FreeVBE/AF (Matrox), "Shawn Hargreaves" <shawn@talula.demon.co.uk>
  *
@@ -113,7 +113,7 @@
 #include "matroxfb_g450.h"
 #include <linux/matroxfb.h>
 #include <linux/interrupt.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #ifdef CONFIG_PPC_PMAC
 #include <asm/machdep.h>
@@ -198,7 +198,7 @@ static void matroxfb_crtc1_panpos(WPMINFO2) {
 	}
 }
 
-static irqreturn_t matrox_irq(int irq, void *dev_id, struct pt_regs *fp)
+static irqreturn_t matrox_irq(int irq, void *dev_id)
 {
 	u_int32_t status;
 	int handled = 0;
@@ -679,6 +679,8 @@ static int matroxfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 		mga_outb(M_DAC_VAL, blue);
 		break;
 	case 16:
+		if (regno >= 16)
+			break;
 		{
 			u_int16_t col =
 				(red << ACCESS_FBINFO(fbcon).var.red.offset)     |
@@ -690,6 +692,8 @@ static int matroxfb_setcolreg(unsigned regno, unsigned red, unsigned green,
 		break;
 	case 24:
 	case 32:
+		if (regno >= 16)
+			break;
 		ACCESS_FBINFO(cmap[regno]) =
 			(red   << ACCESS_FBINFO(fbcon).var.red.offset)   |
 			(green << ACCESS_FBINFO(fbcon).var.green.offset) |
@@ -1994,7 +1998,6 @@ static void matroxfb_unregister_device(struct matrox_fb_info* minfo) {
 
 static int matroxfb_probe(struct pci_dev* pdev, const struct pci_device_id* dummy) {
 	struct board* b;
-	u_int8_t rev;
 	u_int16_t svid;
 	u_int16_t sid;
 	struct matrox_fb_info* minfo;
@@ -2005,11 +2008,10 @@ static int matroxfb_probe(struct pci_dev* pdev, const struct pci_device_id* dumm
 #endif
 	DBG(__FUNCTION__)
 
-	pci_read_config_byte(pdev, PCI_REVISION_ID, &rev);
 	svid = pdev->subsystem_vendor;
 	sid = pdev->subsystem_device;
 	for (b = dev_list; b->vendor; b++) {
-		if ((b->vendor != pdev->vendor) || (b->device != pdev->device) || (b->rev < rev)) continue;
+		if ((b->vendor != pdev->vendor) || (b->device != pdev->device) || (b->rev < pdev->revision)) continue;
 		if (b->svid)
 			if ((b->svid != svid) || (b->sid != sid)) continue;
 		break;
@@ -2028,7 +2030,7 @@ static int matroxfb_probe(struct pci_dev* pdev, const struct pci_device_id* dumm
 	}
 
 #ifdef CONFIG_FB_MATROX_MULTIHEAD
-	minfo = (struct matrox_fb_info*)kmalloc(sizeof(*minfo), GFP_KERNEL);
+	minfo = kmalloc(sizeof(*minfo), GFP_KERNEL);
 	if (!minfo)
 		return -1;
 #else
@@ -2277,10 +2279,13 @@ static void __init matroxfb_init_params(void) {
 	}
 }
 
-static void __init matrox_init(void) {
+static int __init matrox_init(void) {
+	int err;
+
 	matroxfb_init_params();
-	pci_register_driver(&matroxfb_driver);
+	err = pci_register_driver(&matroxfb_driver);
 	dev = -1;	/* accept all new devices... */
+	return err;
 }
 
 /* **************************** exit-time only **************************** */
@@ -2437,6 +2442,7 @@ static int __initdata initialized = 0;
 static int __init matroxfb_init(void)
 {
 	char *option = NULL;
+	int err = 0;
 
 	DBG(__FUNCTION__)
 
@@ -2448,11 +2454,11 @@ static int __init matroxfb_init(void)
 		return -ENXIO;
 	if (!initialized) {
 		initialized = 1;
-		matrox_init();
+		err = matrox_init();
 	}
 	hotplug = 1;
 	/* never return failure, user can hotplug matrox later... */
-	return 0;
+	return err;
 }
 
 module_init(matroxfb_init);
