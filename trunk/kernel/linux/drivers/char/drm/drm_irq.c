@@ -41,7 +41,7 @@
  * Get interrupt from bus id.
  *
  * \param inode device inode.
- * \param filp file pointer.
+ * \param file_priv DRM file private.
  * \param cmd command.
  * \param arg user argument, pointing to a drm_irq_busid structure.
  * \return zero on success or a negative number on failure.
@@ -50,30 +50,24 @@
  * This IOCTL is deprecated, and will now return EINVAL for any busid not equal
  * to that of the device that this DRM instance attached to.
  */
-int drm_irq_by_busid(struct inode *inode, struct file *filp,
-		     unsigned int cmd, unsigned long arg)
+int drm_irq_by_busid(struct drm_device *dev, void *data,
+		     struct drm_file *file_priv)
 {
-	drm_file_t *priv = filp->private_data;
-	drm_device_t *dev = priv->head->dev;
-	drm_irq_busid_t __user *argp = (void __user *)arg;
-	drm_irq_busid_t p;
+	struct drm_irq_busid *p = data;
 
 	if (!drm_core_check_feature(dev, DRIVER_HAVE_IRQ))
 		return -EINVAL;
 
-	if (copy_from_user(&p, argp, sizeof(p)))
-		return -EFAULT;
-
-	if ((p.busnum >> 8) != dev->pci_domain ||
-	    (p.busnum & 0xff) != dev->pci_bus ||
-	    p.devnum != dev->pci_slot || p.funcnum != dev->pci_func)
+	if ((p->busnum >> 8) != drm_get_pci_domain(dev) ||
+	    (p->busnum & 0xff) != dev->pdev->bus->number ||
+	    p->devnum != PCI_SLOT(dev->pdev->devfn) || p->funcnum != PCI_FUNC(dev->pdev->devfn))
 		return -EINVAL;
 
-	p.irq = dev->irq;
+	p->irq = dev->irq;
 
-	DRM_DEBUG("%d:%d:%d => IRQ %d\n", p.busnum, p.devnum, p.funcnum, p.irq);
-	if (copy_to_user(argp, &p, sizeof(p)))
-		return -EFAULT;
+	DRM_DEBUG("%d:%d:%d => IRQ %d\n", p->busnum, p->devnum, p->funcnum,
+		  p->irq);
+
 	return 0;
 }
 
@@ -87,7 +81,7 @@ int drm_irq_by_busid(struct inode *inode, struct file *filp,
  * \c drm_driver_irq_preinstall() and \c drm_driver_irq_postinstall() functions
  * before and after the installation.
  */
-static int drm_irq_install(drm_device_t * dev)
+static int drm_irq_install(struct drm_device * dev)
 {
 	int ret;
 	unsigned long sh_flags = 0;
@@ -120,7 +114,8 @@ static int drm_irq_install(drm_device_t * dev)
 
 		spin_lock_init(&dev->vbl_lock);
 
-		INIT_LIST_HEAD(&dev->vbl_sigs.head);
+		INIT_LIST_HEAD(&dev->vbl_sigs);
+		INIT_LIST_HEAD(&dev->vbl_sigs2);
 
 		dev->vbl_pending = 0;
 	}
@@ -154,7 +149,7 @@ static int drm_irq_install(drm_device_t * dev)
  *
  * Calls the driver's \c drm_driver_irq_uninstall() function, and stops the irq.
  */
-int drm_irq_uninstall(drm_device_t * dev)
+int drm_irq_uninstall(struct drm_device * dev)
 {
 	int irq_enabled;
 
@@ -175,6 +170,8 @@ int drm_irq_uninstall(drm_device_t * dev)
 
 	free_irq(dev->irq, dev);
 
+	dev->locked_tasklet_func = NULL;
+
 	return 0;
 }
 
@@ -184,31 +181,27 @@ EXPORT_SYMBOL(drm_irq_uninstall);
  * IRQ control ioctl.
  *
  * \param inode device inode.
- * \param filp file pointer.
+ * \param file_priv DRM file private.
  * \param cmd command.
  * \param arg user argument, pointing to a drm_control structure.
  * \return zero on success or a negative number on failure.
  *
  * Calls irq_install() or irq_uninstall() according to \p arg.
  */
-int drm_control(struct inode *inode, struct file *filp,
-		unsigned int cmd, unsigned long arg)
+int drm_control(struct drm_device *dev, void *data,
+		struct drm_file *file_priv)
 {
-	drm_file_t *priv = filp->private_data;
-	drm_device_t *dev = priv->head->dev;
-	drm_control_t ctl;
+	struct drm_control *ctl = data;
 
 	/* if we haven't irq we fallback for compatibility reasons - this used to be a separate function in drm_dma.h */
 
-	if (copy_from_user(&ctl, (drm_control_t __user *) arg, sizeof(ctl)))
-		return -EFAULT;
 
-	switch (ctl.func) {
+	switch (ctl->func) {
 	case DRM_INST_HANDLER:
 		if (!drm_core_check_feature(dev, DRIVER_HAVE_IRQ))
 			return 0;
 		if (dev->if_version < DRM_IF_VERSION(1, 2) &&
-		    ctl.irq != dev->irq)
+		    ctl->irq != dev->irq)
 			return -EINVAL;
 		return drm_irq_install(dev);
 	case DRM_UNINST_HANDLER:
@@ -224,7 +217,7 @@ int drm_control(struct inode *inode, struct file *filp,
  * Wait for VBLANK.
  *
  * \param inode device inode.
- * \param filp file pointer.
+ * \param file_priv DRM file private.
  * \param cmd command.
  * \param data user argument, pointing to a drm_wait_vblank structure.
  * \return zero on success or a negative number on failure.
@@ -239,41 +232,53 @@ int drm_control(struct inode *inode, struct file *filp,
  *
  * If a signal is not requested, then calls vblank_wait().
  */
-int drm_wait_vblank(DRM_IOCTL_ARGS)
+int drm_wait_vblank(struct drm_device *dev, void *data, struct drm_file *file_priv)
 {
-	drm_file_t *priv = filp->private_data;
-	drm_device_t *dev = priv->head->dev;
-	drm_wait_vblank_t __user *argp = (void __user *)data;
-	drm_wait_vblank_t vblwait;
+	union drm_wait_vblank *vblwait = data;
 	struct timeval now;
 	int ret = 0;
-	unsigned int flags;
+	unsigned int flags, seq;
 
-	if (!drm_core_check_feature(dev, DRIVER_IRQ_VBL))
+	if ((!dev->irq) || (!dev->irq_enabled))
 		return -EINVAL;
 
-	if (!dev->irq)
+	if (vblwait->request.type &
+	    ~(_DRM_VBLANK_TYPES_MASK | _DRM_VBLANK_FLAGS_MASK)) {
+		DRM_ERROR("Unsupported type value 0x%x, supported mask 0x%x\n",
+			  vblwait->request.type,
+			  (_DRM_VBLANK_TYPES_MASK | _DRM_VBLANK_FLAGS_MASK));
+		return -EINVAL;
+	}
+
+	flags = vblwait->request.type & _DRM_VBLANK_FLAGS_MASK;
+
+	if (!drm_core_check_feature(dev, (flags & _DRM_VBLANK_SECONDARY) ?
+				    DRIVER_IRQ_VBL2 : DRIVER_IRQ_VBL))
 		return -EINVAL;
 
-	DRM_COPY_FROM_USER_IOCTL(vblwait, argp, sizeof(vblwait));
+	seq = atomic_read((flags & _DRM_VBLANK_SECONDARY) ? &dev->vbl_received2
+			  : &dev->vbl_received);
 
-	switch (vblwait.request.type & ~_DRM_VBLANK_FLAGS_MASK) {
+	switch (vblwait->request.type & _DRM_VBLANK_TYPES_MASK) {
 	case _DRM_VBLANK_RELATIVE:
-		vblwait.request.sequence += atomic_read(&dev->vbl_received);
-		vblwait.request.type &= ~_DRM_VBLANK_RELATIVE;
+		vblwait->request.sequence += seq;
+		vblwait->request.type &= ~_DRM_VBLANK_RELATIVE;
 	case _DRM_VBLANK_ABSOLUTE:
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	flags = vblwait.request.type & _DRM_VBLANK_FLAGS_MASK;
+	if ((flags & _DRM_VBLANK_NEXTONMISS) &&
+	    (seq - vblwait->request.sequence) <= (1<<23)) {
+		vblwait->request.sequence = seq + 1;
+	}
 
 	if (flags & _DRM_VBLANK_SIGNAL) {
 		unsigned long irqflags;
-		drm_vbl_sig_t *vbl_sig;
-
-		vblwait.reply.sequence = atomic_read(&dev->vbl_received);
+		struct list_head *vbl_sigs = (flags & _DRM_VBLANK_SECONDARY)
+				      ? &dev->vbl_sigs2 : &dev->vbl_sigs;
+		struct drm_vbl_sig *vbl_sig;
 
 		spin_lock_irqsave(&dev->vbl_lock, irqflags);
 
@@ -281,12 +286,14 @@ int drm_wait_vblank(DRM_IOCTL_ARGS)
 		 * for the same vblank sequence number; nothing to be done in
 		 * that case
 		 */
-		list_for_each_entry(vbl_sig, &dev->vbl_sigs.head, head) {
-			if (vbl_sig->sequence == vblwait.request.sequence
-			    && vbl_sig->info.si_signo == vblwait.request.signal
+		list_for_each_entry(vbl_sig, vbl_sigs, head) {
+			if (vbl_sig->sequence == vblwait->request.sequence
+			    && vbl_sig->info.si_signo ==
+			    vblwait->request.signal
 			    && vbl_sig->task == current) {
 				spin_unlock_irqrestore(&dev->vbl_lock,
 						       irqflags);
+				vblwait->reply.sequence = seq;
 				goto done;
 			}
 		}
@@ -302,35 +309,38 @@ int drm_wait_vblank(DRM_IOCTL_ARGS)
 
 		if (!
 		    (vbl_sig =
-		     drm_alloc(sizeof(drm_vbl_sig_t), DRM_MEM_DRIVER))) {
+		     drm_alloc(sizeof(struct drm_vbl_sig), DRM_MEM_DRIVER))) {
 			return -ENOMEM;
 		}
 
 		memset((void *)vbl_sig, 0, sizeof(*vbl_sig));
 
-		vbl_sig->sequence = vblwait.request.sequence;
-		vbl_sig->info.si_signo = vblwait.request.signal;
+		vbl_sig->sequence = vblwait->request.sequence;
+		vbl_sig->info.si_signo = vblwait->request.signal;
 		vbl_sig->task = current;
 
 		spin_lock_irqsave(&dev->vbl_lock, irqflags);
 
-		list_add_tail((struct list_head *)vbl_sig, &dev->vbl_sigs.head);
+		list_add_tail(&vbl_sig->head, vbl_sigs);
 
 		spin_unlock_irqrestore(&dev->vbl_lock, irqflags);
+
+		vblwait->reply.sequence = seq;
 	} else {
-		if (dev->driver->vblank_wait)
+		if (flags & _DRM_VBLANK_SECONDARY) {
+			if (dev->driver->vblank_wait2)
+				ret = dev->driver->vblank_wait2(dev, &vblwait->request.sequence);
+		} else if (dev->driver->vblank_wait)
 			ret =
 			    dev->driver->vblank_wait(dev,
-						     &vblwait.request.sequence);
+						     &vblwait->request.sequence);
 
 		do_gettimeofday(&now);
-		vblwait.reply.tval_sec = now.tv_sec;
-		vblwait.reply.tval_usec = now.tv_usec;
+		vblwait->reply.tval_sec = now.tv_sec;
+		vblwait->reply.tval_usec = now.tv_usec;
 	}
 
       done:
-	DRM_COPY_TO_USER_IOCTL(argp, vblwait, sizeof(vblwait));
-
 	return ret;
 }
 
@@ -343,27 +353,32 @@ int drm_wait_vblank(DRM_IOCTL_ARGS)
  *
  * If a signal is not requested, then calls vblank_wait().
  */
-void drm_vbl_send_signals(drm_device_t * dev)
+void drm_vbl_send_signals(struct drm_device * dev)
 {
-	struct list_head *list, *tmp;
-	drm_vbl_sig_t *vbl_sig;
-	unsigned int vbl_seq = atomic_read(&dev->vbl_received);
 	unsigned long flags;
+	int i;
 
 	spin_lock_irqsave(&dev->vbl_lock, flags);
 
-	list_for_each_safe(list, tmp, &dev->vbl_sigs.head) {
-		vbl_sig = list_entry(list, drm_vbl_sig_t, head);
-		if ((vbl_seq - vbl_sig->sequence) <= (1 << 23)) {
-			vbl_sig->info.si_code = vbl_seq;
-			send_sig_info(vbl_sig->info.si_signo, &vbl_sig->info,
-				      vbl_sig->task);
+	for (i = 0; i < 2; i++) {
+		struct drm_vbl_sig *vbl_sig, *tmp;
+		struct list_head *vbl_sigs = i ? &dev->vbl_sigs2 : &dev->vbl_sigs;
+		unsigned int vbl_seq = atomic_read(i ? &dev->vbl_received2 :
+						   &dev->vbl_received);
 
-			list_del(list);
+		list_for_each_entry_safe(vbl_sig, tmp, vbl_sigs, head) {
+			if ((vbl_seq - vbl_sig->sequence) <= (1 << 23)) {
+				vbl_sig->info.si_code = vbl_seq;
+				send_sig_info(vbl_sig->info.si_signo,
+					      &vbl_sig->info, vbl_sig->task);
 
-			drm_free(vbl_sig, sizeof(*vbl_sig), DRM_MEM_DRIVER);
+				list_del(&vbl_sig->head);
 
-			dev->vbl_pending--;
+				drm_free(vbl_sig, sizeof(*vbl_sig),
+					 DRM_MEM_DRIVER);
+
+				dev->vbl_pending--;
+			}
 		}
 	}
 
@@ -371,3 +386,77 @@ void drm_vbl_send_signals(drm_device_t * dev)
 }
 
 EXPORT_SYMBOL(drm_vbl_send_signals);
+
+/**
+ * Tasklet wrapper function.
+ *
+ * \param data DRM device in disguise.
+ *
+ * Attempts to grab the HW lock and calls the driver callback on success. On
+ * failure, leave the lock marked as contended so the callback can be called
+ * from drm_unlock().
+ */
+static void drm_locked_tasklet_func(unsigned long data)
+{
+	struct drm_device *dev = (struct drm_device *)data;
+	unsigned long irqflags;
+
+	spin_lock_irqsave(&dev->tasklet_lock, irqflags);
+
+	if (!dev->locked_tasklet_func ||
+	    !drm_lock_take(&dev->lock,
+			   DRM_KERNEL_CONTEXT)) {
+		spin_unlock_irqrestore(&dev->tasklet_lock, irqflags);
+		return;
+	}
+
+	dev->lock.lock_time = jiffies;
+	atomic_inc(&dev->counts[_DRM_STAT_LOCKS]);
+
+	dev->locked_tasklet_func(dev);
+
+	drm_lock_free(&dev->lock,
+		      DRM_KERNEL_CONTEXT);
+
+	dev->locked_tasklet_func = NULL;
+
+	spin_unlock_irqrestore(&dev->tasklet_lock, irqflags);
+}
+
+/**
+ * Schedule a tasklet to call back a driver hook with the HW lock held.
+ *
+ * \param dev DRM device.
+ * \param func Driver callback.
+ *
+ * This is intended for triggering actions that require the HW lock from an
+ * interrupt handler. The lock will be grabbed ASAP after the interrupt handler
+ * completes. Note that the callback may be called from interrupt or process
+ * context, it must not make any assumptions about this. Also, the HW lock will
+ * be held with the kernel context or any client context.
+ */
+void drm_locked_tasklet(struct drm_device *dev, void (*func)(struct drm_device *))
+{
+	unsigned long irqflags;
+	static DECLARE_TASKLET(drm_tasklet, drm_locked_tasklet_func, 0);
+
+	if (!drm_core_check_feature(dev, DRIVER_HAVE_IRQ) ||
+	    test_bit(TASKLET_STATE_SCHED, &drm_tasklet.state))
+		return;
+
+	spin_lock_irqsave(&dev->tasklet_lock, irqflags);
+
+	if (dev->locked_tasklet_func) {
+		spin_unlock_irqrestore(&dev->tasklet_lock, irqflags);
+		return;
+	}
+
+	dev->locked_tasklet_func = func;
+
+	spin_unlock_irqrestore(&dev->tasklet_lock, irqflags);
+
+	drm_tasklet.data = (unsigned long)dev;
+
+	tasklet_hi_schedule(&drm_tasklet);
+}
+EXPORT_SYMBOL(drm_locked_tasklet);
