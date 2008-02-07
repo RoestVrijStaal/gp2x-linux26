@@ -101,8 +101,10 @@ W6692_new_ph(struct IsdnCardState *cs)
 }
 
 static void
-W6692_bh(struct IsdnCardState *cs)
+W6692_bh(struct work_struct *work)
 {
+	struct IsdnCardState *cs =
+		container_of(work, struct IsdnCardState, tqueue);
 	struct PStack *stptr;
 
 	if (!cs)
@@ -400,7 +402,7 @@ W6692B_interrupt(struct IsdnCardState *cs, u_char bchan)
 }
 
 static irqreturn_t
-W6692_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+W6692_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState	*cs = dev_id;
 	u_char			val, exval, v1;
@@ -715,7 +717,7 @@ dbusy_timer_handler(struct IsdnCardState *cs)
 			}
 			cs->writeW6692(cs, W_D_CMDR, W_D_CMDR_XRST);	/* Transmitter reset */
 			spin_unlock_irqrestore(&cs->lock, flags);
-			cs->irq_func(cs->irq, cs, NULL);
+			cs->irq_func(cs->irq, cs);
 			return;
 		}
 	}
@@ -1007,7 +1009,7 @@ setup_w6692(struct IsdnCard *card)
 	printk(KERN_INFO "HiSax: W6692 driver Rev. %s\n", HiSax_getrev(tmp));
 	if (cs->typ != ISDN_CTYPE_W6692)
 		return (0);
-#ifdef CONFIG_PCI
+
 	while (id_list[id_idx].vendor_id) {
 		dev_w6692 = pci_find_device(id_list[id_idx].vendor_id,
 					    id_list[id_idx].device_id,
@@ -1059,18 +1061,13 @@ setup_w6692(struct IsdnCard *card)
 		       cs->hw.w6692.iobase + 255);
 		return (0);
 	}
-#else
-	printk(KERN_WARNING "HiSax: W6692 and NO_PCI_BIOS\n");
-	printk(KERN_WARNING "HiSax: W6692 unable to config\n");
-	return (0);
-#endif				/* CONFIG_PCI */
 
 	printk(KERN_INFO
 	       "HiSax: %s config irq:%d I/O:%x\n",
 	       id_list[cs->subtyp].card_name, cs->irq,
 	       cs->hw.w6692.iobase);
 
-	INIT_WORK(&cs->tqueue, (void *)(void *) W6692_bh, cs);
+	INIT_WORK(&cs->tqueue, W6692_bh);
 	cs->readW6692 = &ReadW6692;
 	cs->writeW6692 = &WriteW6692;
 	cs->readisacfifo = &ReadISACfifo;

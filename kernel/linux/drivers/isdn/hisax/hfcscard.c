@@ -21,7 +21,7 @@ extern const char *CardType[];
 static const char *hfcs_revision = "$Revision: 1.10.2.4 $";
 
 static irqreturn_t
-hfcs_interrupt(int intno, void *dev_id, struct pt_regs *regs)
+hfcs_interrupt(int intno, void *dev_id)
 {
 	struct IsdnCardState *cs = dev_id;
 	u_char val, stat;
@@ -118,8 +118,7 @@ hfcs_card_msg(struct IsdnCardState *cs, int mt, void *arg)
 			return(0);
 		case CARD_INIT:
 			delay = (75*HZ)/100 +1;
-			cs->hw.hfcD.timer.expires = jiffies + delay;
-			add_timer(&cs->hw.hfcD.timer);
+			mod_timer(&cs->hw.hfcD.timer, jiffies + delay);
 			spin_lock_irqsave(&cs->lock, flags);
 			reset_hfcs(cs);
 			init2bds0(cs);
