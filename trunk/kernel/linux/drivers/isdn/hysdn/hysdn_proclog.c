@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/poll.h>
 #include <linux/proc_fs.h>
-#include <linux/pci.h>
 #include <linux/smp_lock.h>
 
 #include "hysdn_defs.h"
@@ -111,13 +110,12 @@ put_log_buffer(hysdn_card * card, char *cp)
 	if (pd->if_used <= 0)
 		return;		/* no open file for read */
 
-	if (!(ib = (struct log_data *) kmalloc(sizeof(struct log_data) + strlen(cp), GFP_ATOMIC)))
+	if (!(ib = kmalloc(sizeof(struct log_data) + strlen(cp), GFP_ATOMIC)))
 		 return;	/* no memory */
 	strcpy(ib->log_start, cp);	/* set output string */
 	ib->next = NULL;
 	ib->proc_ctrl = pd;	/* point to own control structure */
-	save_flags(flags);
-	cli();
+	spin_lock_irqsave(&card->hysdn_lock, flags);
 	ib->usage_cnt = pd->if_used;
 	if (!pd->log_head)
 		pd->log_head = ib;	/* new head */
@@ -125,7 +123,7 @@ put_log_buffer(hysdn_card * card, char *cp)
 		pd->log_tail->next = ib;	/* follows existing messages */
 	pd->log_tail = ib;	/* new tail */
 	i = pd->del_lock++;	/* get lock state */
-	restore_flags(flags);
+	spin_unlock_irqrestore(&card->hysdn_lock, flags);
 
 	/* delete old entrys */
 	if (!i)
@@ -205,7 +203,7 @@ hysdn_log_read(struct file *file, char __user *buf, size_t count, loff_t * off)
 {
 	struct log_data *inf;
 	int len;
-	struct proc_dir_entry *pde = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *pde = PDE(file->f_path.dentry->d_inode);
 	struct procdata *pd = NULL;
 	hysdn_card *card;
 
@@ -270,14 +268,13 @@ hysdn_log_open(struct inode *ino, struct file *filep)
 	} else if ((filep->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_READ) {
 
 		/* read access -> log/debug read */
-		save_flags(flags);
-		cli();
+		spin_lock_irqsave(&card->hysdn_lock, flags);
 		pd->if_used++;
 		if (pd->log_head)
 			filep->private_data = &pd->log_tail->next;
 		else
 			filep->private_data = &pd->log_head;
-		restore_flags(flags);
+		spin_unlock_irqrestore(&card->hysdn_lock, flags);
 	} else {		/* simultaneous read/write access forbidden ! */
 		unlock_kernel();
 		return (-EPERM);	/* no permission this time */
@@ -300,8 +297,6 @@ hysdn_log_close(struct inode *ino, struct file *filep)
 	struct procdata *pd;
 	hysdn_card *card;
 	int retval = 0;
-	unsigned long flags;
-
 
 	lock_kernel();
 	if ((filep->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_WRITE) {
@@ -311,8 +306,6 @@ hysdn_log_close(struct inode *ino, struct file *filep)
 		/* read access -> log/debug read, mark one further file as closed */
 
 		pd = NULL;
-		save_flags(flags);
-		cli();
 		inf = *((struct log_data **) filep->private_data);	/* get first log entry */
 		if (inf)
 			pd = (struct procdata *) inf->proc_ctrl;	/* still entries there */
@@ -335,7 +328,6 @@ hysdn_log_close(struct inode *ino, struct file *filep)
 			inf->usage_cnt--;	/* decrement usage count for buffers */
 			inf = inf->next;
 		}
-		restore_flags(flags);
 
 		if (pd)
 			if (pd->if_used <= 0)	/* delete buffers if last file closed */
@@ -357,7 +349,7 @@ static unsigned int
 hysdn_log_poll(struct file *file, poll_table * wait)
 {
 	unsigned int mask = 0;
-	struct proc_dir_entry *pde = PDE(file->f_dentry->d_inode);
+	struct proc_dir_entry *pde = PDE(file->f_path.dentry->d_inode);
 	hysdn_card *card;
 	struct procdata *pd = NULL;
 
@@ -386,7 +378,7 @@ hysdn_log_poll(struct file *file, poll_table * wait)
 /**************************************************/
 /* table for log filesystem functions defined above. */
 /**************************************************/
-static struct file_operations log_fops =
+static const struct file_operations log_fops =
 {
 	.llseek         = no_llseek,
 	.read           = hysdn_log_read,
@@ -408,8 +400,7 @@ hysdn_proclog_init(hysdn_card * card)
 
 	/* create a cardlog proc entry */
 
-	if ((pd = (struct procdata *) kmalloc(sizeof(struct procdata), GFP_KERNEL)) != NULL) {
-		memset(pd, 0, sizeof(struct procdata));
+	if ((pd = kzalloc(sizeof(struct procdata), GFP_KERNEL)) != NULL) {
 		sprintf(pd->log_name, "%s%d", PROC_LOG_BASENAME, card->myid);
 		if ((pd->log = create_proc_entry(pd->log_name, S_IFREG | S_IRUGO | S_IWUSR, hysdn_proc_entry)) != NULL) {
 		        pd->log->proc_fops = &log_fops; 
