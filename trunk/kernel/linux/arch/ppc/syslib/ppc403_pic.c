@@ -42,7 +42,7 @@ static struct hw_interrupt_type ppc403_aic = {
 };
 
 int
-ppc403_pic_get_irq(struct pt_regs *regs)
+ppc403_pic_get_irq(void)
 {
 	int irq;
 	unsigned long bits;
@@ -112,7 +112,7 @@ ppc4xx_pic_init(void)
 
 	/*
 	 * Disable all external interrupts until they are
-	 * explicity requested.
+	 * explicitly requested.
 	 */
 	ppc_cached_irq_mask[0] = 0;
 

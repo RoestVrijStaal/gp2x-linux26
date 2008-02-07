@@ -4,6 +4,10 @@
 
 mainmenu "Linux/PowerPC Kernel Configuration"
 
+config WORD_SIZE
+	int
+	default 32
+
 config MMU
 	bool
 	default y
@@ -18,6 +22,14 @@ config RWSEM_GENERIC_SPINLOCK
 config RWSEM_XCHGADD_ALGORITHM
 	bool
 	default y
+
+config ARCH_HAS_ILOG2_U32
+	bool
+	default y
+
+config ARCH_HAS_ILOG2_U64
+	bool
+	default n
 
 config GENERIC_HWEIGHT
 	bool
@@ -52,6 +64,11 @@ config ARCH_MAY_HAVE_PC_FDC
 	bool
 	default y
 
+config GENERIC_BUG
+	bool
+	default y
+	depends on BUG
+
 source "init/Kconfig"
 
 menu "Processor"
@@ -77,12 +94,15 @@ config 6xx
 
 config 40x
 	bool "40x"
+	select PPC_DCR_NATIVE
 
 config 44x
 	bool "44x"
+	select PPC_DCR_NATIVE
 
 config 8xx
 	bool "8xx"
+	select PPC_LIB_RHEAP
 
 config E200
 	bool "e200"
@@ -94,6 +114,15 @@ endchoice
 
 config PPC_FPU
 	bool
+
+config PPC_DCR_NATIVE
+	bool
+	default n
+
+config PPC_DCR
+	bool
+	depends on PPC_DCR_NATIVE
+	default y
 
 config BOOKE
 	bool
@@ -549,23 +578,8 @@ choice
 
 	  Select PReP if configuring for a PReP machine.
 
-	  Select Gemini if configuring for a Synergy Microsystems' Gemini
-	  series Single Board Computer.  More information is available at:
-	  <http://www.synergymicro.com/PressRel/97_10_15.html>.
-
-	  Select APUS if configuring for a PowerUP Amiga.  More information is
-	  available at: <http://linux-apus.sourceforge.net/>.
-
 config PPC_PREP
 	bool "PReP"
-
-config APUS
-	bool "Amiga-APUS"
-	depends on BROKEN
-	help
-	  Select APUS if configuring for a PowerUP Amiga.
-	  More information is available at:
-	  <http://linux-apus.sourceforge.net/>.
 
 config KATANA
 	bool "Artesyn-Katana"
@@ -600,7 +614,7 @@ config HDPU
 	  Select HDPU if configuring a Sky Computers Compute Blade.
 
 config HDPU_FEATURES
-	depends HDPU
+	depends on HDPU
 	tristate "HDPU-Features"
 	help
 	  Select to enable HDPU enhanced features.
@@ -645,15 +659,6 @@ config RADSTONE_PPC7D
 
 config PAL4
 	bool "SBS-Palomar4"
-
-config GEMINI
-	bool "Synergy-Gemini"
-	depends on BROKEN
-	select PPC_INDIRECT_PCI
-	help
-	  Select Gemini if configuring for a Synergy Microsystems' Gemini
-	  series Single Board Computer.  More information is available at:
-	  <http://www.synergymicro.com/PressRel/97_10_15.html>.
 
 config EST8260
 	bool "EST8260"
@@ -711,7 +716,7 @@ config LITE5200
 
 config LITE5200B
 	bool "Freescale LITE5200B"
-	depends LITE5200
+	depends on LITE5200
 	help
 	  Support for the LITE5200B dev board for the MPC5200 from Freescale.
 	  This is the new board with 2 PCI slots.
@@ -724,7 +729,7 @@ config MPC834x_SYS
 	  Be aware that PCI buses can only function when SYS board is plugged
 	  into the PIB (Platform IO Board) board from Freescale which provide
 	  3 PCI slots.  The PIBs PCI initialization is the bootloader's
-	  responsiblilty.
+	  responsibility.
 
 config EV64360
 	bool "Marvell-EV64360BP"
@@ -794,6 +799,7 @@ config CPM1
 config CPM2
 	bool
 	depends on 8260 || MPC8560 || MPC8555
+	select PPC_LIB_RHEAP
 	default y
 	help
 	  The CPM2 (Communications Processor Module) is a coprocessor on
@@ -828,6 +834,21 @@ config MV64X60
 	bool
 	depends on (GT64260 || MV64360)
 	select PPC_INDIRECT_PCI
+	default y
+
+config MV643XX_ETH_0
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360 || HDPU)
+	default y
+
+config MV643XX_ETH_1
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360)
+	default y
+
+config MV643XX_ETH_2
+	bool
+	depends on MV643XX_ETH && (KATANA || RADSTONE_PPC7D || EV64360)
 	default y
 
 menu "Set bridge options"
@@ -953,6 +974,9 @@ config NR_CPUS
 config HIGHMEM
 	bool "High memory support"
 
+config ARCH_POPULATES_NODE_MAP
+	def_bool y
+
 source kernel/Kconfig.hz
 source kernel/Kconfig.preempt
 source "mm/Kconfig"
@@ -994,133 +1018,7 @@ config CMDLINE
 	  some command-line options at build time by entering them here.  In
 	  most cases you will need to specify the root device here.
 
-config AMIGA
-	bool
-	depends on APUS
-	default y
-	help
-	  This option enables support for the Amiga series of computers.
-
-config ZORRO
-	bool
-	depends on APUS
-	default y
-	help
-	  This enables support for the Zorro bus in the Amiga. If you have
-	  expansion cards in your Amiga that conform to the Amiga
-	  AutoConfig(tm) specification, say Y, otherwise N. Note that even
-	  expansion cards that do not fit in the Zorro slots but fit in e.g.
-	  the CPU slot may fall in this category, so you have to say Y to let
-	  Linux use these.
-
-config ABSTRACT_CONSOLE
-	bool
-	depends on APUS
-	default y
-
-config APUS_FAST_EXCEPT
-	bool
-	depends on APUS
-	default y
-
-config AMIGA_PCMCIA
-	bool "Amiga 1200/600 PCMCIA support"
-	depends on APUS && EXPERIMENTAL
-	help
-	  Include support in the kernel for pcmcia on Amiga 1200 and Amiga
-	  600. If you intend to use pcmcia cards say Y; otherwise say N.
-
-config AMIGA_BUILTIN_SERIAL
-	tristate "Amiga builtin serial support"
-	depends on APUS
-	help
-	  If you want to use your Amiga's built-in serial port in Linux,
-	  answer Y.
-
-	  To compile this driver as a module, choose M here.
-
-config GVPIOEXT
-	tristate "GVP IO-Extender support"
-	depends on APUS
-	help
-	  If you want to use a GVP IO-Extender serial card in Linux, say Y.
-	  Otherwise, say N.
-
-config GVPIOEXT_LP
-	tristate "GVP IO-Extender parallel printer support"
-	depends on GVPIOEXT
-	help
-	  Say Y to enable driving a printer from the parallel port on your
-	  GVP IO-Extender card, N otherwise.
-
-config GVPIOEXT_PLIP
-	tristate "GVP IO-Extender PLIP support"
-	depends on GVPIOEXT
-	help
-	  Say Y to enable doing IP over the parallel port on your GVP
-	  IO-Extender card, N otherwise.
-
-config MULTIFACE_III_TTY
-	tristate "Multiface Card III serial support"
-	depends on APUS
-	help
-	  If you want to use a Multiface III card's serial port in Linux,
-	  answer Y.
-
-	  To compile this driver as a module, choose M here.
-
-config A2232
-	tristate "Commodore A2232 serial support (EXPERIMENTAL)"
-	depends on EXPERIMENTAL && APUS
-	---help---
-	  This option supports the 2232 7-port serial card shipped with the
-	  Amiga 2000 and other Zorro-bus machines, dating from 1989.  At
-	  a max of 19,200 bps, the ports are served by a 6551 ACIA UART chip
-	  each, plus a 8520 CIA, and a master 6502 CPU and buffer as well. The
-	  ports were connected with 8 pin DIN connectors on the card bracket,
-	  for which 8 pin to DB25 adapters were supplied. The card also had
-	  jumpers internally to toggle various pinning configurations.
-
-	  This driver can be built as a module; but then "generic_serial"
-	  will also be built as a module. This has to be loaded before
-	  "ser_a2232". If you want to do this, answer M here.
-
-config WHIPPET_SERIAL
-	tristate "Hisoft Whippet PCMCIA serial support"
-	depends on AMIGA_PCMCIA
-	help
-	  HiSoft has a web page at <http://www.hisoft.co.uk/>, but there
-	  is no listing for the Whippet in their Amiga section.
-
-config APNE
-	tristate "PCMCIA NE2000 support"
-	depends on AMIGA_PCMCIA
-	help
-	  If you have a PCMCIA NE2000 compatible adapter, say Y.  Otherwise,
-	  say N.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called apne.
-
-config SERIAL_CONSOLE
-	bool "Support for serial port console"
-	depends on APUS && (AMIGA_BUILTIN_SERIAL=y || GVPIOEXT=y || MULTIFACE_III_TTY=y)
-
-config HEARTBEAT
-	bool "Use power LED as a heartbeat"
-	depends on APUS
-	help
-	  Use the power-on LED on your machine as a load meter.  The exact
-	  behavior is platform-dependent, but normally the flash frequency is
-	  a hyperbolic function of the 5-minute load average.
-
-config PROC_HARDWARE
-	bool "/proc/hardware support"
-	depends on APUS
-
-source "drivers/zorro/Kconfig"
-
-if !44x || BROKEN
+if BROKEN
 source kernel/power/Kconfig
 endif
 
@@ -1159,6 +1057,10 @@ config ISA
 	  have an IBM RS/6000 or pSeries machine or a PReP machine, say Y.  If
 	  you have an embedded board, consult your board documentation.
 
+config ZONE_DMA
+	bool
+	default y
+
 config GENERIC_ISA_DMA
 	bool
 	depends on 6xx && !CPM2
@@ -1190,8 +1092,7 @@ config MCA
 
 config PCI
 	bool "PCI support" if 40x || CPM2 || 83xx || 85xx || PPC_MPC52xx
-	default y if !40x && !CPM2 && !8xx && !APUS && !83xx && !85xx
-	default PCI_PERMEDIA if !4xx && !CPM2 && !8xx && APUS
+	default y if !40x && !CPM2 && !8xx && !83xx && !85xx
 	default PCI_QSPAN if !4xx && !CPM2 && 8xx
 	help
 	  Find out whether your system includes a PCI bus. PCI is the name of
@@ -1200,11 +1101,13 @@ config PCI
 	  infrastructure code to support PCI bus devices.
 
 config PCI_DOMAINS
-	bool
-	default PCI
+	def_bool PCI
+
+config PCI_SYSCALL
+	def_bool PCI
 
 config MPC83xx_PCI2
-	bool "  Supprt for 2nd PCI host controller"
+	bool "Support for 2nd PCI host controller"
 	depends on PCI && MPC834x
 	default y if MPC834x_SYS
 
@@ -1223,12 +1126,12 @@ config PCI_8260
 	default y
 
 config 8260_PCI9
-	bool "  Enable workaround for MPC826x erratum PCI 9"
+	bool "Enable workaround for MPC826x erratum PCI 9"
 	depends on PCI_8260 && !ADS8272
 	default y
 
 choice
-	prompt "  IDMA channel for PCI 9 workaround"
+	prompt "IDMA channel for PCI 9 workaround"
 	depends on 8260_PCI9
 
 config 8260_PCI9_IDMA1
@@ -1244,10 +1147,6 @@ config 8260_PCI9_IDMA4
 	bool "IDMA4"
 
 endchoice
-
-config PCI_PERMEDIA
-	bool "PCI for Permedia2"
-	depends on !4xx && !8xx && APUS
 
 source "drivers/pci/Kconfig"
 
@@ -1342,7 +1241,7 @@ config CONSISTENT_START_BOOL
 	depends on ADVANCED_OPTIONS && NOT_COHERENT_CACHE
 	help
 	  This option allows you to set the base virtual address
-	  of the the consistent memory pool.  This pool of virtual
+	  of the consistent memory pool.  This pool of virtual
 	  memory is used to make consistent memory allocations.
 
 config CONSISTENT_START
@@ -1353,7 +1252,7 @@ config CONSISTENT_SIZE_BOOL
 	bool "Set custom consistent memory pool size"
 	depends on ADVANCED_OPTIONS && NOT_COHERENT_CACHE
 	help
-	  This option allows you to set the size of the the
+	  This option allows you to set the size of the
 	  consistent memory pool.  This pool of virtual memory
 	  is used to make consistent memory allocations.
 
@@ -1380,6 +1279,10 @@ config BOOT_LOAD
 config PIN_TLB
 	bool "Pinned Kernel TLBs (860 ONLY)"
 	depends on ADVANCED_OPTIONS && 8xx
+
+config PPC_LIB_RHEAP
+	bool
+
 endmenu
 
 source "net/Kconfig"
@@ -1414,7 +1317,7 @@ endmenu
 
 source "lib/Kconfig"
 
-source "arch/powerpc/oprofile/Kconfig"
+source "kernel/Kconfig.instrumentation"
 
 source "arch/ppc/Kconfig.debug"
 

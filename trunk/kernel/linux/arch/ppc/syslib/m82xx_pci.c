@@ -117,7 +117,7 @@ struct hw_interrupt_type pq2pci_ic = {
 };
 
 static irqreturn_t
-pq2pci_irq_demux(int irq, void *dev_id, struct pt_regs *regs)
+pq2pci_irq_demux(int irq, void *dev_id)
 {
 	unsigned long stat, mask, pend;
 	int bit;
@@ -130,7 +130,7 @@ pq2pci_irq_demux(int irq, void *dev_id, struct pt_regs *regs)
 			break;
 		for (bit = 0; pend != 0; ++bit, pend <<= 1) {
 			if (pend & 0x80000000)
-				__do_IRQ(NR_CPM_INTS + bit, regs);
+				__do_IRQ(NR_CPM_INTS + bit);
 		}
 	}
 
@@ -197,7 +197,7 @@ pq2ads_setup_pci(struct pci_controller *hose)
 	   CPM high      	0b0000
 	   CPM middle           0b0001
 	   CPM low       	0b0010
-	   PCI reguest          0b0011
+	   PCI request          0b0011
 	   Reserved      	0b0100
 	   Reserved      	0b0101
 	   Internal Core     	0b0110

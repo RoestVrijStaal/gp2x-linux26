@@ -3,7 +3,7 @@
  *
  *  Based on drivers/char/serial_amba.c, by ARM Ltd.
  *
- *  Copyright 2001 IBM Crop.
+ *  Copyright 2001 IBM Corp.
  *  Author: IBM China Research Lab
  *            Yudong Yang <yangyud@cn.ibm.com>
  *            Yi Ge       <geyi@cn.ibm.com>
@@ -155,16 +155,16 @@
 
 /* serial port transmit command register */
 
-#define _TxCR_ET_MASK   0x80           /* transmiter enable mask */
+#define _TxCR_ET_MASK   0x80           /* transmitter enable mask */
 #define _TxCR_DME_MASK  0x60           /* dma mode mask */
 #define _TxCR_TIE_MASK  0x10           /* empty interrupt enable mask */
 #define _TxCR_EIE_MASK  0x08           /* error interrupt enable mask */
 #define _TxCR_SPE_MASK  0x04           /* stop/pause mask */
 #define _TxCR_TB_MASK   0x02           /* transmit break mask */
 
-#define _TxCR_ET_ENABLE _TxCR_ET_MASK  /* transmiter enabled */
-#define _TxCR_DME_DISABLE 0x00         /* transmiter disabled, TBR intr disabled */
-#define _TxCR_DME_TBR   0x20           /* transmiter disabled, TBR intr enabled */
+#define _TxCR_ET_ENABLE _TxCR_ET_MASK  /* transmitter enabled */
+#define _TxCR_DME_DISABLE 0x00         /* transmitter disabled, TBR intr disabled */
+#define _TxCR_DME_TBR   0x20           /* transmitter disabled, TBR intr enabled */
 #define _TxCR_DME_CHAN_2 0x40          /* dma enabled, destination chann 2 */
 #define _TxCR_DME_CHAN_3 0x60          /* dma enabled, destination chann 3 */
 
@@ -414,7 +414,7 @@ static void siccuart_event(struct SICC_info *info, int event)
 }
 
 static void
-siccuart_rx_chars(struct SICC_info *info, struct pt_regs *regs)
+siccuart_rx_chars(struct SICC_info *info)
 {
     struct tty_struct *tty = info->tty;
     unsigned int status, ch, rsr, flg, ignored = 0;
@@ -441,7 +441,7 @@ siccuart_rx_chars(struct SICC_info *info, struct pt_regs *regs)
 #ifdef SUPPORT_SYSRQ
         if (info->sysrq) {
             if (ch && time_before(jiffies, info->sysrq)) {
-                handle_sysrq(ch, regs, NULL);
+                handle_sysrq(ch, NULL);
                 info->sysrq = 0;
                 goto ignore_char;
             }
@@ -553,15 +553,15 @@ static void siccuart_tx_chars(struct SICC_info *info)
 }
 
 
-static irqreturn_t siccuart_int_rx(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t siccuart_int_rx(int irq, void *dev_id)
 {
     struct SICC_info *info = dev_id;
-    siccuart_rx_chars(info, regs);
+    siccuart_rx_chars(info)
     return IRQ_HANDLED;
 }
 
 
-static irqreturn_t siccuart_int_tx(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t siccuart_int_tx(int irq, void *dev_id)
 {
     struct SICC_info *info = dev_id;
     siccuart_tx_chars(info);
@@ -1720,7 +1720,7 @@ static int siccuart_open(struct tty_struct *tty, struct file *filp)
     return 0;
 }
 
-static struct tty_operations sicc_ops = {
+static const struct tty_operations sicc_ops = {
 	.open = siccuart_open,
 	.close = siccuart_close,
 	.write = siccuart_write,

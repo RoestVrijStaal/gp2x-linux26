@@ -31,7 +31,8 @@ SECTIONS
   .plt : { *(.plt) }
   .text      :
   {
-    *(.text)
+    _text = .;
+    TEXT_TEXT
     SCHED_TEXT
     LOCK_TEXT
     *(.fixup)
@@ -66,7 +67,7 @@ SECTIONS
   . = ALIGN(4096);
   .data    :
   {
-    *(.data)
+    DATA_DATA
     *(.data1)
     *(.sdata)
     *(.sdata2)
@@ -89,6 +90,8 @@ SECTIONS
 
   . = ALIGN(8192);
   .data.init_task : { *(.data.init_task) }
+
+  NOTES
 
   . = ALIGN(4096);
   __init_begin = .;
@@ -115,13 +118,7 @@ SECTIONS
   __setup_end = .;
   __initcall_start = .;
   .initcall.init : {
-	*(.initcall1.init)
-	*(.initcall2.init)
-	*(.initcall3.init)
-	*(.initcall4.init)
-	*(.initcall5.init)
-	*(.initcall6.init)
-	*(.initcall7.init)
+	INITCALLS
   }
   __initcall_end = .;
 
@@ -135,15 +132,14 @@ SECTIONS
   __ftr_fixup : { *(__ftr_fixup) }
   __stop___ftr_fixup = .;
 
-  . = ALIGN(32);
-  __per_cpu_start = .;
-  .data.percpu  : { *(.data.percpu) }
-  __per_cpu_end = .;
+  PERCPU(4096)
 
+#ifdef CONFIG_BLK_DEV_INITRD
   . = ALIGN(4096);
   __initramfs_start = .;
   .init.ramfs : { *(.init.ramfs) }
   __initramfs_end = .;
+#endif
 
   . = ALIGN(4096);
   __init_end = .;

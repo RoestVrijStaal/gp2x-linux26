@@ -1,5 +1,5 @@
 /*
- * include/asm-ppc/xparameters.h
+ * arch/ppc/platforms/4xx/xparameters/xparameters.h
  *
  * This file includes the correct xparameters.h for the CONFIG'ed board plus
  * fixups to translate board specific XPAR values to a common set of names
@@ -15,8 +15,16 @@
 
 #if defined(CONFIG_XILINX_ML300)
   #include "xparameters_ml300.h"
+  #define XPAR_INTC_0_AC97_CONTROLLER_REF_0_PLAYBACK_VEC_ID \
+	XPAR_DCR_INTC_0_OPB_AC97_CONTROLLER_REF_0_PLAYBACK_INTERRUPT_INTR
+  #define XPAR_INTC_0_AC97_CONTROLLER_REF_0_RECORD_VEC_ID \
+	XPAR_DCR_INTC_0_OPB_AC97_CONTROLLER_REF_0_RECORD_INTERRUPT_INTR
 #elif defined(CONFIG_XILINX_ML403)
   #include "xparameters_ml403.h"
+  #define XPAR_INTC_0_AC97_CONTROLLER_REF_0_PLAYBACK_VEC_ID \
+	XPAR_OPB_INTC_0_OPB_AC97_CONTROLLER_REF_0_PLAYBACK_INTERRUPT_INTR
+  #define XPAR_INTC_0_AC97_CONTROLLER_REF_0_RECORD_VEC_ID \
+	XPAR_OPB_INTC_0_OPB_AC97_CONTROLLER_REF_0_RECORD_INTERRUPT_INTR
 #else
   /* Add other board xparameter includes here before the #else */
   #error No xparameters_*.h file included
@@ -34,3 +42,63 @@
 	.io_type	 = SERIAL_IO_MEM,				\
   },
 #endif
+
+/*
+ * A few reasonable defaults for the #defines which could be missing depending
+ * on the IP version or variant (e.g. OPB vs PLB)
+ */
+
+#ifndef XPAR_EMAC_0_CAM_EXIST
+#define XPAR_EMAC_0_CAM_EXIST 0
+#endif
+#ifndef XPAR_EMAC_0_JUMBO_EXIST
+#define XPAR_EMAC_0_JUMBO_EXIST 0
+#endif
+#ifndef XPAR_EMAC_0_TX_DRE_TYPE
+#define XPAR_EMAC_0_TX_DRE_TYPE 0
+#endif
+#ifndef XPAR_EMAC_0_RX_DRE_TYPE
+#define XPAR_EMAC_0_RX_DRE_TYPE 0
+#endif
+#ifndef XPAR_EMAC_0_TX_INCLUDE_CSUM
+#define XPAR_EMAC_0_TX_INCLUDE_CSUM 0
+#endif
+#ifndef XPAR_EMAC_0_RX_INCLUDE_CSUM
+#define XPAR_EMAC_0_RX_INCLUDE_CSUM 0
+#endif
+
+#ifndef XPAR_EMAC_1_CAM_EXIST
+#define XPAR_EMAC_1_CAM_EXIST 0
+#endif
+#ifndef XPAR_EMAC_1_JUMBO_EXIST
+#define XPAR_EMAC_1_JUMBO_EXIST 0
+#endif
+#ifndef XPAR_EMAC_1_TX_DRE_TYPE
+#define XPAR_EMAC_1_TX_DRE_TYPE 0
+#endif
+#ifndef XPAR_EMAC_1_RX_DRE_TYPE
+#define XPAR_EMAC_1_RX_DRE_TYPE 0
+#endif
+#ifndef XPAR_EMAC_1_TX_INCLUDE_CSUM
+#define XPAR_EMAC_1_TX_INCLUDE_CSUM 0
+#endif
+#ifndef XPAR_EMAC_1_RX_INCLUDE_CSUM
+#define XPAR_EMAC_1_RX_INCLUDE_CSUM 0
+#endif
+
+#ifndef XPAR_GPIO_0_IS_DUAL
+#define XPAR_GPIO_0_IS_DUAL 0
+#endif
+#ifndef XPAR_GPIO_1_IS_DUAL
+#define XPAR_GPIO_1_IS_DUAL 0
+#endif
+#ifndef XPAR_GPIO_2_IS_DUAL
+#define XPAR_GPIO_2_IS_DUAL 0
+#endif
+#ifndef XPAR_GPIO_3_IS_DUAL
+#define XPAR_GPIO_3_IS_DUAL 0
+#endif
+#ifndef XPAR_GPIO_4_IS_DUAL
+#define XPAR_GPIO_4_IS_DUAL 0
+#endif
+

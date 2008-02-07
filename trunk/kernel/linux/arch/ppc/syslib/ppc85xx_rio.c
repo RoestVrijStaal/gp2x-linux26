@@ -59,8 +59,6 @@
 #define DBELL_TID(x)		(*(u8 *)(x + DOORBELL_TID_OFFSET))
 #define DBELL_INF(x)		(*(u16 *)(x + DOORBELL_INFO_OFFSET))
 
-#define is_power_of_2(x)	(((x) & ((x) - 1)) == 0)
-
 struct rio_atmu_regs {
 	u32 rowtar;
 	u32 pad1;
@@ -349,13 +347,12 @@ EXPORT_SYMBOL_GPL(rio_hw_add_outb_message);
  * mpc85xx_rio_tx_handler - MPC85xx outbound message interrupt handler
  * @irq: Linux interrupt number
  * @dev_instance: Pointer to interrupt-specific data
- * @regs: Register context
  *
  * Handles outbound message interrupts. Executes a register outbound
- * mailbox event handler and acks the interrupt occurence.
+ * mailbox event handler and acks the interrupt occurrence.
  */
 static irqreturn_t
-mpc85xx_rio_tx_handler(int irq, void *dev_instance, struct pt_regs *regs)
+mpc85xx_rio_tx_handler(int irq, void *dev_instance)
 {
 	int osr;
 	struct rio_mport *port = (struct rio_mport *)dev_instance;
@@ -517,13 +514,12 @@ void rio_close_outb_mbox(struct rio_mport *mport, int mbox)
  * mpc85xx_rio_rx_handler - MPC85xx inbound message interrupt handler
  * @irq: Linux interrupt number
  * @dev_instance: Pointer to interrupt-specific data
- * @regs: Register context
  *
  * Handles inbound message interrupts. Executes a registered inbound
- * mailbox event handler and acks the interrupt occurence.
+ * mailbox event handler and acks the interrupt occurrence.
  */
 static irqreturn_t
-mpc85xx_rio_rx_handler(int irq, void *dev_instance, struct pt_regs *regs)
+mpc85xx_rio_rx_handler(int irq, void *dev_instance)
 {
 	int isr;
 	struct rio_mport *port = (struct rio_mport *)dev_instance;
@@ -736,13 +732,12 @@ EXPORT_SYMBOL_GPL(rio_hw_get_inb_message);
  * mpc85xx_rio_dbell_handler - MPC85xx doorbell interrupt handler
  * @irq: Linux interrupt number
  * @dev_instance: Pointer to interrupt-specific data
- * @regs: Register context
  *
  * Handles doorbell interrupts. Parses a list of registered
  * doorbell event handlers and executes a matching event handler.
  */
 static irqreturn_t
-mpc85xx_rio_dbell_handler(int irq, void *dev_instance, struct pt_regs *regs)
+mpc85xx_rio_dbell_handler(int irq, void *dev_instance)
 {
 	int dsr;
 	struct rio_mport *port = (struct rio_mport *)dev_instance;

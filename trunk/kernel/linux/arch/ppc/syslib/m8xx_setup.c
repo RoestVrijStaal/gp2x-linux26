@@ -77,7 +77,7 @@ static struct mtd_partition mpc8xxads_partitions[] = {
 	}
 };
 
-#define mpc8xxads_part_num (sizeof (mpc8xxads_partitions) / sizeof (mpc8xxads_partitions[0]))
+#define mpc8xxads_part_num ARRAY_SIZE(mpc8xxads_partitions)
 
 #endif
 
@@ -169,7 +169,7 @@ abort(void)
 }
 
 /* A place holder for time base interrupts, if they are ever enabled. */
-irqreturn_t timebase_interrupt(int irq, void * dev, struct pt_regs * regs)
+irqreturn_t timebase_interrupt(int irq, void * dev)
 {
 	printk ("timebase_interrupt()\n");
 
@@ -413,7 +413,7 @@ m8xx_map_io(void)
 	io_block_mapping(_IO_BASE,_IO_BASE,_IO_BASE_SIZE, _PAGE_IO);
 #endif
 #endif
-#if defined(CONFIG_HTDMSOUND) || defined(CONFIG_RPXTOUCH) || defined(CONFIG_FB_RPX)
+#if defined(CONFIG_RPXTOUCH) || defined(CONFIG_FB_RPX)
 	io_block_mapping(HIOX_CSR_ADDR, HIOX_CSR_ADDR, HIOX_CSR_SIZE, _PAGE_IO);
 #endif
 #ifdef CONFIG_FADS

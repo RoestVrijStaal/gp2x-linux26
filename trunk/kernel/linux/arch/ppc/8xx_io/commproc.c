@@ -39,6 +39,21 @@
 #include <asm/tlbflush.h>
 #include <asm/rheap.h>
 
+#define immr_map(member)						\
+({									\
+	u32 offset = offsetof(immap_t, member);				\
+	void *addr = ioremap (IMAP_ADDR + offset,			\
+			      sizeof( ((immap_t*)0)->member));		\
+	addr;								\
+})
+
+#define immr_map_size(member, size)					\
+({									\
+	u32 offset = offsetof(immap_t, member);				\
+	void *addr = ioremap (IMAP_ADDR + offset, size);		\
+	addr;								\
+})
+
 static void m8xx_cpm_dpinit(void);
 static	uint	host_buffer;	/* One page of host buffer */
 static	uint	host_end;	/* end + 1 */
@@ -47,12 +62,12 @@ cpm8xx_t	*cpmp;		/* Pointer to comm processor space */
 /* CPM interrupt vector functions.
 */
 struct	cpm_action {
-	void	(*handler)(void *, struct pt_regs * regs);
+	void	(*handler)(void *);
 	void	*dev_id;
 };
 static	struct	cpm_action cpm_vecs[CPMVEC_NR];
-static	irqreturn_t cpm_interrupt(int irq, void * dev, struct pt_regs * regs);
-static	irqreturn_t cpm_error_interrupt(int irq, void *dev, struct pt_regs * regs);
+static	irqreturn_t cpm_interrupt(int irq, void * dev);
+static	irqreturn_t cpm_error_interrupt(int irq, void *dev);
 static	void	alloc_host_memory(void);
 /* Define a table of names to identify CPM interrupt handlers in
  * /proc/interrupts.
@@ -129,7 +144,7 @@ m8xx_cpm_reset(void)
 
 	/* Set SDMA Bus Request priority 5.
 	 * On 860T, this also enables FEC priority 6.  I am not sure
-	 * this is what we realy want for some applications, but the
+	 * this is what we really want for some applications, but the
 	 * manual recommends it.
 	 * Bit 25, FAM can also be set to use FEC aggressive mode (860T).
 	 */
@@ -205,7 +220,7 @@ cpm_interrupt_init(void)
  * Get the CPM interrupt vector.
  */
 int
-cpm_get_irq(struct pt_regs *regs)
+cpm_get_irq(void)
 {
 	int cpm_vec;
 
@@ -222,7 +237,7 @@ cpm_get_irq(struct pt_regs *regs)
 /* CPM interrupt controller cascade interrupt.
 */
 static	irqreturn_t
-cpm_interrupt(int irq, void * dev, struct pt_regs * regs)
+cpm_interrupt(int irq, void * dev)
 {
 	/* This interrupt handler never actually gets called.  It is
 	 * installed only to unmask the CPM cascade interrupt in the SIU
@@ -237,7 +252,7 @@ cpm_interrupt(int irq, void * dev, struct pt_regs * regs)
  * tests in the interrupt handler.
  */
 static	irqreturn_t
-cpm_error_interrupt(int irq, void *dev, struct pt_regs *regs)
+cpm_error_interrupt(int irq, void *dev)
 {
 	return IRQ_HANDLED;
 }
@@ -246,11 +261,11 @@ cpm_error_interrupt(int irq, void *dev, struct pt_regs *regs)
  * request_irq() to the handler prototype required by cpm_install_handler().
  */
 static irqreturn_t
-cpm_handler_helper(int irq, void *dev_id, struct pt_regs *regs)
+cpm_handler_helper(int irq, void *dev_id)
 {
 	int cpm_vec = irq - CPM_IRQ_OFFSET;
 
-	(*cpm_vecs[cpm_vec].handler)(dev_id, regs);
+	(*cpm_vecs[cpm_vec].handler)(dev_id);
 
 	return IRQ_HANDLED;
 }
@@ -267,8 +282,7 @@ cpm_handler_helper(int irq, void *dev_id, struct pt_regs *regs)
  * request_irq() or cpm_install_handler().
  */
 void
-cpm_install_handler(int cpm_vec, void (*handler)(void *, struct pt_regs *regs),
-		    void *dev_id)
+cpm_install_handler(int cpm_vec, void (*handler)(void *), void *dev_id)
 {
 	int err;
 
@@ -365,10 +379,15 @@ static rh_block_t cpm_boot_dpmem_rh_block[16];
 static rh_info_t cpm_dpmem_info;
 
 #define CPM_DPMEM_ALIGNMENT	8
+static u8* dpram_vbase;
+static uint dpram_pbase;
 
 void m8xx_cpm_dpinit(void)
 {
 	spin_lock_init(&cpm_dpmem_lock);
+
+	dpram_vbase = immr_map_size(im_cpm.cp_dpmem, CPM_DATAONLY_BASE + CPM_DATAONLY_SIZE);
+	dpram_pbase = (uint)&((immap_t *)IMAP_ADDR)->im_cpm.cp_dpmem;
 
 	/* Initialize the info header */
 	rh_init(&cpm_dpmem_info, CPM_DPMEM_ALIGNMENT,
@@ -383,7 +402,7 @@ void m8xx_cpm_dpinit(void)
 	 * with the processor and the microcode patches applied / activated.
 	 * But the following should be at least safe.
 	 */
-	rh_attach_region(&cpm_dpmem_info, (void *)CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
+	rh_attach_region(&cpm_dpmem_info, CPM_DATAONLY_BASE, CPM_DATAONLY_SIZE);
 }
 
 /*
@@ -391,9 +410,9 @@ void m8xx_cpm_dpinit(void)
  * This function returns an offset into the DPRAM area.
  * Use cpm_dpram_addr() to get the virtual address of the area.
  */
-uint cpm_dpalloc(uint size, uint align)
+unsigned long cpm_dpalloc(uint size, uint align)
 {
-	void *start;
+	unsigned long start;
 	unsigned long flags;
 
 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
@@ -401,34 +420,34 @@ uint cpm_dpalloc(uint size, uint align)
 	start = rh_alloc(&cpm_dpmem_info, size, "commproc");
 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
 
-	return (uint)start;
+	return start;
 }
 EXPORT_SYMBOL(cpm_dpalloc);
 
-int cpm_dpfree(uint offset)
+int cpm_dpfree(unsigned long offset)
 {
 	int ret;
 	unsigned long flags;
 
 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
-	ret = rh_free(&cpm_dpmem_info, (void *)offset);
+	ret = rh_free(&cpm_dpmem_info, offset);
 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
 
 	return ret;
 }
 EXPORT_SYMBOL(cpm_dpfree);
 
-uint cpm_dpalloc_fixed(uint offset, uint size, uint align)
+unsigned long cpm_dpalloc_fixed(unsigned long offset, uint size, uint align)
 {
-	void *start;
+	unsigned long start;
 	unsigned long flags;
 
 	spin_lock_irqsave(&cpm_dpmem_lock, flags);
 	cpm_dpmem_info.alignment = align;
-	start = rh_alloc_fixed(&cpm_dpmem_info, (void *)offset, size, "commproc");
+	start = rh_alloc_fixed(&cpm_dpmem_info, offset, size, "commproc");
 	spin_unlock_irqrestore(&cpm_dpmem_lock, flags);
 
-	return (uint)start;
+	return start;
 }
 EXPORT_SYMBOL(cpm_dpalloc_fixed);
 
@@ -438,8 +457,14 @@ void cpm_dpdump(void)
 }
 EXPORT_SYMBOL(cpm_dpdump);
 
-void *cpm_dpram_addr(uint offset)
+void *cpm_dpram_addr(unsigned long offset)
 {
-	return ((immap_t *)IMAP_ADDR)->im_cpm.cp_dpmem + offset;
+	return (void *)(dpram_vbase + offset);
 }
 EXPORT_SYMBOL(cpm_dpram_addr);
+
+uint cpm_dpram_phys(u8* addr)
+{
+	return (dpram_pbase + (uint)(addr - dpram_vbase));
+}
+EXPORT_SYMBOL(cpm_dpram_phys);

@@ -30,7 +30,6 @@
 #include <linux/ioport.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
-#include <linux/pci.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/netdevice.h>
@@ -45,6 +44,7 @@
 #include <asm/mpc8xx.h>
 #include <asm/uaccess.h>
 #include <asm/commproc.h>
+#include <asm/cacheflush.h>
 
 /*
  *				Theory of Operation
@@ -149,7 +149,7 @@ struct scc_enet_private {
 static int scc_enet_open(struct net_device *dev);
 static int scc_enet_start_xmit(struct sk_buff *skb, struct net_device *dev);
 static int scc_enet_rx(struct net_device *dev);
-static void scc_enet_interrupt(void *dev_id, struct pt_regs *regs);
+static void scc_enet_interrupt(void *dev_id);
 static int scc_enet_close(struct net_device *dev);
 static struct net_device_stats *scc_enet_get_stats(struct net_device *dev);
 static void set_multicast_list(struct net_device *dev);
@@ -305,7 +305,7 @@ scc_enet_timeout(struct net_device *dev)
  * This is called from the CPM handler, not the MPC core interrupt.
  */
 static void
-scc_enet_interrupt(void *dev_id, struct pt_regs *regs)
+scc_enet_interrupt(void *dev_id)
 {
 	struct	net_device *dev = dev_id;
 	volatile struct	scc_enet_private *cep;
@@ -506,11 +506,10 @@ for (;;) {
 			cep->stats.rx_dropped++;
 		}
 		else {
-			skb->dev = dev;
 			skb_put(skb,pkt_len-4);	/* Make room */
-			eth_copy_and_sum(skb,
+			skb_copy_to_linear_data(skb,
 				cep->rx_vaddr[bdp - cep->rx_bd_base],
-				pkt_len-4, 0);
+				pkt_len-4);
 			skb->protocol=eth_type_trans(skb,dev);
 			netif_rx(skb);
 		}

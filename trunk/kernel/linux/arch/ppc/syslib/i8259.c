@@ -28,7 +28,7 @@ static int i8259_pic_irq_offset;
  * which is called.  It should be noted that polling is broken on some
  * IBM and Motorola PReP boxes so we must use the int-ack feature on them.
  */
-int i8259_irq(struct pt_regs *regs)
+int i8259_irq(void)
 {
 	int irq;
 
@@ -127,6 +127,7 @@ static void i8259_unmask_irq(unsigned int irq_nr)
 static struct irq_chip i8259_pic = {
 	.typename	= " i8259    ",
 	.mask		= i8259_mask_irq,
+	.disable	= i8259_mask_irq,
 	.unmask		= i8259_unmask_irq,
 	.mask_ack	= i8259_mask_and_ack_irq,
 };
@@ -154,7 +155,7 @@ static struct resource pic_edgectrl_iores = {
 
 static struct irqaction i8259_irqaction = {
 	.handler = no_action,
-	.flags = SA_INTERRUPT,
+	.flags = IRQF_DISABLED,
 	.mask = CPU_MASK_NONE,
 	.name = "82c59 secondary cascade",
 };
