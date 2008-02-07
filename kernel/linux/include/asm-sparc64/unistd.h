@@ -1,4 +1,3 @@
-/* $Id: unistd.h,v 1.50 2002/02/08 03:57:18 davem Exp $ */
 #ifndef _SPARC64_UNISTD_H
 #define _SPARC64_UNISTD_H
 
@@ -9,7 +8,7 @@
  * think of right now to force the arguments into fixed registers
  * before the trap into the system call with gcc 'asm' statements.
  *
- * Copyright (C) 1995 David S. Miller (davem@caip.rutgers.edu)
+ * Copyright (C) 1995, 2007 David S. Miller (davem@davemloft.net)
  *
  * SunOS compatibility based upon preliminary work which is:
  *
@@ -320,174 +319,23 @@
 #define __NR_unshare		299
 #define __NR_set_robust_list	300
 #define __NR_get_robust_list	301
+#define __NR_migrate_pages	302
+#define __NR_mbind		303
+#define __NR_get_mempolicy	304
+#define __NR_set_mempolicy	305
+#define __NR_kexec_load		306
+#define __NR_move_pages		307
+#define __NR_getcpu		308
+#define __NR_epoll_pwait	309
+#define __NR_utimensat		310
+#define __NR_signalfd		311
+#define __NR_timerfd		312
+#define __NR_eventfd		313
+#define __NR_fallocate		314
+
+#define NR_SYSCALLS		315
 
 #ifdef __KERNEL__
-/* WARNING: You MAY NOT add syscall numbers larger than 301, since
- *          all of the syscall tables in the Sparc kernel are
- *          sized to have 301 entries (starting at zero).  Therefore
- *          find a free slot in the 0-301 range.
- */
-
-#define _syscall0(type,name) \
-type name(void) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res)\
-		      : "r" (__g1) \
-		      : "o0", "cc"); \
-if (__res >= 0) \
-    return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall1(type,name,type1,arg1) \
-type name(type1 arg1) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-register long __o0 __asm__ ("o0") = (long)(arg1); \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res), "=&r" (__o0) \
-		      : "1" (__o0), "r" (__g1) \
-		      : "cc"); \
-if (__res >= 0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall2(type,name,type1,arg1,type2,arg2) \
-type name(type1 arg1,type2 arg2) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-register long __o0 __asm__ ("o0") = (long)(arg1); \
-register long __o1 __asm__ ("o1") = (long)(arg2); \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res), "=&r" (__o0) \
-		      : "1" (__o0), "r" (__o1), "r" (__g1) \
-		      : "cc"); \
-if (__res >= 0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall3(type,name,type1,arg1,type2,arg2,type3,arg3) \
-type name(type1 arg1,type2 arg2,type3 arg3) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-register long __o0 __asm__ ("o0") = (long)(arg1); \
-register long __o1 __asm__ ("o1") = (long)(arg2); \
-register long __o2 __asm__ ("o2") = (long)(arg3); \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res), "=&r" (__o0) \
-		      : "1" (__o0), "r" (__o1), "r" (__o2), "r" (__g1) \
-		      : "cc"); \
-if (__res>=0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-
-#define _syscall4(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4) \
-type name (type1 arg1, type2 arg2, type3 arg3, type4 arg4) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-register long __o0 __asm__ ("o0") = (long)(arg1); \
-register long __o1 __asm__ ("o1") = (long)(arg2); \
-register long __o2 __asm__ ("o2") = (long)(arg3); \
-register long __o3 __asm__ ("o3") = (long)(arg4); \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res), "=&r" (__o0) \
-		      : "1" (__o0), "r" (__o1), "r" (__o2), "r" (__o3), "r" (__g1) \
-		      : "cc"); \
-if (__res>=0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-} 
-
-#define _syscall5(type,name,type1,arg1,type2,arg2,type3,arg3,type4,arg4, \
-	  type5,arg5) \
-type name (type1 arg1,type2 arg2,type3 arg3,type4 arg4,type5 arg5) \
-{ \
-long __res; \
-register long __g1 __asm__ ("g1") = __NR_##name; \
-register long __o0 __asm__ ("o0") = (long)(arg1); \
-register long __o1 __asm__ ("o1") = (long)(arg2); \
-register long __o2 __asm__ ("o2") = (long)(arg3); \
-register long __o3 __asm__ ("o3") = (long)(arg4); \
-register long __o4 __asm__ ("o4") = (long)(arg5); \
-__asm__ __volatile__ ("t 0x6d\n\t" \
-		      "sub %%g0, %%o0, %0\n\t" \
-		      "movcc %%xcc, %%o0, %0\n\t" \
-		      : "=r" (__res), "=&r" (__o0) \
-		      : "1" (__o0), "r" (__o1), "r" (__o2), "r" (__o3), "r" (__o4), "r" (__g1) \
-		      : "cc"); \
-if (__res>=0) \
-	return (type) __res; \
-errno = -__res; \
-return -1; \
-}
-#ifdef __KERNEL_SYSCALLS__
-
-#include <linux/compiler.h>
-#include <linux/types.h>
-
-/*
- * we need this inline - forking from kernel space will result
- * in NO COPY ON WRITE (!!!), until an execve is executed. This
- * is no problem, but for the stack. This is handled by not letting
- * main() use the stack at all after fork(). Thus, no function
- * calls - which means inline code for fork too, as otherwise we
- * would use the stack upon exit from 'fork()'.
- *
- * Actually only pause and fork are needed inline, so that there
- * won't be any messing with the stack from main(), but we define
- * some others too.
- */
-#define __NR__exit __NR_exit
-static __inline__ _syscall0(pid_t,setsid)
-static __inline__ _syscall3(int,write,int,fd,__const__ char *,buf,off_t,count)
-static __inline__ _syscall3(int,read,int,fd,char *,buf,off_t,count)
-static __inline__ _syscall3(off_t,lseek,int,fd,off_t,offset,int,count)
-static __inline__ _syscall1(int,dup,int,fd)
-static __inline__ _syscall3(int,execve,__const__ char *,file,char **,argv,char **,envp)
-static __inline__ _syscall3(int,open,__const__ char *,file,int,flag,int,mode)
-static __inline__ _syscall1(int,close,int,fd)
-static __inline__ _syscall3(pid_t,waitpid,pid_t,pid,int *,wait_stat,int,options)
-
-#include <linux/linkage.h>
-
-asmlinkage unsigned long sys_mmap(
-				unsigned long addr, unsigned long len,
-				unsigned long prot, unsigned long flags,
-				unsigned long fd, unsigned long off);
-struct sigaction;
-asmlinkage long sys_rt_sigaction(int sig,
-				const struct sigaction __user *act,
-				struct sigaction __user *oact,
-				void __user *restorer,
-				size_t sigsetsize);
-
-#endif /* __KERNEL_SYSCALLS__ */
-
 /* sysconf options, for SunOS compatibility */
 #define   _SC_ARG_MAX             1
 #define   _SC_CHILD_MAX           2
@@ -515,7 +363,6 @@ asmlinkage long sys_rt_sigaction(int sig,
 #define __ARCH_WANT_SYS_GETPGRP
 #define __ARCH_WANT_SYS_LLSEEK
 #define __ARCH_WANT_SYS_NICE
-#define __ARCH_WANT_SYS_OLD_GETRLIMIT
 #define __ARCH_WANT_SYS_OLDUMOUNT
 #define __ARCH_WANT_SYS_SIGPENDING
 #define __ARCH_WANT_SYS_SIGPROCMASK

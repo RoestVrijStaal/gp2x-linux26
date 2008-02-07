@@ -15,13 +15,13 @@
 #include <asm-generic/pgtable-nopud.h>
 
 #include <linux/compiler.h>
+#include <linux/const.h>
 #include <asm/types.h>
 #include <asm/spitfire.h>
 #include <asm/asi.h>
 #include <asm/system.h>
 #include <asm/page.h>
 #include <asm/processor.h>
-#include <asm/const.h>
 
 /* The kernel image occupies 0x4000000 to 0x1000000 (4MB --> 32MB).
  * The page copy blockops can use 0x2000000 to 0x4000000.
@@ -42,6 +42,9 @@
 #define HI_OBP_ADDRESS		_AC(0x0000000100000000,UL)
 #define VMALLOC_START		_AC(0x0000000100000000,UL)
 #define VMALLOC_END		_AC(0x0000000200000000,UL)
+#define VMEMMAP_BASE		_AC(0x0000000200000000,UL)
+
+#define vmemmap			((struct page *)VMEMMAP_BASE)
 
 /* XXX All of this needs to be rethought so we can take advantage
  * XXX cheetah's full 64-bit virtual address space, ie. no more hole
@@ -573,24 +576,6 @@ static inline unsigned long pte_exec(pte_t pte)
 	return (pte_val(pte) & mask);
 }
 
-static inline unsigned long pte_read(pte_t pte)
-{
-	unsigned long mask;
-
-	__asm__ __volatile__(
-	"\n661:	mov		%1, %0\n"
-	"	nop\n"
-	"	.section	.sun4v_2insn_patch, \"ax\"\n"
-	"	.word		661b\n"
-	"	sethi		%%uhi(%2), %0\n"
-	"	sllx		%0, 32, %0\n"
-	"	.previous\n"
-	: "=r" (mask)
-	: "i" (_PAGE_READ_4U), "i" (_PAGE_READ_4V));
-
-	return (pte_val(pte) & mask);
-}
-
 static inline unsigned long pte_file(pte_t pte)
 {
 	unsigned long val = pte_val(pte);
@@ -630,8 +615,9 @@ static inline unsigned long pte_present(pte_t pte)
 #define __pmd_page(pmd)		\
 	((unsigned long) __va((((unsigned long)pmd_val(pmd))<<11UL)))
 #define pmd_page(pmd) 			virt_to_page((void *)__pmd_page(pmd))
-#define pud_page(pud)		\
+#define pud_page_vaddr(pud)		\
 	((unsigned long) __va((((unsigned long)pud_val(pud))<<11UL)))
+#define pud_page(pud) 			virt_to_page((void *)pud_page_vaddr(pud))
 #define pmd_none(pmd)			(!pmd_val(pmd))
 #define pmd_bad(pmd)			(0)
 #define pmd_present(pmd)		(pmd_val(pmd) != 0U)
@@ -653,7 +639,7 @@ static inline unsigned long pte_present(pte_t pte)
 
 /* Find an entry in the second-level page table.. */
 #define pmd_offset(pudp, address)	\
-	((pmd_t *) pud_page(*(pudp)) + \
+	((pmd_t *) pud_page_vaddr(*(pudp)) + \
 	 (((address) >> PMD_SHIFT) & (PTRS_PER_PMD-1)))
 
 /* Find an entry in the third-level page table.. */
@@ -736,20 +722,6 @@ extern unsigned long pte_file(pte_t);
 extern pte_t pgoff_to_pte(unsigned long);
 #define PTE_FILE_MAX_BITS	(64UL - PAGE_SHIFT - 1UL)
 
-extern unsigned long prom_virt_to_phys(unsigned long, int *);
-
-extern unsigned long sun4u_get_pte(unsigned long);
-
-static inline unsigned long __get_phys(unsigned long addr)
-{
-	return sun4u_get_pte(addr);
-}
-
-static inline int __get_iospace(unsigned long addr)
-{
-	return ((sun4u_get_pte(addr) & 0xf0000000) >> 28);
-}
-
 extern unsigned long *sparc64_valid_addr_bitmap;
 
 /* Needs to be defined here and not in linux/mm.h, as it is arch dependent */
@@ -789,6 +761,8 @@ extern unsigned long get_fb_unmapped_area(struct file *filp, unsigned long,
 extern void pgtable_cache_init(void);
 extern void sun4v_register_fault_status(void);
 extern void sun4v_ktsb_register(void);
+
+extern unsigned long cmdline_memory_size;
 
 #endif /* !(__ASSEMBLY__) */
 

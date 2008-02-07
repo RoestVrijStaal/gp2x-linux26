@@ -31,8 +31,10 @@ typedef s32		compat_timer_t;
 
 typedef s32		compat_int_t;
 typedef s32		compat_long_t;
+typedef s64		compat_s64;
 typedef u32		compat_uint_t;
 typedef u32		compat_ulong_t;
+typedef u64		compat_u64;
 
 struct compat_timespec {
 	compat_time_t	tv_sec;
@@ -164,7 +166,7 @@ static inline compat_uptr_t ptr_to_compat(void __user *uptr)
 	return (u32)(unsigned long)uptr;
 }
 
-static __inline__ void __user *compat_alloc_user_space(long len)
+static inline void __user *compat_alloc_user_space(long len)
 {
 	struct pt_regs *regs = current_thread_info()->kregs;
 	unsigned long usp = regs->u_regs[UREG_I6];
@@ -174,7 +176,10 @@ static __inline__ void __user *compat_alloc_user_space(long len)
 	else
 		usp &= 0xffffffffUL;
 
-	return (void __user *) (usp - len);
+	usp -= len;
+	usp &= ~0x7UL;
+
+	return (void __user *) usp;
 }
 
 struct compat_ipc64_perm {
