@@ -1545,7 +1545,7 @@ static struct fb_ops au1200fb_fb_ops = {
 
 /*-------------------------------------------------------------------------*/
 
-static irqreturn_t au1200fb_handle_irq(int irq, void* dev_id, struct pt_regs *regs)
+static irqreturn_t au1200fb_handle_irq(int irq, void* dev_id)
 {
 	/* Nothing to do for now, just clear any pending interrupt */
 	lcd->intstatus = lcd->intstatus;
@@ -1589,11 +1589,10 @@ static int au1200fb_init_fbinfo(struct au1200fb_device *fbdev)
 		return -EFAULT;
 	}
 
-	fbi->pseudo_palette = kmalloc(sizeof(u32) * 16, GFP_KERNEL);
+	fbi->pseudo_palette = kcalloc(16, sizeof(u32), GFP_KERNEL);
 	if (!fbi->pseudo_palette) {
 		return -ENOMEM;
 	}
-	memset(fbi->pseudo_palette, 0, sizeof(u32) * 16);
 
 	if (fb_alloc_cmap(&fbi->cmap, AU1200_LCD_NBR_PALETTE_ENTRIES, 0) < 0) {
 		print_err("Fail to allocate colormap (%d entries)",
