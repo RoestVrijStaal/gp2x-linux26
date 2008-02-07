@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/mmc/at91_mci.c - ATMEL AT91RM9200 MCI Driver
+ *  linux/drivers/mmc/host/at91_mci.c - ATMEL AT91 MCI Driver
  *
  *  Copyright (C) 2005 Cougar Creek Computing Devices Ltd, All Rights Reserved
  *
@@ -11,7 +11,7 @@
  */
 
 /*
-   This is the AT91RM9200 MCI driver that has been tested with both MMC cards
+   This is the AT91 MCI driver that has been tested with both MMC cards
    and SD-cards.  Boards that support write protect are now supported.
    The CCAT91SBC001 board does not support SD cards.
 
@@ -38,8 +38,8 @@
      controller to manage the transfers.
 
      A read is done from the controller directly to the scatterlist passed in from the request.
-     Due to a bug in the controller, when a read is completed, all the words are byte
-     swapped in the scatterlist buffers.
+     Due to a bug in the AT91RM9200 controller, when a read is completed, all the words are byte
+     swapped in the scatterlist buffers.  AT91SAM926x are not affected by this bug.
 
      The sequence of read interrupts is: ENDRX, RXBUFF, CMDRDY
 
@@ -64,48 +64,30 @@
 #include <linux/err.h>
 #include <linux/dma-mapping.h>
 #include <linux/clk.h>
+#include <linux/atmel_pdc.h>
 
 #include <linux/mmc/host.h>
-#include <linux/mmc/protocol.h>
 
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/mach/mmc.h>
 #include <asm/arch/board.h>
+#include <asm/arch/cpu.h>
 #include <asm/arch/gpio.h>
-#include <asm/arch/at91rm9200_mci.h>
-#include <asm/arch/at91rm9200_pdc.h>
+#include <asm/arch/at91_mci.h>
 
 #define DRIVER_NAME "at91_mci"
 
-#undef	SUPPORT_4WIRE
+#define FL_SENT_COMMAND	(1 << 0)
+#define FL_SENT_STOP	(1 << 1)
 
-static struct clk *mci_clk;
+#define AT91_MCI_ERRORS	(AT91_MCI_RINDE | AT91_MCI_RDIRE | AT91_MCI_RCRCE	\
+		| AT91_MCI_RENDE | AT91_MCI_RTOE | AT91_MCI_DCRCE		\
+		| AT91_MCI_DTOE | AT91_MCI_OVRE | AT91_MCI_UNRE)
 
-#define FL_SENT_COMMAND (1 << 0)
-#define FL_SENT_STOP (1 << 1)
+#define at91_mci_read(host, reg)	__raw_readl((host)->baseaddr + (reg))
+#define at91_mci_write(host, reg, val)	__raw_writel((val), (host)->baseaddr + (reg))
 
-
-
-/*
- * Read from a MCI register.
- */
-static inline unsigned long at91_mci_read(unsigned int reg)
-{
-	void __iomem *mci_base = (void __iomem *)AT91_VA_BASE_MCI;
-
-	return __raw_readl(mci_base + reg);
-}
-
-/*
- * Write to a MCI register.
- */
-static inline void at91_mci_write(unsigned int reg, unsigned long value)
-{
-        void __iomem *mci_base = (void __iomem *)AT91_VA_BASE_MCI;
-
-        __raw_writel(value, mci_base + reg);
-}
 
 /*
  * Low level type for this driver
@@ -116,8 +98,13 @@ struct at91mci_host
 	struct mmc_command *cmd;
 	struct mmc_request *request;
 
+	void __iomem *baseaddr;
+	int irq;
+
 	struct at91_mmc_data *board;
 	int present;
+
+	struct clk *mci_clk;
 
 	/*
 	 * Flag indicating when the command has been sent. This is used to
@@ -142,7 +129,7 @@ struct at91mci_host
 /*
  * Copy from sg to a dma block - used for transfers
  */
-static inline void at91mci_sg_to_dma(struct at91mci_host *host, struct mmc_data *data)
+static inline void at91_mci_sg_to_dma(struct at91mci_host *host, struct mmc_data *data)
 {
 	unsigned int len, i, size;
 	unsigned *dmabuf = host->buffer;
@@ -158,18 +145,22 @@ static inline void at91mci_sg_to_dma(struct at91mci_host *host, struct mmc_data 
 	for (i = 0; i < len; i++) {
 		struct scatterlist *sg;
 		int amount;
-		int index;
 		unsigned int *sgbuffer;
 
 		sg = &data->sg[i];
 
-		sgbuffer = kmap_atomic(sg->page, KM_BIO_SRC_IRQ) + sg->offset;
+		sgbuffer = kmap_atomic(sg_page(sg), KM_BIO_SRC_IRQ) + sg->offset;
 		amount = min(size, sg->length);
 		size -= amount;
-		amount /= 4;
 
-		for (index = 0; index < amount; index++)
-			*dmabuf++ = swab32(sgbuffer[index]);
+		if (cpu_is_at91rm9200()) {	/* AT91RM9200 errata */
+			int index;
+
+			for (index = 0; index < (amount / 4); index++)
+				*dmabuf++ = swab32(sgbuffer[index]);
+		}
+		else
+			memcpy(dmabuf, sgbuffer, amount);
 
 		kunmap_atomic(sgbuffer, KM_BIO_SRC_IRQ);
 
@@ -187,7 +178,7 @@ static inline void at91mci_sg_to_dma(struct at91mci_host *host, struct mmc_data 
 /*
  * Prepare a dma read
  */
-static void at91mci_pre_dma_read(struct at91mci_host *host)
+static void at91_mci_pre_dma_read(struct at91mci_host *host)
 {
 	int i;
 	struct scatterlist *sg;
@@ -217,13 +208,13 @@ static void at91mci_pre_dma_read(struct at91mci_host *host)
 
 		/* Check to see if this needs filling */
 		if (i == 0) {
-			if (at91_mci_read(AT91_PDC_RCR) != 0) {
+			if (at91_mci_read(host, ATMEL_PDC_RCR) != 0) {
 				pr_debug("Transfer active in current\n");
 				continue;
 			}
 		}
 		else {
-			if (at91_mci_read(AT91_PDC_RNCR) != 0) {
+			if (at91_mci_read(host, ATMEL_PDC_RNCR) != 0) {
 				pr_debug("Transfer active in next\n");
 				continue;
 			}
@@ -235,17 +226,17 @@ static void at91mci_pre_dma_read(struct at91mci_host *host)
 		sg = &data->sg[host->transfer_index++];
 		pr_debug("sg = %p\n", sg);
 
-		sg->dma_address = dma_map_page(NULL, sg->page, sg->offset, sg->length, DMA_FROM_DEVICE);
+		sg->dma_address = dma_map_page(NULL, sg_page(sg), sg->offset, sg->length, DMA_FROM_DEVICE);
 
 		pr_debug("dma address = %08X, length = %d\n", sg->dma_address, sg->length);
 
 		if (i == 0) {
-			at91_mci_write(AT91_PDC_RPR, sg->dma_address);
-			at91_mci_write(AT91_PDC_RCR, sg->length / 4);
+			at91_mci_write(host, ATMEL_PDC_RPR, sg->dma_address);
+			at91_mci_write(host, ATMEL_PDC_RCR, sg->length / 4);
 		}
 		else {
-			at91_mci_write(AT91_PDC_RNPR, sg->dma_address);
-			at91_mci_write(AT91_PDC_RNCR, sg->length / 4);
+			at91_mci_write(host, ATMEL_PDC_RNPR, sg->dma_address);
+			at91_mci_write(host, ATMEL_PDC_RNCR, sg->length / 4);
 		}
 	}
 
@@ -255,7 +246,7 @@ static void at91mci_pre_dma_read(struct at91mci_host *host)
 /*
  * Handle after a dma read
  */
-static void at91mci_post_dma_read(struct at91mci_host *host)
+static void at91_mci_post_dma_read(struct at91mci_host *host)
 {
 	struct mmc_command *cmd;
 	struct mmc_data *data;
@@ -275,10 +266,6 @@ static void at91mci_post_dma_read(struct at91mci_host *host)
 	}
 
 	while (host->in_use_index < host->transfer_index) {
-		unsigned int *buffer;
-		int index;
-		int len;
-
 		struct scatterlist *sg;
 
 		pr_debug("finishing index %d\n", host->in_use_index);
@@ -289,27 +276,31 @@ static void at91mci_post_dma_read(struct at91mci_host *host)
 
 		dma_unmap_page(NULL, sg->dma_address, sg->length, DMA_FROM_DEVICE);
 
-		/* Swap the contents of the buffer */
-		buffer = kmap_atomic(sg->page, KM_BIO_SRC_IRQ) + sg->offset;
-		pr_debug("buffer = %p, length = %d\n", buffer, sg->length);
-
 		data->bytes_xfered += sg->length;
 
-		len = sg->length / 4;
+		if (cpu_is_at91rm9200()) {	/* AT91RM9200 errata */
+			unsigned int *buffer;
+			int index;
 
-		for (index = 0; index < len; index++) {
-			buffer[index] = swab32(buffer[index]);
+			/* Swap the contents of the buffer */
+			buffer = kmap_atomic(sg_page(sg), KM_BIO_SRC_IRQ) + sg->offset;
+			pr_debug("buffer = %p, length = %d\n", buffer, sg->length);
+
+			for (index = 0; index < (sg->length / 4); index++)
+				buffer[index] = swab32(buffer[index]);
+
+			kunmap_atomic(buffer, KM_BIO_SRC_IRQ);
 		}
-		kunmap_atomic(buffer, KM_BIO_SRC_IRQ);
-		flush_dcache_page(sg->page);
+
+		flush_dcache_page(sg_page(sg));
 	}
 
 	/* Is there another transfer to trigger? */
 	if (host->transfer_index < data->sg_len)
-		at91mci_pre_dma_read(host);
+		at91_mci_pre_dma_read(host);
 	else {
-		at91_mci_write(AT91_MCI_IER, AT91_MCI_RXBUFF);
-		at91_mci_write(AT91_PDC_PTCR, AT91_PDC_RXTDIS | AT91_PDC_TXTDIS);
+		at91_mci_write(host, AT91_MCI_IDR, AT91_MCI_ENDRX);
+		at91_mci_write(host, AT91_MCI_IER, AT91_MCI_RXBUFF);
 	}
 
 	pr_debug("post dma read done\n");
@@ -326,11 +317,10 @@ static void at91_mci_handle_transmitted(struct at91mci_host *host)
 	pr_debug("Handling the transmit\n");
 
 	/* Disable the transfer */
-	at91_mci_write(AT91_PDC_PTCR, AT91_PDC_RXTDIS | AT91_PDC_TXTDIS);
+	at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_RXTDIS | ATMEL_PDC_TXTDIS);
 
 	/* Now wait for cmd ready */
-	at91_mci_write(AT91_MCI_IDR, AT91_MCI_TXBUFE);
-	at91_mci_write(AT91_MCI_IER, AT91_MCI_NOTBUSY);
+	at91_mci_write(host, AT91_MCI_IDR, AT91_MCI_TXBUFE);
 
 	cmd = host->cmd;
 	if (!cmd) return;
@@ -338,34 +328,70 @@ static void at91_mci_handle_transmitted(struct at91mci_host *host)
 	data = cmd->data;
 	if (!data) return;
 
+	if (cmd->data->blocks > 1) {
+		pr_debug("multiple write : wait for BLKE...\n");
+		at91_mci_write(host, AT91_MCI_IER, AT91_MCI_BLKE);
+	} else
+		at91_mci_write(host, AT91_MCI_IER, AT91_MCI_NOTBUSY);
+
 	data->bytes_xfered = host->total_length;
 }
+
+/*Handle after command sent ready*/
+static int at91_mci_handle_cmdrdy(struct at91mci_host *host)
+{
+	if (!host->cmd)
+		return 1;
+	else if (!host->cmd->data) {
+		if (host->flags & FL_SENT_STOP) {
+			/*After multi block write, we must wait for NOTBUSY*/
+			at91_mci_write(host, AT91_MCI_IER, AT91_MCI_NOTBUSY);
+		} else return 1;
+	} else if (host->cmd->data->flags & MMC_DATA_WRITE) {
+		/*After sendding multi-block-write command, start DMA transfer*/
+		at91_mci_write(host, AT91_MCI_IER, AT91_MCI_TXBUFE);
+		at91_mci_write(host, AT91_MCI_IER, AT91_MCI_BLKE);
+		at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_TXTEN);
+	}
+
+	/* command not completed, have to wait */
+	return 0;
+}
+
 
 /*
  * Enable the controller
  */
-static void at91_mci_enable(void)
+static void at91_mci_enable(struct at91mci_host *host)
 {
-	at91_mci_write(AT91_MCI_CR, AT91_MCI_MCIEN);
-	at91_mci_write(AT91_MCI_IDR, 0xFFFFFFFF);
-	at91_mci_write(AT91_MCI_DTOR, AT91_MCI_DTOMUL_1M | AT91_MCI_DTOCYC);
-	at91_mci_write(AT91_MCI_MR, 0x834A);
-	at91_mci_write(AT91_MCI_SDCR, 0x0);
+	unsigned int mr;
+
+	at91_mci_write(host, AT91_MCI_CR, AT91_MCI_MCIEN);
+	at91_mci_write(host, AT91_MCI_IDR, 0xffffffff);
+	at91_mci_write(host, AT91_MCI_DTOR, AT91_MCI_DTOMUL_1M | AT91_MCI_DTOCYC);
+	mr = AT91_MCI_PDCMODE | 0x34a;
+
+	if (cpu_is_at91sam9260() || cpu_is_at91sam9263())
+		mr |= AT91_MCI_RDPROOF | AT91_MCI_WRPROOF;
+
+	at91_mci_write(host, AT91_MCI_MR, mr);
+
+	/* use Slot A or B (only one at same time) */
+	at91_mci_write(host, AT91_MCI_SDCR, host->board->slot_b);
 }
 
 /*
  * Disable the controller
  */
-static void at91_mci_disable(void)
+static void at91_mci_disable(struct at91mci_host *host)
 {
-	at91_mci_write(AT91_MCI_CR, AT91_MCI_MCIDIS | AT91_MCI_SWRST);
+	at91_mci_write(host, AT91_MCI_CR, AT91_MCI_MCIDIS | AT91_MCI_SWRST);
 }
 
 /*
  * Send a command
- * return the interrupts to enable
  */
-static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_command *cmd)
+static void at91_mci_send_command(struct at91mci_host *host, struct mmc_command *cmd)
 {
 	unsigned int cmdr, mr;
 	unsigned int block_length;
@@ -376,18 +402,17 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 
 	host->cmd = cmd;
 
-	/* Not sure if this is needed */
-#if 0
-	if ((at91_mci_read(AT91_MCI_SR) & AT91_MCI_RTOE) && (cmd->opcode == 1)) {
+	/* Needed for leaving busy state before CMD1 */
+	if ((at91_mci_read(host, AT91_MCI_SR) & AT91_MCI_RTOE) && (cmd->opcode == 1)) {
 		pr_debug("Clearing timeout\n");
-		at91_mci_write(AT91_MCI_ARGR, 0);
-		at91_mci_write(AT91_MCI_CMDR, AT91_MCI_OPDCMD);
-		while (!(at91_mci_read(AT91_MCI_SR) & AT91_MCI_CMDRDY)) {
+		at91_mci_write(host, AT91_MCI_ARGR, 0);
+		at91_mci_write(host, AT91_MCI_CMDR, AT91_MCI_OPDCMD);
+		while (!(at91_mci_read(host, AT91_MCI_SR) & AT91_MCI_CMDRDY)) {
 			/* spin */
-			pr_debug("Clearing: SR = %08X\n", at91_mci_read(AT91_MCI_SR));
+			pr_debug("Clearing: SR = %08X\n", at91_mci_read(host, AT91_MCI_SR));
 		}
 	}
-#endif
+
 	cmdr = cmd->opcode;
 
 	if (mmc_resp_type(cmd) == MMC_RSP_NONE)
@@ -403,6 +428,14 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 	}
 
 	if (data) {
+
+		if ( data->blksz & 0x3 ) {
+			pr_debug("Unsupported block size\n");
+			cmd->error = -EINVAL;
+			mmc_request_done(host->mmc, host->request);
+			return;
+		}
+
 		block_length = data->blksz;
 		blocks = data->blocks;
 
@@ -414,7 +447,7 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 
 		if (data->flags & MMC_DATA_STREAM)
 			cmdr |= AT91_MCI_TRTYP_STREAM;
-		if (data->flags & MMC_DATA_MULTI)
+		if (data->blocks > 1)
 			cmdr |= AT91_MCI_TRTYP_MULTIPLE;
 	}
 	else {
@@ -422,7 +455,7 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 		blocks = 0;
 	}
 
-	if (cmd->opcode == MMC_STOP_TRANSMISSION)
+	if (host->flags & FL_SENT_STOP)
 		cmdr |= AT91_MCI_TRCMD_STOP;
 
 	if (host->bus_mode == MMC_BUSMODE_OPENDRAIN)
@@ -431,63 +464,61 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 	/*
 	 * Set the arguments and send the command
 	 */
-	pr_debug("Sending command %d as %08X, arg = %08X, blocks = %d, length = %d (MR = %08lX)\n",
-		cmd->opcode, cmdr, cmd->arg, blocks, block_length, at91_mci_read(AT91_MCI_MR));
+	pr_debug("Sending command %d as %08X, arg = %08X, blocks = %d, length = %d (MR = %08X)\n",
+		cmd->opcode, cmdr, cmd->arg, blocks, block_length, at91_mci_read(host, AT91_MCI_MR));
 
 	if (!data) {
-		at91_mci_write(AT91_PDC_PTCR, AT91_PDC_TXTDIS | AT91_PDC_RXTDIS);
-		at91_mci_write(AT91_PDC_RPR, 0);
-		at91_mci_write(AT91_PDC_RCR, 0);
-		at91_mci_write(AT91_PDC_RNPR, 0);
-		at91_mci_write(AT91_PDC_RNCR, 0);
-		at91_mci_write(AT91_PDC_TPR, 0);
-		at91_mci_write(AT91_PDC_TCR, 0);
-		at91_mci_write(AT91_PDC_TNPR, 0);
-		at91_mci_write(AT91_PDC_TNCR, 0);
+		at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_TXTDIS | ATMEL_PDC_RXTDIS);
+		at91_mci_write(host, ATMEL_PDC_RPR, 0);
+		at91_mci_write(host, ATMEL_PDC_RCR, 0);
+		at91_mci_write(host, ATMEL_PDC_RNPR, 0);
+		at91_mci_write(host, ATMEL_PDC_RNCR, 0);
+		at91_mci_write(host, ATMEL_PDC_TPR, 0);
+		at91_mci_write(host, ATMEL_PDC_TCR, 0);
+		at91_mci_write(host, ATMEL_PDC_TNPR, 0);
+		at91_mci_write(host, ATMEL_PDC_TNCR, 0);
+		ier = AT91_MCI_CMDRDY;
+	} else {
+		/* zero block length and PDC mode */
+		mr = at91_mci_read(host, AT91_MCI_MR) & 0x7fff;
+		at91_mci_write(host, AT91_MCI_MR, mr | (block_length << 16) | AT91_MCI_PDCMODE);
 
-		at91_mci_write(AT91_MCI_ARGR, cmd->arg);
-		at91_mci_write(AT91_MCI_CMDR, cmdr);
-		return AT91_MCI_CMDRDY;
-	}
+		/*
+		 * Disable the PDC controller
+		 */
+		at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_RXTDIS | ATMEL_PDC_TXTDIS);
 
-	mr = at91_mci_read(AT91_MCI_MR) & 0x7fff;	/* zero block length and PDC mode */
-	at91_mci_write(AT91_MCI_MR, mr | (block_length << 16) | AT91_MCI_PDCMODE);
+		if (cmdr & AT91_MCI_TRCMD_START) {
+			data->bytes_xfered = 0;
+			host->transfer_index = 0;
+			host->in_use_index = 0;
+			if (cmdr & AT91_MCI_TRDIR) {
+				/*
+				 * Handle a read
+				 */
+				host->buffer = NULL;
+				host->total_length = 0;
 
-	/*
-	 * Disable the PDC controller
-	 */
-	at91_mci_write(AT91_PDC_PTCR, AT91_PDC_RXTDIS | AT91_PDC_TXTDIS);
+				at91_mci_pre_dma_read(host);
+				ier = AT91_MCI_ENDRX /* | AT91_MCI_RXBUFF */;
+			}
+			else {
+				/*
+				 * Handle a write
+				 */
+				host->total_length = block_length * blocks;
+				host->buffer = dma_alloc_coherent(NULL,
+						host->total_length,
+						&host->physical_address, GFP_KERNEL);
 
-	if (cmdr & AT91_MCI_TRCMD_START) {
-		data->bytes_xfered = 0;
-		host->transfer_index = 0;
-		host->in_use_index = 0;
-		if (cmdr & AT91_MCI_TRDIR) {
-			/*
-			 * Handle a read
-			 */
-			host->buffer = NULL;
-			host->total_length = 0;
+				at91_mci_sg_to_dma(host, data);
 
-			at91mci_pre_dma_read(host);
-			ier = AT91_MCI_ENDRX /* | AT91_MCI_RXBUFF */;
-		}
-		else {
-			/*
-			 * Handle a write
-			 */
-			host->total_length = block_length * blocks;
-			host->buffer = dma_alloc_coherent(NULL,
-						  host->total_length,
-						  &host->physical_address, GFP_KERNEL);
+				pr_debug("Transmitting %d bytes\n", host->total_length);
 
-			at91mci_sg_to_dma(host, data);
-
-			pr_debug("Transmitting %d bytes\n", host->total_length);
-
-			at91_mci_write(AT91_PDC_TPR, host->physical_address);
-			at91_mci_write(AT91_PDC_TCR, host->total_length / 4);
-			ier = AT91_MCI_TXBUFE;
+				at91_mci_write(host, ATMEL_PDC_TPR, host->physical_address);
+				at91_mci_write(host, ATMEL_PDC_TCR, host->total_length / 4);
+				ier = AT91_MCI_CMDRDY;
+			}
 		}
 	}
 
@@ -496,45 +527,30 @@ static unsigned int at91_mci_send_command(struct at91mci_host *host, struct mmc_
 	 * the data sheet says
 	 */
 
-	at91_mci_write(AT91_MCI_ARGR, cmd->arg);
-	at91_mci_write(AT91_MCI_CMDR, cmdr);
+	at91_mci_write(host, AT91_MCI_ARGR, cmd->arg);
+	at91_mci_write(host, AT91_MCI_CMDR, cmdr);
 
 	if (cmdr & AT91_MCI_TRCMD_START) {
 		if (cmdr & AT91_MCI_TRDIR)
-			at91_mci_write(AT91_PDC_PTCR, AT91_PDC_RXTEN);
-		else
-			at91_mci_write(AT91_PDC_PTCR, AT91_PDC_TXTEN);
+			at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_RXTEN);
 	}
-	return ier;
-}
 
-/*
- * Wait for a command to complete
- */
-static void at91mci_process_command(struct at91mci_host *host, struct mmc_command *cmd)
-{
-	unsigned int ier;
-
-	ier = at91_mci_send_command(host, cmd);
-
-	pr_debug("setting ier to %08X\n", ier);
-
-	/* Stop on errors or the required value */
-	at91_mci_write(AT91_MCI_IER, 0xffff0000 | ier);
+	/* Enable selected interrupts */
+	at91_mci_write(host, AT91_MCI_IER, AT91_MCI_ERRORS | ier);
 }
 
 /*
  * Process the next step in the request
  */
-static void at91mci_process_next(struct at91mci_host *host)
+static void at91_mci_process_next(struct at91mci_host *host)
 {
 	if (!(host->flags & FL_SENT_COMMAND)) {
 		host->flags |= FL_SENT_COMMAND;
-		at91mci_process_command(host, host->request->cmd);
+		at91_mci_send_command(host, host->request->cmd);
 	}
 	else if ((!(host->flags & FL_SENT_STOP)) && host->request->stop) {
 		host->flags |= FL_SENT_STOP;
-		at91mci_process_command(host, host->request->stop);
+		at91_mci_send_command(host, host->request->stop);
 	}
 	else
 		mmc_request_done(host->mmc, host->request);
@@ -543,53 +559,48 @@ static void at91mci_process_next(struct at91mci_host *host)
 /*
  * Handle a command that has been completed
  */
-static void at91mci_completed_command(struct at91mci_host *host)
+static void at91_mci_completed_command(struct at91mci_host *host)
 {
 	struct mmc_command *cmd = host->cmd;
 	unsigned int status;
 
-	at91_mci_write(AT91_MCI_IDR, 0xffffffff);
+	at91_mci_write(host, AT91_MCI_IDR, 0xffffffff);
 
-	cmd->resp[0] = at91_mci_read(AT91_MCI_RSPR(0));
-	cmd->resp[1] = at91_mci_read(AT91_MCI_RSPR(1));
-	cmd->resp[2] = at91_mci_read(AT91_MCI_RSPR(2));
-	cmd->resp[3] = at91_mci_read(AT91_MCI_RSPR(3));
+	cmd->resp[0] = at91_mci_read(host, AT91_MCI_RSPR(0));
+	cmd->resp[1] = at91_mci_read(host, AT91_MCI_RSPR(1));
+	cmd->resp[2] = at91_mci_read(host, AT91_MCI_RSPR(2));
+	cmd->resp[3] = at91_mci_read(host, AT91_MCI_RSPR(3));
 
 	if (host->buffer) {
 		dma_free_coherent(NULL, host->total_length, host->buffer, host->physical_address);
 		host->buffer = NULL;
 	}
 
-	status = at91_mci_read(AT91_MCI_SR);
+	status = at91_mci_read(host, AT91_MCI_SR);
 
 	pr_debug("Status = %08X [%08X %08X %08X %08X]\n",
 		 status, cmd->resp[0], cmd->resp[1], cmd->resp[2], cmd->resp[3]);
 
-	if (status & (AT91_MCI_RINDE | AT91_MCI_RDIRE | AT91_MCI_RCRCE |
-			AT91_MCI_RENDE | AT91_MCI_RTOE | AT91_MCI_DCRCE |
-			AT91_MCI_DTOE | AT91_MCI_OVRE | AT91_MCI_UNRE)) {
-		if ((status & AT91_MCI_RCRCE) &&
-			((cmd->opcode == MMC_SEND_OP_COND) || (cmd->opcode == SD_APP_OP_COND))) {
-			cmd->error = MMC_ERR_NONE;
+	if (status & AT91_MCI_ERRORS) {
+		if ((status & AT91_MCI_RCRCE) && !(mmc_resp_type(cmd) & MMC_RSP_CRC)) {
+			cmd->error = 0;
 		}
 		else {
 			if (status & (AT91_MCI_RTOE | AT91_MCI_DTOE))
-				cmd->error = MMC_ERR_TIMEOUT;
+				cmd->error = -ETIMEDOUT;
 			else if (status & (AT91_MCI_RCRCE | AT91_MCI_DCRCE))
-				cmd->error = MMC_ERR_BADCRC;
-			else if (status & (AT91_MCI_OVRE | AT91_MCI_UNRE))
-				cmd->error = MMC_ERR_FIFO;
+				cmd->error = -EILSEQ;
 			else
-				cmd->error = MMC_ERR_FAILED;
+				cmd->error = -EIO;
 
 			pr_debug("Error detected and set to %d (cmd = %d, retries = %d)\n",
 				 cmd->error, cmd->opcode, cmd->retries);
 		}
 	}
 	else
-		cmd->error = MMC_ERR_NONE;
+		cmd->error = 0;
 
-	at91mci_process_next(host);
+	at91_mci_process_next(host);
 }
 
 /*
@@ -601,7 +612,7 @@ static void at91_mci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	host->request = mrq;
 	host->flags = 0;
 
-	at91mci_process_next(host);
+	at91_mci_process_next(host);
 }
 
 /*
@@ -611,18 +622,18 @@ static void at91_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
 	int clkdiv;
 	struct at91mci_host *host = mmc_priv(mmc);
-	unsigned long at91_master_clock = clk_get_rate(mci_clk);
+	unsigned long at91_master_clock = clk_get_rate(host->mci_clk);
 
 	host->bus_mode = ios->bus_mode;
 
 	if (ios->clock == 0) {
 		/* Disable the MCI controller */
-		at91_mci_write(AT91_MCI_CR, AT91_MCI_MCIDIS);
+		at91_mci_write(host, AT91_MCI_CR, AT91_MCI_MCIDIS);
 		clkdiv = 0;
 	}
 	else {
 		/* Enable the MCI controller */
-		at91_mci_write(AT91_MCI_CR, AT91_MCI_MCIEN);
+		at91_mci_write(host, AT91_MCI_CR, AT91_MCI_MCIEN);
 
 		if ((at91_master_clock % (ios->clock * 2)) == 0)
 			clkdiv = ((at91_master_clock / ios->clock) / 2) - 1;
@@ -634,25 +645,25 @@ static void at91_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	}
 	if (ios->bus_width == MMC_BUS_WIDTH_4 && host->board->wire4) {
 		pr_debug("MMC: Setting controller bus width to 4\n");
-		at91_mci_write(AT91_MCI_SDCR, at91_mci_read(AT91_MCI_SDCR) | AT91_MCI_SDCBUS);
+		at91_mci_write(host, AT91_MCI_SDCR, at91_mci_read(host, AT91_MCI_SDCR) | AT91_MCI_SDCBUS);
 	}
 	else {
 		pr_debug("MMC: Setting controller bus width to 1\n");
-		at91_mci_write(AT91_MCI_SDCR, at91_mci_read(AT91_MCI_SDCR) & ~AT91_MCI_SDCBUS);
+		at91_mci_write(host, AT91_MCI_SDCR, at91_mci_read(host, AT91_MCI_SDCR) & ~AT91_MCI_SDCBUS);
 	}
 
 	/* Set the clock divider */
-	at91_mci_write(AT91_MCI_MR, (at91_mci_read(AT91_MCI_MR) & ~AT91_MCI_CLKDIV) | clkdiv);
+	at91_mci_write(host, AT91_MCI_MR, (at91_mci_read(host, AT91_MCI_MR) & ~AT91_MCI_CLKDIV) | clkdiv);
 
 	/* maybe switch power to the card */
 	if (host->board->vcc_pin) {
 		switch (ios->power_mode) {
 			case MMC_POWER_OFF:
-				at91_set_gpio_output(host->board->vcc_pin, 0);
+				at91_set_gpio_value(host->board->vcc_pin, 0);
 				break;
 			case MMC_POWER_UP:
 			case MMC_POWER_ON:
-				at91_set_gpio_output(host->board->vcc_pin, 1);
+				at91_set_gpio_value(host->board->vcc_pin, 1);
 				break;
 		}
 	}
@@ -661,100 +672,100 @@ static void at91_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 /*
  * Handle an interrupt
  */
-static irqreturn_t at91_mci_irq(int irq, void *devid, struct pt_regs *regs)
+static irqreturn_t at91_mci_irq(int irq, void *devid)
 {
 	struct at91mci_host *host = devid;
 	int completed = 0;
+	unsigned int int_status, int_mask;
 
-	unsigned int int_status;
+	int_status = at91_mci_read(host, AT91_MCI_SR);
+	int_mask = at91_mci_read(host, AT91_MCI_IMR);
 
-	int_status = at91_mci_read(AT91_MCI_SR);
-	pr_debug("MCI irq: status = %08X, %08lX, %08lX\n", int_status, at91_mci_read(AT91_MCI_IMR),
-		int_status & at91_mci_read(AT91_MCI_IMR));
+	pr_debug("MCI irq: status = %08X, %08X, %08X\n", int_status, int_mask,
+		int_status & int_mask);
 
-	if ((int_status & at91_mci_read(AT91_MCI_IMR)) & 0xffff0000)
+	int_status = int_status & int_mask;
+
+	if (int_status & AT91_MCI_ERRORS) {
 		completed = 1;
 
-	int_status &= at91_mci_read(AT91_MCI_IMR);
+		if (int_status & AT91_MCI_UNRE)
+			pr_debug("MMC: Underrun error\n");
+		if (int_status & AT91_MCI_OVRE)
+			pr_debug("MMC: Overrun error\n");
+		if (int_status & AT91_MCI_DTOE)
+			pr_debug("MMC: Data timeout\n");
+		if (int_status & AT91_MCI_DCRCE)
+			pr_debug("MMC: CRC error in data\n");
+		if (int_status & AT91_MCI_RTOE)
+			pr_debug("MMC: Response timeout\n");
+		if (int_status & AT91_MCI_RENDE)
+			pr_debug("MMC: Response end bit error\n");
+		if (int_status & AT91_MCI_RCRCE)
+			pr_debug("MMC: Response CRC error\n");
+		if (int_status & AT91_MCI_RDIRE)
+			pr_debug("MMC: Response direction error\n");
+		if (int_status & AT91_MCI_RINDE)
+			pr_debug("MMC: Response index error\n");
+	} else {
+		/* Only continue processing if no errors */
 
-	if (int_status & AT91_MCI_UNRE)
-		pr_debug("MMC: Underrun error\n");
-	if (int_status & AT91_MCI_OVRE)
-		pr_debug("MMC: Overrun error\n");
-	if (int_status & AT91_MCI_DTOE)
-		pr_debug("MMC: Data timeout\n");
-	if (int_status & AT91_MCI_DCRCE)
-		pr_debug("MMC: CRC error in data\n");
-	if (int_status & AT91_MCI_RTOE)
-		pr_debug("MMC: Response timeout\n");
-	if (int_status & AT91_MCI_RENDE)
-		pr_debug("MMC: Response end bit error\n");
-	if (int_status & AT91_MCI_RCRCE)
-		pr_debug("MMC: Response CRC error\n");
-	if (int_status & AT91_MCI_RDIRE)
-		pr_debug("MMC: Response direction error\n");
-	if (int_status & AT91_MCI_RINDE)
-		pr_debug("MMC: Response index error\n");
-
-	/* Only continue processing if no errors */
-	if (!completed) {
 		if (int_status & AT91_MCI_TXBUFE) {
 			pr_debug("TX buffer empty\n");
 			at91_mci_handle_transmitted(host);
 		}
 
+		if (int_status & AT91_MCI_ENDRX) {
+			pr_debug("ENDRX\n");
+			at91_mci_post_dma_read(host);
+		}
+
 		if (int_status & AT91_MCI_RXBUFF) {
 			pr_debug("RX buffer full\n");
-			at91_mci_write(AT91_MCI_IER, AT91_MCI_CMDRDY);
+			at91_mci_write(host, ATMEL_PDC_PTCR, ATMEL_PDC_RXTDIS | ATMEL_PDC_TXTDIS);
+			at91_mci_write(host, AT91_MCI_IDR, AT91_MCI_RXBUFF | AT91_MCI_ENDRX);
+			completed = 1;
 		}
 
-		if (int_status & AT91_MCI_ENDTX) {
+		if (int_status & AT91_MCI_ENDTX)
 			pr_debug("Transmit has ended\n");
-		}
-
-		if (int_status & AT91_MCI_ENDRX) {
-			pr_debug("Receive has ended\n");
-			at91mci_post_dma_read(host);
-		}
 
 		if (int_status & AT91_MCI_NOTBUSY) {
 			pr_debug("Card is ready\n");
-			at91_mci_write(AT91_MCI_IER, AT91_MCI_CMDRDY);
+			completed = 1;
 		}
 
-		if (int_status & AT91_MCI_DTIP) {
+		if (int_status & AT91_MCI_DTIP)
 			pr_debug("Data transfer in progress\n");
-		}
 
 		if (int_status & AT91_MCI_BLKE) {
 			pr_debug("Block transfer has ended\n");
+			completed = 1;
 		}
 
-		if (int_status & AT91_MCI_TXRDY) {
+		if (int_status & AT91_MCI_TXRDY)
 			pr_debug("Ready to transmit\n");
-		}
 
-		if (int_status & AT91_MCI_RXRDY) {
+		if (int_status & AT91_MCI_RXRDY)
 			pr_debug("Ready to receive\n");
-		}
 
 		if (int_status & AT91_MCI_CMDRDY) {
 			pr_debug("Command ready\n");
-			completed = 1;
+			completed = at91_mci_handle_cmdrdy(host);
 		}
 	}
-	at91_mci_write(AT91_MCI_IDR, int_status);
 
 	if (completed) {
 		pr_debug("Completed command\n");
-		at91_mci_write(AT91_MCI_IDR, 0xffffffff);
-		at91mci_completed_command(host);
-	}
+		at91_mci_write(host, AT91_MCI_IDR, 0xffffffff);
+		at91_mci_completed_command(host);
+	} else
+		at91_mci_write(host, AT91_MCI_IDR, int_status);
 
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t at91_mmc_det_irq(int irq, void *_host, struct pt_regs *regs)
+static irqreturn_t at91_mmc_det_irq(int irq, void *_host)
 {
 	struct at91mci_host *host = _host;
 	int present = !at91_get_gpio_value(irq);
@@ -769,14 +780,14 @@ static irqreturn_t at91_mmc_det_irq(int irq, void *_host, struct pt_regs *regs)
 			present ? "insert" : "remove");
 		if (!present) {
 			pr_debug("****** Resetting SD-card bus width ******\n");
-			at91_mci_write(AT91_MCI_SDCR, 0);
+			at91_mci_write(host, AT91_MCI_SDCR, at91_mci_read(host, AT91_MCI_SDCR) & ~AT91_MCI_SDCBUS);
 		}
 		mmc_detect_change(host->mmc, msecs_to_jiffies(100));
 	}
 	return IRQ_HANDLED;
 }
 
-int at91_mci_get_ro(struct mmc_host *mmc)
+static int at91_mci_get_ro(struct mmc_host *mmc)
 {
 	int read_only = 0;
 	struct at91mci_host *host = mmc_priv(mmc);
@@ -793,7 +804,7 @@ int at91_mci_get_ro(struct mmc_host *mmc)
 	return read_only;
 }
 
-static struct mmc_host_ops at91_mci_ops = {
+static const struct mmc_host_ops at91_mci_ops = {
 	.request	= at91_mci_request,
 	.set_ios	= at91_mci_set_ios,
 	.get_ro		= at91_mci_get_ro,
@@ -802,19 +813,26 @@ static struct mmc_host_ops at91_mci_ops = {
 /*
  * Probe for the device
  */
-static int at91_mci_probe(struct platform_device *pdev)
+static int __init at91_mci_probe(struct platform_device *pdev)
 {
 	struct mmc_host *mmc;
 	struct at91mci_host *host;
+	struct resource *res;
 	int ret;
 
 	pr_debug("Probe MCI devices\n");
-	at91_mci_disable();
-	at91_mci_enable();
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -ENXIO;
+
+	if (!request_mem_region(res->start, res->end - res->start + 1, DRIVER_NAME))
+		return -EBUSY;
 
 	mmc = mmc_alloc_host(sizeof(struct at91mci_host), &pdev->dev);
 	if (!mmc) {
 		pr_debug("Failed to allocate mmc host\n");
+		release_mem_region(res->start, res->end - res->start + 1);
 		return -ENOMEM;
 	}
 
@@ -823,39 +841,63 @@ static int at91_mci_probe(struct platform_device *pdev)
 	mmc->f_max = 25000000;
 	mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
 
+	mmc->max_blk_size = 4095;
+	mmc->max_blk_count = mmc->max_req_size;
+
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
 	host->buffer = NULL;
 	host->bus_mode = 0;
 	host->board = pdev->dev.platform_data;
 	if (host->board->wire4) {
-#ifdef SUPPORT_4WIRE
-		mmc->caps |= MMC_CAP_4_BIT_DATA;
-#else
-		printk("MMC: 4 wire bus mode not supported by this driver - using 1 wire\n");
-#endif
+		if (cpu_is_at91sam9260() || cpu_is_at91sam9263())
+			mmc->caps |= MMC_CAP_4_BIT_DATA;
+		else
+			printk("AT91 MMC: 4 wire bus mode not supported"
+				" - using 1 wire\n");
 	}
 
 	/*
 	 * Get Clock
 	 */
-	mci_clk = clk_get(&pdev->dev, "mci_clk");
-	if (IS_ERR(mci_clk)) {
+	host->mci_clk = clk_get(&pdev->dev, "mci_clk");
+	if (IS_ERR(host->mci_clk)) {
 		printk(KERN_ERR "AT91 MMC: no clock defined.\n");
 		mmc_free_host(mmc);
+		release_mem_region(res->start, res->end - res->start + 1);
 		return -ENODEV;
 	}
-	clk_enable(mci_clk);			/* Enable the peripheral clock */
+
+	/*
+	 * Map I/O region
+	 */
+	host->baseaddr = ioremap(res->start, res->end - res->start + 1);
+	if (!host->baseaddr) {
+		clk_put(host->mci_clk);
+		mmc_free_host(mmc);
+		release_mem_region(res->start, res->end - res->start + 1);
+		return -ENOMEM;
+	}
+
+	/*
+	 * Reset hardware
+	 */
+	clk_enable(host->mci_clk);		/* Enable the peripheral clock */
+	at91_mci_disable(host);
+	at91_mci_enable(host);
 
 	/*
 	 * Allocate the MCI interrupt
 	 */
-	ret = request_irq(AT91_ID_MCI, at91_mci_irq, IRQF_SHARED, DRIVER_NAME, host);
+	host->irq = platform_get_irq(pdev, 0);
+	ret = request_irq(host->irq, at91_mci_irq, IRQF_SHARED, DRIVER_NAME, host);
 	if (ret) {
-		printk(KERN_ERR "Failed to request MCI interrupt\n");
-		clk_disable(mci_clk);
-		clk_put(mci_clk);
+		printk(KERN_ERR "AT91 MMC: Failed to request MCI interrupt\n");
+		clk_disable(host->mci_clk);
+		clk_put(host->mci_clk);
 		mmc_free_host(mmc);
+		iounmap(host->baseaddr);
+		release_mem_region(res->start, res->end - res->start + 1);
 		return ret;
 	}
 
@@ -864,8 +906,10 @@ static int at91_mci_probe(struct platform_device *pdev)
 	/*
 	 * Add host to MMC layer
 	 */
-	if (host->board->det_pin)
+	if (host->board->det_pin) {
 		host->present = !at91_get_gpio_value(host->board->det_pin);
+		device_init_wakeup(&pdev->dev, 1);
+	}
 	else
 		host->present = -1;
 
@@ -878,10 +922,10 @@ static int at91_mci_probe(struct platform_device *pdev)
 		ret = request_irq(host->board->det_pin, at91_mmc_det_irq,
 				0, DRIVER_NAME, host);
 		if (ret)
-			printk(KERN_ERR "couldn't allocate MMC detect irq\n");
+			printk(KERN_ERR "AT91 MMC: Couldn't allocate MMC detect irq\n");
 	}
 
-	pr_debug(KERN_INFO "Added MCI driver\n");
+	pr_debug("Added MCI driver\n");
 
 	return 0;
 }
@@ -889,31 +933,36 @@ static int at91_mci_probe(struct platform_device *pdev)
 /*
  * Remove a device
  */
-static int at91_mci_remove(struct platform_device *pdev)
+static int __exit at91_mci_remove(struct platform_device *pdev)
 {
 	struct mmc_host *mmc = platform_get_drvdata(pdev);
 	struct at91mci_host *host;
+	struct resource *res;
 
 	if (!mmc)
 		return -1;
 
 	host = mmc_priv(mmc);
 
-	if (host->present != -1) {
+	if (host->board->det_pin) {
+		device_init_wakeup(&pdev->dev, 0);
 		free_irq(host->board->det_pin, host);
 		cancel_delayed_work(&host->mmc->detect);
 	}
 
+	at91_mci_disable(host);
 	mmc_remove_host(mmc);
-	at91_mci_disable();
-	free_irq(AT91_ID_MCI, host);
+	free_irq(host->irq, host);
+
+	clk_disable(host->mci_clk);			/* Disable the peripheral clock */
+	clk_put(host->mci_clk);
+
+	iounmap(host->baseaddr);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	release_mem_region(res->start, res->end - res->start + 1);
+
 	mmc_free_host(mmc);
-
-	clk_disable(mci_clk);				/* Disable the peripheral clock */
-	clk_put(mci_clk);
-
 	platform_set_drvdata(pdev, NULL);
-
 	pr_debug("MCI Removed\n");
 
 	return 0;
@@ -923,7 +972,11 @@ static int at91_mci_remove(struct platform_device *pdev)
 static int at91_mci_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct mmc_host *mmc = platform_get_drvdata(pdev);
+	struct at91mci_host *host = mmc_priv(mmc);
 	int ret = 0;
+
+	if (host->board->det_pin && device_may_wakeup(&pdev->dev))
+		enable_irq_wake(host->board->det_pin);
 
 	if (mmc)
 		ret = mmc_suspend_host(mmc, state);
@@ -934,7 +987,11 @@ static int at91_mci_suspend(struct platform_device *pdev, pm_message_t state)
 static int at91_mci_resume(struct platform_device *pdev)
 {
 	struct mmc_host *mmc = platform_get_drvdata(pdev);
+	struct at91mci_host *host = mmc_priv(mmc);
 	int ret = 0;
+
+	if (host->board->det_pin && device_may_wakeup(&pdev->dev))
+		disable_irq_wake(host->board->det_pin);
 
 	if (mmc)
 		ret = mmc_resume_host(mmc);
@@ -947,8 +1004,7 @@ static int at91_mci_resume(struct platform_device *pdev)
 #endif
 
 static struct platform_driver at91_mci_driver = {
-	.probe		= at91_mci_probe,
-	.remove		= at91_mci_remove,
+	.remove		= __exit_p(at91_mci_remove),
 	.suspend	= at91_mci_suspend,
 	.resume		= at91_mci_resume,
 	.driver		= {
@@ -959,7 +1015,7 @@ static struct platform_driver at91_mci_driver = {
 
 static int __init at91_mci_init(void)
 {
-	return platform_driver_register(&at91_mci_driver);
+	return platform_driver_probe(&at91_mci_driver, at91_mci_probe);
 }
 
 static void __exit at91_mci_exit(void)

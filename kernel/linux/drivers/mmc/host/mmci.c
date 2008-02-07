@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/mmc/mmci.c - ARM PrimeCell MMCI PL180/1 driver
+ *  linux/drivers/mmc/host/mmci.c - ARM PrimeCell MMCI PL180/1 driver
  *
  *  Copyright (C) 2003 Deep Blue Solutions, Ltd, All Rights Reserved.
  *
@@ -16,15 +16,15 @@
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/highmem.h>
+#include <linux/log2.h>
 #include <linux/mmc/host.h>
-#include <linux/mmc/protocol.h>
 #include <linux/amba/bus.h>
 #include <linux/clk.h>
+#include <linux/scatterlist.h>
 
 #include <asm/cacheflush.h>
 #include <asm/div64.h>
 #include <asm/io.h>
-#include <asm/scatterlist.h>
 #include <asm/sizes.h>
 #include <asm/mach/mmc.h>
 
@@ -41,6 +41,8 @@ static void
 mmci_request_end(struct mmci_host *host, struct mmc_request *mrq)
 {
 	writel(0, host->base + MMCICOMMAND);
+
+	BUG_ON(host->data);
 
 	host->mrq = NULL;
 	host->cmd = NULL;
@@ -69,12 +71,13 @@ static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 	unsigned int datactrl, timeout, irqmask;
 	unsigned long long clks;
 	void __iomem *base;
+	int blksz_bits;
 
 	DBG(host, "blksz %04x blks %04x flags %08x\n",
-	    1 << data->blksz_bits, data->blocks, data->flags);
+	    data->blksz, data->blocks, data->flags);
 
 	host->data = data;
-	host->size = data->blocks << data->blksz_bits;
+	host->size = data->blksz;
 	host->data_xfered = 0;
 
 	mmci_init_sg(host, data);
@@ -88,7 +91,10 @@ static void mmci_start_data(struct mmci_host *host, struct mmc_data *data)
 	writel(timeout, base + MMCIDATATIMER);
 	writel(host->size, base + MMCIDATALENGTH);
 
-	datactrl = MCI_DPSM_ENABLE | data->blksz_bits << 4;
+	blksz_bits = ffs(data->blksz) - 1;
+	BUG_ON(1 << blksz_bits != data->blksz);
+
+	datactrl = MCI_DPSM_ENABLE | blksz_bits << 4;
 	if (data->flags & MMC_DATA_READ) {
 		datactrl |= MCI_DPSM_DIRECTION;
 		irqmask = MCI_RXFIFOHALFFULLMASK;
@@ -145,15 +151,15 @@ mmci_data_irq(struct mmci_host *host, struct mmc_data *data,
 	      unsigned int status)
 {
 	if (status & MCI_DATABLOCKEND) {
-		host->data_xfered += 1 << data->blksz_bits;
+		host->data_xfered += data->blksz;
 	}
 	if (status & (MCI_DATACRCFAIL|MCI_DATATIMEOUT|MCI_TXUNDERRUN|MCI_RXOVERRUN)) {
 		if (status & MCI_DATACRCFAIL)
-			data->error = MMC_ERR_BADCRC;
+			data->error = -EILSEQ;
 		else if (status & MCI_DATATIMEOUT)
-			data->error = MMC_ERR_TIMEOUT;
+			data->error = -ETIMEDOUT;
 		else if (status & (MCI_TXUNDERRUN|MCI_RXOVERRUN))
-			data->error = MMC_ERR_FIFO;
+			data->error = -EIO;
 		status |= MCI_DATAEND;
 
 		/*
@@ -161,7 +167,7 @@ mmci_data_irq(struct mmci_host *host, struct mmc_data *data,
 		 * partially written to a page is properly coherent.
 		 */
 		if (host->sg_len && data->flags & MMC_DATA_READ)
-			flush_dcache_page(host->sg_ptr->page);
+			flush_dcache_page(sg_page(host->sg_ptr));
 	}
 	if (status & MCI_DATAEND) {
 		mmci_stop_data(host);
@@ -188,12 +194,14 @@ mmci_cmd_irq(struct mmci_host *host, struct mmc_command *cmd,
 	cmd->resp[3] = readl(base + MMCIRESPONSE3);
 
 	if (status & MCI_CMDTIMEOUT) {
-		cmd->error = MMC_ERR_TIMEOUT;
+		cmd->error = -ETIMEDOUT;
 	} else if (status & MCI_CMDCRCFAIL && cmd->flags & MMC_RSP_CRC) {
-		cmd->error = MMC_ERR_BADCRC;
+		cmd->error = -EILSEQ;
 	}
 
-	if (!cmd->data || cmd->error != MMC_ERR_NONE) {
+	if (!cmd->data || cmd->error) {
+		if (host->data)
+			mmci_stop_data(host);
 		mmci_request_end(host, cmd->mrq);
 	} else if (!(cmd->data->flags & MMC_DATA_READ)) {
 		mmci_start_data(host, cmd->data);
@@ -257,7 +265,7 @@ static int mmci_pio_write(struct mmci_host *host, char *buffer, unsigned int rem
 /*
  * PIO data transfer IRQ handler.
  */
-static irqreturn_t mmci_pio_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t mmci_pio_irq(int irq, void *dev_id)
 {
 	struct mmci_host *host = dev_id;
 	void __iomem *base = host->base;
@@ -311,7 +319,7 @@ static irqreturn_t mmci_pio_irq(int irq, void *dev_id, struct pt_regs *regs)
 		 * page, ensure that the data cache is coherent.
 		 */
 		if (status & MCI_RXACTIVE)
-			flush_dcache_page(host->sg_ptr->page);
+			flush_dcache_page(sg_page(host->sg_ptr));
 
 		if (!mmci_next_sg(host))
 			break;
@@ -343,7 +351,7 @@ static irqreturn_t mmci_pio_irq(int irq, void *dev_id, struct pt_regs *regs)
 /*
  * Handle completion of command and data transfers.
  */
-static irqreturn_t mmci_irq(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t mmci_irq(int irq, void *dev_id)
 {
 	struct mmci_host *host = dev_id;
 	u32 status;
@@ -383,6 +391,14 @@ static void mmci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	struct mmci_host *host = mmc_priv(mmc);
 
 	WARN_ON(host->mrq != NULL);
+
+	if (mrq->data && !is_power_of_2(mrq->data->blksz)) {
+		printk(KERN_ERR "%s: Unsupported block size (%d bytes)\n",
+			mmc_hostname(mmc), mrq->data->blksz);
+		mrq->cmd->error = -EINVAL;
+		mmc_request_done(mmc, mrq);
+		return;
+	}
 
 	spin_lock_irq(&host->lock);
 
@@ -439,7 +455,7 @@ static void mmci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	}
 }
 
-static struct mmc_host_ops mmci_ops = {
+static const struct mmc_host_ops mmci_ops = {
 	.request	= mmci_request,
 	.set_ios	= mmci_set_ios,
 };
@@ -505,6 +521,7 @@ static int mmci_probe(struct amba_device *dev, void *id)
 	mmc->f_min = (host->mclk + 511) / 512;
 	mmc->f_max = min(host->mclk, fmax);
 	mmc->ocr_avail = plat->ocr_mask;
+	mmc->caps = MMC_CAP_MULTIWRITE;
 
 	/*
 	 * We can do SGIO
@@ -515,15 +532,24 @@ static int mmci_probe(struct amba_device *dev, void *id)
 	/*
 	 * Since we only have a 16-bit data length register, we must
 	 * ensure that we don't exceed 2^16-1 bytes in a single request.
-	 * Choose 64 (512-byte) sectors as the limit.
 	 */
-	mmc->max_sectors = 64;
+	mmc->max_req_size = 65535;
 
 	/*
 	 * Set the maximum segment size.  Since we aren't doing DMA
 	 * (yet) we are only limited by the data length register.
 	 */
-	mmc->max_seg_size = mmc->max_sectors << 9;
+	mmc->max_seg_size = mmc->max_req_size;
+
+	/*
+	 * Block size can be up to 2048 bytes, but must be a power of two.
+	 */
+	mmc->max_blk_size = 2048;
+
+	/*
+	 * No limit on the number of blocks transferred.
+	 */
+	mmc->max_blk_count = mmc->max_req_size;
 
 	spin_lock_init(&host->lock);
 
