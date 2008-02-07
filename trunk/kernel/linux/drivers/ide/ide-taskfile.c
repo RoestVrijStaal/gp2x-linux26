@@ -8,23 +8,6 @@
  *  Copyright (C) 2003-2004	Bartlomiej Zolnierkiewicz
  *
  *  The big the bad and the ugly.
- *
- *  Problems to be fixed because of BH interface or the lack therefore.
- *
- *  Fill me in stupid !!!
- *
- *  HOST:
- *	General refers to the Controller and Driver "pair".
- *  DATA HANDLER:
- *	Under the context of Linux it generally refers to an interrupt handler.
- *	However, it correctly describes the 'HOST'
- *  DATA BLOCK:
- *	The amount of data needed to be transfered as predefined in the
- *	setup of the device.
- *  STORAGE ATOMIC:
- *	The 'DATA BLOCK' associated to the 'DATA HANDLER', and can be as
- *	small as a single sector or as large as the entire command block
- *	request.
  */
 
 #include <linux/module.h>
@@ -45,6 +28,7 @@
 #include <linux/hdreg.h>
 #include <linux/ide.h>
 #include <linux/bitops.h>
+#include <linux/scatterlist.h>
 
 #include <asm/byteorder.h>
 #include <asm/irq.h>
@@ -238,7 +222,7 @@ EXPORT_SYMBOL(task_no_data_intr);
 static u8 wait_drive_not_busy(ide_drive_t *drive)
 {
 	ide_hwif_t *hwif = HWIF(drive);
-	int retries = 100;
+	int retries;
 	u8 stat;
 
 	/*
@@ -246,10 +230,14 @@ static u8 wait_drive_not_busy(ide_drive_t *drive)
 	 * This can take up to 10 usec, but we will wait max 1 ms
 	 * (drive_cmd_intr() waits that long).
 	 */
-	while (((stat = hwif->INB(IDE_STATUS_REG)) & BUSY_STAT) && retries--)
-		udelay(10);
+	for (retries = 0; retries < 100; retries++) {
+		if ((stat = hwif->INB(IDE_STATUS_REG)) & BUSY_STAT)
+			udelay(10);
+		else
+			break;
+	}
 
-	if (!retries)
+	if (stat & BUSY_STAT)
 		printk(KERN_ERR "%s: drive still BUSY!\n", drive->name);
 
 	return stat;
@@ -259,6 +247,7 @@ static void ide_pio_sector(ide_drive_t *drive, unsigned int write)
 {
 	ide_hwif_t *hwif = drive->hwif;
 	struct scatterlist *sg = hwif->sg_table;
+	struct scatterlist *cursg = hwif->cursg;
 	struct page *page;
 #ifdef CONFIG_HIGHMEM
 	unsigned long flags;
@@ -266,8 +255,14 @@ static void ide_pio_sector(ide_drive_t *drive, unsigned int write)
 	unsigned int offset;
 	u8 *buf;
 
-	page = sg[hwif->cursg].page;
-	offset = sg[hwif->cursg].offset + hwif->cursg_ofs * SECTOR_SIZE;
+	cursg = hwif->cursg;
+	if (!cursg) {
+		cursg = sg;
+		hwif->cursg = sg;
+	}
+
+	page = sg_page(cursg);
+	offset = cursg->offset + hwif->cursg_ofs * SECTOR_SIZE;
 
 	/* get the current page and offset */
 	page = nth_page(page, (offset >> PAGE_SHIFT));
@@ -281,8 +276,8 @@ static void ide_pio_sector(ide_drive_t *drive, unsigned int write)
 	hwif->nleft--;
 	hwif->cursg_ofs++;
 
-	if ((hwif->cursg_ofs * SECTOR_SIZE) == sg[hwif->cursg].length) {
-		hwif->cursg++;
+	if ((hwif->cursg_ofs * SECTOR_SIZE) == cursg->length) {
+		hwif->cursg = sg_next(hwif->cursg);
 		hwif->cursg_ofs = 0;
 	}
 
@@ -363,7 +358,9 @@ static ide_startstop_t task_error(ide_drive_t *drive, struct request *rq,
 
 static void task_end_request(ide_drive_t *drive, struct request *rq, u8 stat)
 {
-	if (rq->flags & REQ_DRIVE_TASKFILE) {
+	HWIF(drive)->cursg = NULL;
+
+	if (rq->cmd_type == REQ_TYPE_ATA_TASKFILE) {
 		ide_task_t *task = rq->special;
 
 		if (task->tf_out_flags.all) {
@@ -474,7 +471,8 @@ static int ide_diag_taskfile(ide_drive_t *drive, ide_task_t *args, unsigned long
 	struct request rq;
 
 	memset(&rq, 0, sizeof(rq));
-	rq.flags = REQ_DRIVE_TASKFILE;
+	rq.ref_count = 1;
+	rq.cmd_type = REQ_TYPE_ATA_TASKFILE;
 	rq.buffer = buf;
 
 	/*
@@ -499,7 +497,7 @@ static int ide_diag_taskfile(ide_drive_t *drive, ide_task_t *args, unsigned long
 		rq.hard_cur_sectors = rq.current_nr_sectors = rq.nr_sectors;
 
 		if (args->command_type == IDE_DRIVE_TASK_RAW_WRITE)
-			rq.flags |= REQ_RW;
+			rq.cmd_flags |= REQ_RW;
 	}
 
 	rq.special = args;
@@ -514,6 +512,7 @@ int ide_raw_taskfile (ide_drive_t *drive, ide_task_t *args, u8 *buf)
 
 EXPORT_SYMBOL(ide_raw_taskfile);
 
+#ifdef CONFIG_IDE_TASK_IOCTL
 int ide_taskfile_ioctl (ide_drive_t *drive, unsigned int cmd, unsigned long arg)
 {
 	ide_task_request_t	*req_task;
@@ -524,8 +523,8 @@ int ide_taskfile_ioctl (ide_drive_t *drive, unsigned int cmd, unsigned long arg)
 	task_ioreg_t *hobsptr	= args.hobRegister;
 	int err			= 0;
 	int tasksize		= sizeof(struct ide_task_request_s);
-	int taskin		= 0;
-	int taskout		= 0;
+	unsigned int taskin	= 0;
+	unsigned int taskout	= 0;
 	u8 io_32bit		= drive->io_32bit;
 	char __user *buf = (char __user *)arg;
 
@@ -538,8 +537,13 @@ int ide_taskfile_ioctl (ide_drive_t *drive, unsigned int cmd, unsigned long arg)
 		return -EFAULT;
 	}
 
-	taskout = (int) req_task->out_size;
-	taskin  = (int) req_task->in_size;
+	taskout = req_task->out_size;
+	taskin  = req_task->in_size;
+	
+	if (taskin > 65536 || taskout > 65536) {
+		err = -EINVAL;
+		goto abort;
+	}
 
 	if (taskout) {
 		int outtotal = tasksize;
@@ -658,6 +662,7 @@ abort:
 
 	return err;
 }
+#endif
 
 int ide_wait_cmd (ide_drive_t *drive, u8 cmd, u8 nsect, u8 feature, u8 sectors, u8 *buf)
 {
@@ -676,9 +681,6 @@ int ide_wait_cmd (ide_drive_t *drive, u8 cmd, u8 nsect, u8 feature, u8 sectors, 
 	return ide_do_drive_cmd(drive, &rq, ide_wait);
 }
 
-/*
- * FIXME : this needs to map into at taskfile. <andre@linux-ide.org>
- */
 int ide_cmd_ioctl (ide_drive_t *drive, unsigned int cmd, unsigned long arg)
 {
 	int err = 0;
@@ -737,14 +739,11 @@ static int ide_wait_cmd_task(ide_drive_t *drive, u8 *buf)
 	struct request rq;
 
 	ide_init_drive_cmd(&rq);
-	rq.flags = REQ_DRIVE_TASK;
+	rq.cmd_type = REQ_TYPE_ATA_TASK;
 	rq.buffer = buf;
 	return ide_do_drive_cmd(drive, &rq, ide_wait);
 }
 
-/*
- * FIXME : this needs to map into at taskfile. <andre@linux-ide.org>
- */
 int ide_task_ioctl (ide_drive_t *drive, unsigned int cmd, unsigned long arg)
 {
 	void __user *p = (void __user *)arg;
@@ -841,9 +840,14 @@ ide_startstop_t flagged_taskfile (ide_drive_t *drive, ide_task_t *task)
 		case TASKFILE_OUT_DMA:
 		case TASKFILE_IN_DMAQ:
 		case TASKFILE_IN_DMA:
-			hwif->dma_setup(drive);
-			hwif->dma_exec_cmd(drive, taskfile->command);
-			hwif->dma_start(drive);
+			if (!drive->using_dma)
+				break;
+
+			if (!hwif->dma_setup(drive)) {
+				hwif->dma_exec_cmd(drive, taskfile->command);
+				hwif->dma_start(drive);
+				return ide_started;
+			}
 			break;
 
 	        default:
@@ -857,7 +861,8 @@ ide_startstop_t flagged_taskfile (ide_drive_t *drive, ide_task_t *task)
 				return task->prehandler(drive, task->rq);
 			}
 			ide_execute_command(drive, taskfile->command, task->handler, WAIT_WORSTCASE, NULL);
+			return ide_started;
 	}
 
-	return ide_started;
+	return ide_stopped;
 }
