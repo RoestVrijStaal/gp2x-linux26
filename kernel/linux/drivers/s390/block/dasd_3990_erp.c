@@ -40,7 +40,7 @@ struct DCTL_data {
  *
  *   Each bit configuration leading to an action code 2 (Exit with
  *   programming error or unusual condition indication)
- *   are handled as fatal error´s.
+ *   are handled as fatal errors.
  *
  *   All other configurations are handled as recoverable errors.
  *
@@ -170,7 +170,6 @@ dasd_3990_erp_examine(struct dasd_ccw_req * cqr, struct irb * irb)
 	/* log the erp chain if fatal error occurred */
 	if ((era == dasd_era_fatal) && (device->state >= DASD_STATE_READY)) {
 		dasd_log_sense(cqr, irb);
-		dasd_log_ccw(cqr, 0, irb->scsw.cpa);
 	}
 
 	return era;
@@ -2002,7 +2001,7 @@ dasd_3990_erp_compound_code(struct dasd_ccw_req * erp, char *sense)
 		switch (sense[28]) {
 		case 0x17:
 			/* issue a Diagnostic Control command with an
-			 * Inhibit Write subcommand and controler modifier */
+			 * Inhibit Write subcommand and controller modifier */
 			erp = dasd_3990_erp_DCTL(erp, 0x20);
 			break;
 
@@ -2640,15 +2639,12 @@ dasd_3990_erp_action(struct dasd_ccw_req * cqr)
 
 	struct dasd_ccw_req *erp = NULL;
 	struct dasd_device *device = cqr->device;
-	__u32 cpa = cqr->irb.scsw.cpa;
+	struct dasd_ccw_req *temp_erp = NULL;
 
-#ifdef ERP_DEBUG
-	/* print current erp_chain */
-	DEV_MESSAGE(KERN_ERR, device, "%s",
-		    "ERP chain at BEGINNING of ERP-ACTION");
-	{
-		struct dasd_ccw_req *temp_erp = NULL;
-
+	if (device->features & DASD_FEATURE_ERPLOG) {
+		/* print current erp_chain */
+		DEV_MESSAGE(KERN_ERR, device, "%s",
+			    "ERP chain at BEGINNING of ERP-ACTION");
 		for (temp_erp = cqr;
 		     temp_erp != NULL; temp_erp = temp_erp->refers) {
 
@@ -2658,7 +2654,6 @@ dasd_3990_erp_action(struct dasd_ccw_req * cqr)
 				    temp_erp->refers);
 		}
 	}
-#endif				/* ERP_DEBUG */
 
 	/* double-check if current erp/cqr was successfull */
 	if ((cqr->irb.scsw.cstat == 0x00) &&
@@ -2695,11 +2690,10 @@ dasd_3990_erp_action(struct dasd_ccw_req * cqr)
 		erp = dasd_3990_erp_handle_match_erp(cqr, erp);
 	}
 
-#ifdef ERP_DEBUG
-	/* print current erp_chain */
-	DEV_MESSAGE(KERN_ERR, device, "%s", "ERP chain at END of ERP-ACTION");
-	{
-		struct dasd_ccw_req *temp_erp = NULL;
+	if (device->features & DASD_FEATURE_ERPLOG) {
+		/* print current erp_chain */
+		DEV_MESSAGE(KERN_ERR, device, "%s",
+			    "ERP chain at END of ERP-ACTION");
 		for (temp_erp = erp;
 		     temp_erp != NULL; temp_erp = temp_erp->refers) {
 
@@ -2709,10 +2703,6 @@ dasd_3990_erp_action(struct dasd_ccw_req * cqr)
 				    temp_erp->refers);
 		}
 	}
-#endif				/* ERP_DEBUG */
-
-	if (erp->status == DASD_CQR_FAILED)
-		dasd_log_ccw(erp, 1, cpa);
 
 	/* enqueue added ERP request */
 	if (erp->status == DASD_CQR_FILLED) {

@@ -75,7 +75,7 @@ static struct ccw_driver dasd_fba_driver = {
 	.notify      = dasd_generic_notify,
 };
 
-static inline void
+static void
 define_extent(struct ccw1 * ccw, struct DE_fba_data *data, int rw,
 	      int blksize, int beg, int nr)
 {
@@ -95,7 +95,7 @@ define_extent(struct ccw1 * ccw, struct DE_fba_data *data, int rw,
 	data->ext_end = nr - 1;
 }
 
-static inline void
+static void
 locate_record(struct ccw1 * ccw, struct LO_fba_data *data, int rw,
 	      int block_nr, int block_ct)
 {
@@ -135,7 +135,7 @@ dasd_fba_check_characteristics(struct dasd_device *device)
 	}
 	/* Read Device Characteristics */
 	rdc_data = (void *) &(private->rdc_data);
-	rc = read_dev_chars(device->cdev, &rdc_data, 32);
+	rc = dasd_generic_read_dev_chars(device, "FBA ", &rdc_data, 32);
 	if (rc) {
 		DEV_MESSAGE(KERN_WARNING, device,
 			    "Read device characteristics returned error %d",
@@ -234,14 +234,13 @@ dasd_fba_build_cp(struct dasd_device * device, struct request *req)
 	struct LO_fba_data *LO_data;
 	struct dasd_ccw_req *cqr;
 	struct ccw1 *ccw;
-	struct bio *bio;
+	struct req_iterator iter;
 	struct bio_vec *bv;
 	char *dst;
 	int count, cidaw, cplength, datasize;
 	sector_t recid, first_rec, last_rec;
 	unsigned int blksize, off;
 	unsigned char cmd;
-	int i;
 
 	private = (struct dasd_fba_private *) device->private;
 	if (rq_data_dir(req) == READ) {
@@ -257,18 +256,15 @@ dasd_fba_build_cp(struct dasd_device * device, struct request *req)
 	/* Check struct bio and count the number of blocks for the request. */
 	count = 0;
 	cidaw = 0;
-	rq_for_each_bio(bio, req) {
-		bio_for_each_segment(bv, bio, i) {
-			if (bv->bv_len & (blksize - 1))
-				/* Fba can only do full blocks. */
-				return ERR_PTR(-EINVAL);
-			count += bv->bv_len >> (device->s2b_shift + 9);
+	rq_for_each_segment(bv, req, iter) {
+		if (bv->bv_len & (blksize - 1))
+			/* Fba can only do full blocks. */
+			return ERR_PTR(-EINVAL);
+		count += bv->bv_len >> (device->s2b_shift + 9);
 #if defined(CONFIG_64BIT)
-			if (idal_is_needed (page_address(bv->bv_page),
-					    bv->bv_len))
-				cidaw += bv->bv_len / blksize;
+		if (idal_is_needed (page_address(bv->bv_page), bv->bv_len))
+			cidaw += bv->bv_len / blksize;
 #endif
-		}
 	}
 	/* Paranoia. */
 	if (count != last_rec - first_rec + 1)
@@ -304,11 +300,11 @@ dasd_fba_build_cp(struct dasd_device * device, struct request *req)
 		locate_record(ccw++, LO_data++, rq_data_dir(req), 0, count);
 	}
 	recid = first_rec;
-	rq_for_each_bio(bio, req) bio_for_each_segment(bv, bio, i) {
+	rq_for_each_segment(bv, req, iter) {
 		dst = page_address(bv->bv_page) + bv->bv_offset;
 		if (dasd_page_cache) {
 			char *copy = kmem_cache_alloc(dasd_page_cache,
-						      SLAB_DMA | __GFP_NOWARN);
+						      GFP_DMA | __GFP_NOWARN);
 			if (copy && rq_data_dir(req) == WRITE)
 				memcpy(copy + bv->bv_offset, dst, bv->bv_len);
 			if (copy)
@@ -344,7 +340,7 @@ dasd_fba_build_cp(struct dasd_device * device, struct request *req)
 			recid++;
 		}
 	}
-	if (req->flags & REQ_FAILFAST)
+	if (req->cmd_flags & REQ_FAILFAST)
 		set_bit(DASD_CQR_FLAGS_FAILFAST, &cqr->flags);
 	cqr->device = device;
 	cqr->expires = 5 * 60 * HZ;	/* 5 minutes */
@@ -359,11 +355,11 @@ dasd_fba_free_cp(struct dasd_ccw_req *cqr, struct request *req)
 {
 	struct dasd_fba_private *private;
 	struct ccw1 *ccw;
-	struct bio *bio;
+	struct req_iterator iter;
 	struct bio_vec *bv;
 	char *dst, *cda;
 	unsigned int blksize, off;
-	int i, status;
+	int status;
 
 	if (!dasd_page_cache)
 		goto out;
@@ -374,7 +370,7 @@ dasd_fba_free_cp(struct dasd_ccw_req *cqr, struct request *req)
 	ccw++;
 	if (private->rdc_data.mode.bits.data_chain != 0)
 		ccw++;
-	rq_for_each_bio(bio, req) bio_for_each_segment(bv, bio, i) {
+	rq_for_each_segment(bv, req, iter) {
 		dst = page_address(bv->bv_page) + bv->bv_offset;
 		for (off = 0; off < bv->bv_len; off += blksize) {
 			/* Skip locate record. */
