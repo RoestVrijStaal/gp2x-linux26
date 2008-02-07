@@ -260,8 +260,7 @@ struct pwm_data {
 
 struct adm1026_data {
 	struct i2c_client client;
-	struct class_device *class_dev;
-	struct mutex lock;
+	struct device *hwmon_dev;
 	enum chips type;
 
 	struct mutex update_lock;
@@ -321,15 +320,6 @@ static int adm1026_attach_adapter(struct i2c_adapter *adapter)
 		return 0;
 	}
 	return i2c_probe(adapter, &addr_data, adm1026_detect);
-}
-
-static int adm1026_detach_client(struct i2c_client *client)
-{
-	struct adm1026_data *data = i2c_get_clientdata(client);
-	hwmon_device_unregister(data->class_dev);
-	i2c_detach_client(client);
-	kfree(data);
-	return 0;
 }
 
 static int adm1026_read_value(struct i2c_client *client, u8 reg)
@@ -1231,7 +1221,7 @@ static DEVICE_ATTR(cpu0_vid, S_IRUGO, show_vid_reg, NULL);
 
 static ssize_t show_vrm_reg(struct device *dev, struct device_attribute *attr, char *buf)
 {
-	struct adm1026_data *data = adm1026_update_device(dev);
+	struct adm1026_data *data = dev_get_drvdata(dev);
 	return sprintf(buf,"%d\n", data->vrm);
 }
 static ssize_t store_vrm_reg(struct device *dev, struct device_attribute *attr, const char *buf,
@@ -1450,6 +1440,135 @@ static DEVICE_ATTR(temp1_auto_point2_pwm, S_IRUGO, show_auto_pwm_max, NULL);
 static DEVICE_ATTR(temp2_auto_point2_pwm, S_IRUGO, show_auto_pwm_max, NULL);
 static DEVICE_ATTR(temp3_auto_point2_pwm, S_IRUGO, show_auto_pwm_max, NULL);
 
+static struct attribute *adm1026_attributes[] = {
+	&sensor_dev_attr_in0_input.dev_attr.attr,
+	&sensor_dev_attr_in0_max.dev_attr.attr,
+	&sensor_dev_attr_in0_min.dev_attr.attr,
+	&sensor_dev_attr_in1_input.dev_attr.attr,
+	&sensor_dev_attr_in1_max.dev_attr.attr,
+	&sensor_dev_attr_in1_min.dev_attr.attr,
+	&sensor_dev_attr_in2_input.dev_attr.attr,
+	&sensor_dev_attr_in2_max.dev_attr.attr,
+	&sensor_dev_attr_in2_min.dev_attr.attr,
+	&sensor_dev_attr_in3_input.dev_attr.attr,
+	&sensor_dev_attr_in3_max.dev_attr.attr,
+	&sensor_dev_attr_in3_min.dev_attr.attr,
+	&sensor_dev_attr_in4_input.dev_attr.attr,
+	&sensor_dev_attr_in4_max.dev_attr.attr,
+	&sensor_dev_attr_in4_min.dev_attr.attr,
+	&sensor_dev_attr_in5_input.dev_attr.attr,
+	&sensor_dev_attr_in5_max.dev_attr.attr,
+	&sensor_dev_attr_in5_min.dev_attr.attr,
+	&sensor_dev_attr_in6_input.dev_attr.attr,
+	&sensor_dev_attr_in6_max.dev_attr.attr,
+	&sensor_dev_attr_in6_min.dev_attr.attr,
+	&sensor_dev_attr_in7_input.dev_attr.attr,
+	&sensor_dev_attr_in7_max.dev_attr.attr,
+	&sensor_dev_attr_in7_min.dev_attr.attr,
+	&sensor_dev_attr_in8_input.dev_attr.attr,
+	&sensor_dev_attr_in8_max.dev_attr.attr,
+	&sensor_dev_attr_in8_min.dev_attr.attr,
+	&sensor_dev_attr_in9_input.dev_attr.attr,
+	&sensor_dev_attr_in9_max.dev_attr.attr,
+	&sensor_dev_attr_in9_min.dev_attr.attr,
+	&sensor_dev_attr_in10_input.dev_attr.attr,
+	&sensor_dev_attr_in10_max.dev_attr.attr,
+	&sensor_dev_attr_in10_min.dev_attr.attr,
+	&sensor_dev_attr_in11_input.dev_attr.attr,
+	&sensor_dev_attr_in11_max.dev_attr.attr,
+	&sensor_dev_attr_in11_min.dev_attr.attr,
+	&sensor_dev_attr_in12_input.dev_attr.attr,
+	&sensor_dev_attr_in12_max.dev_attr.attr,
+	&sensor_dev_attr_in12_min.dev_attr.attr,
+	&sensor_dev_attr_in13_input.dev_attr.attr,
+	&sensor_dev_attr_in13_max.dev_attr.attr,
+	&sensor_dev_attr_in13_min.dev_attr.attr,
+	&sensor_dev_attr_in14_input.dev_attr.attr,
+	&sensor_dev_attr_in14_max.dev_attr.attr,
+	&sensor_dev_attr_in14_min.dev_attr.attr,
+	&sensor_dev_attr_in15_input.dev_attr.attr,
+	&sensor_dev_attr_in15_max.dev_attr.attr,
+	&sensor_dev_attr_in15_min.dev_attr.attr,
+	&sensor_dev_attr_in16_input.dev_attr.attr,
+	&sensor_dev_attr_in16_max.dev_attr.attr,
+	&sensor_dev_attr_in16_min.dev_attr.attr,
+	&sensor_dev_attr_fan1_input.dev_attr.attr,
+	&sensor_dev_attr_fan1_div.dev_attr.attr,
+	&sensor_dev_attr_fan1_min.dev_attr.attr,
+	&sensor_dev_attr_fan2_input.dev_attr.attr,
+	&sensor_dev_attr_fan2_div.dev_attr.attr,
+	&sensor_dev_attr_fan2_min.dev_attr.attr,
+	&sensor_dev_attr_fan3_input.dev_attr.attr,
+	&sensor_dev_attr_fan3_div.dev_attr.attr,
+	&sensor_dev_attr_fan3_min.dev_attr.attr,
+	&sensor_dev_attr_fan4_input.dev_attr.attr,
+	&sensor_dev_attr_fan4_div.dev_attr.attr,
+	&sensor_dev_attr_fan4_min.dev_attr.attr,
+	&sensor_dev_attr_fan5_input.dev_attr.attr,
+	&sensor_dev_attr_fan5_div.dev_attr.attr,
+	&sensor_dev_attr_fan5_min.dev_attr.attr,
+	&sensor_dev_attr_fan6_input.dev_attr.attr,
+	&sensor_dev_attr_fan6_div.dev_attr.attr,
+	&sensor_dev_attr_fan6_min.dev_attr.attr,
+	&sensor_dev_attr_fan7_input.dev_attr.attr,
+	&sensor_dev_attr_fan7_div.dev_attr.attr,
+	&sensor_dev_attr_fan7_min.dev_attr.attr,
+	&sensor_dev_attr_fan8_input.dev_attr.attr,
+	&sensor_dev_attr_fan8_div.dev_attr.attr,
+	&sensor_dev_attr_fan8_min.dev_attr.attr,
+	&sensor_dev_attr_temp1_input.dev_attr.attr,
+	&sensor_dev_attr_temp1_max.dev_attr.attr,
+	&sensor_dev_attr_temp1_min.dev_attr.attr,
+	&sensor_dev_attr_temp2_input.dev_attr.attr,
+	&sensor_dev_attr_temp2_max.dev_attr.attr,
+	&sensor_dev_attr_temp2_min.dev_attr.attr,
+	&sensor_dev_attr_temp3_input.dev_attr.attr,
+	&sensor_dev_attr_temp3_max.dev_attr.attr,
+	&sensor_dev_attr_temp3_min.dev_attr.attr,
+	&sensor_dev_attr_temp1_offset.dev_attr.attr,
+	&sensor_dev_attr_temp2_offset.dev_attr.attr,
+	&sensor_dev_attr_temp3_offset.dev_attr.attr,
+	&sensor_dev_attr_temp1_auto_point1_temp.dev_attr.attr,
+	&sensor_dev_attr_temp2_auto_point1_temp.dev_attr.attr,
+	&sensor_dev_attr_temp3_auto_point1_temp.dev_attr.attr,
+	&sensor_dev_attr_temp1_auto_point1_temp_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp2_auto_point1_temp_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp3_auto_point1_temp_hyst.dev_attr.attr,
+	&sensor_dev_attr_temp1_auto_point2_temp.dev_attr.attr,
+	&sensor_dev_attr_temp2_auto_point2_temp.dev_attr.attr,
+	&sensor_dev_attr_temp3_auto_point2_temp.dev_attr.attr,
+	&sensor_dev_attr_temp1_crit.dev_attr.attr,
+	&sensor_dev_attr_temp2_crit.dev_attr.attr,
+	&sensor_dev_attr_temp3_crit.dev_attr.attr,
+	&dev_attr_temp1_crit_enable.attr,
+	&dev_attr_temp2_crit_enable.attr,
+	&dev_attr_temp3_crit_enable.attr,
+	&dev_attr_cpu0_vid.attr,
+	&dev_attr_vrm.attr,
+	&dev_attr_alarms.attr,
+	&dev_attr_alarm_mask.attr,
+	&dev_attr_gpio.attr,
+	&dev_attr_gpio_mask.attr,
+	&dev_attr_pwm1.attr,
+	&dev_attr_pwm2.attr,
+	&dev_attr_pwm3.attr,
+	&dev_attr_pwm1_enable.attr,
+	&dev_attr_pwm2_enable.attr,
+	&dev_attr_pwm3_enable.attr,
+	&dev_attr_temp1_auto_point1_pwm.attr,
+	&dev_attr_temp2_auto_point1_pwm.attr,
+	&dev_attr_temp3_auto_point1_pwm.attr,
+	&dev_attr_temp1_auto_point2_pwm.attr,
+	&dev_attr_temp2_auto_point2_pwm.attr,
+	&dev_attr_temp3_auto_point2_pwm.attr,
+	&dev_attr_analog_out.attr,
+	NULL
+};
+
+static const struct attribute_group adm1026_group = {
+	.attrs = adm1026_attributes,
+};
+
 static int adm1026_detect(struct i2c_adapter *adapter, int address,
 			  int kind)
 {
@@ -1532,7 +1651,7 @@ static int adm1026_detect(struct i2c_adapter *adapter, int address,
 		break;
 	default :
 		dev_err(&adapter->dev, ": Internal error, invalid "
-			"kind (%d)!", kind);
+			"kind (%d)!\n", kind);
 		err = -EFAULT;
 		goto exitfree;
 	}
@@ -1554,145 +1673,20 @@ static int adm1026_detect(struct i2c_adapter *adapter, int address,
 	adm1026_init_client(new_client);
 
 	/* Register sysfs hooks */
-	data->class_dev = hwmon_device_register(&new_client->dev);
-	if (IS_ERR(data->class_dev)) {
-		err = PTR_ERR(data->class_dev);
+	if ((err = sysfs_create_group(&new_client->dev.kobj, &adm1026_group)))
 		goto exitdetach;
+
+	data->hwmon_dev = hwmon_device_register(&new_client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
+		goto exitremove;
 	}
 
-	device_create_file(&new_client->dev, &sensor_dev_attr_in0_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in0_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in0_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in1_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in1_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in1_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in2_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in2_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in2_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in3_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in3_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in3_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in4_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in4_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in4_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in5_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in5_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in5_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in6_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in6_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in6_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in7_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in7_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in7_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in8_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in8_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in8_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in9_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in9_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in9_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in10_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in10_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in10_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in11_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in11_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in11_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in12_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in12_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in12_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in13_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in13_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in13_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in14_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in14_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in14_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in15_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in15_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in15_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in16_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in16_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_in16_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan1_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan1_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan1_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan2_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan2_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan2_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan3_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan3_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan3_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan4_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan4_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan4_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan5_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan5_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan5_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan6_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan6_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan6_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan7_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan7_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan7_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan8_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan8_div.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_fan8_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp1_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp1_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp1_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp2_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp2_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp2_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp3_input.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp3_max.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp3_min.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp1_offset.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp2_offset.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp3_offset.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp1_auto_point1_temp.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp2_auto_point1_temp.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp3_auto_point1_temp.dev_attr);
-	device_create_file(&new_client->dev,
-		&sensor_dev_attr_temp1_auto_point1_temp_hyst.dev_attr);
-	device_create_file(&new_client->dev,
-		&sensor_dev_attr_temp2_auto_point1_temp_hyst.dev_attr);
-	device_create_file(&new_client->dev,
-		&sensor_dev_attr_temp3_auto_point1_temp_hyst.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp1_auto_point2_temp.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp2_auto_point2_temp.dev_attr);
-	device_create_file(&new_client->dev, 
-		&sensor_dev_attr_temp3_auto_point2_temp.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp1_crit.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp2_crit.dev_attr);
-	device_create_file(&new_client->dev, &sensor_dev_attr_temp3_crit.dev_attr);
-	device_create_file(&new_client->dev, &dev_attr_temp1_crit_enable);
-	device_create_file(&new_client->dev, &dev_attr_temp2_crit_enable);
-	device_create_file(&new_client->dev, &dev_attr_temp3_crit_enable);
-	device_create_file(&new_client->dev, &dev_attr_cpu0_vid);
-	device_create_file(&new_client->dev, &dev_attr_vrm);
-	device_create_file(&new_client->dev, &dev_attr_alarms);
-	device_create_file(&new_client->dev, &dev_attr_alarm_mask);
-	device_create_file(&new_client->dev, &dev_attr_gpio);
-	device_create_file(&new_client->dev, &dev_attr_gpio_mask);
-	device_create_file(&new_client->dev, &dev_attr_pwm1);
-	device_create_file(&new_client->dev, &dev_attr_pwm2);
-	device_create_file(&new_client->dev, &dev_attr_pwm3);
-	device_create_file(&new_client->dev, &dev_attr_pwm1_enable);
-	device_create_file(&new_client->dev, &dev_attr_pwm2_enable);
-	device_create_file(&new_client->dev, &dev_attr_pwm3_enable);
-	device_create_file(&new_client->dev, &dev_attr_temp1_auto_point1_pwm);
-	device_create_file(&new_client->dev, &dev_attr_temp2_auto_point1_pwm);
-	device_create_file(&new_client->dev, &dev_attr_temp3_auto_point1_pwm);
-	device_create_file(&new_client->dev, &dev_attr_temp1_auto_point2_pwm);
-	device_create_file(&new_client->dev, &dev_attr_temp2_auto_point2_pwm);
-	device_create_file(&new_client->dev, &dev_attr_temp3_auto_point2_pwm);
-	device_create_file(&new_client->dev, &dev_attr_analog_out);
 	return 0;
 
 	/* Error out and cleanup code */
+exitremove:
+	sysfs_remove_group(&new_client->dev.kobj, &adm1026_group);
 exitdetach:
 	i2c_detach_client(new_client);
 exitfree:
@@ -1700,6 +1694,17 @@ exitfree:
 exit:
 	return err;
 }
+
+static int adm1026_detach_client(struct i2c_client *client)
+{
+	struct adm1026_data *data = i2c_get_clientdata(client);
+	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_group(&client->dev.kobj, &adm1026_group);
+	i2c_detach_client(client);
+	kfree(data);
+	return 0;
+}
+
 static int __init sm_adm1026_init(void)
 {
 	return i2c_add_driver(&adm1026_driver);
