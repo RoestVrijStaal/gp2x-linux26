@@ -42,7 +42,7 @@ do {									\
 			len = LED_NUM_DIGITS - pos;			\
 									\
 		if (len > 0) {						\
-			int _flags;					\
+			unsigned long _flags;				\
 			const char *_end = buf + len;			\
 			img_decl = &leds_image[pos];			\
 									\
@@ -117,7 +117,7 @@ static loff_t leds_dev_lseek (struct file *file, loff_t offs, int whence)
 	return 0;
 }
 
-static struct file_operations leds_fops = {
+static const struct file_operations leds_fops = {
 	.read		= leds_dev_read,
 	.write		= leds_dev_write,
 	.llseek		= leds_dev_lseek
