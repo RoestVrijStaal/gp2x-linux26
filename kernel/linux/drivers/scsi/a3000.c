@@ -1,7 +1,6 @@
 #include <linux/types.h>
 #include <linux/mm.h>
 #include <linux/blkdev.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
@@ -26,7 +25,7 @@
 
 static struct Scsi_Host *a3000_host = NULL;
 
-static irqreturn_t a3000_intr (int irq, void *dummy, struct pt_regs *fp)
+static irqreturn_t a3000_intr (int irq, void *dummy)
 {
 	unsigned long flags;
 	unsigned int status = DMA(a3000_host)->ISTR;
@@ -44,7 +43,7 @@ static irqreturn_t a3000_intr (int irq, void *dummy, struct pt_regs *fp)
 	return IRQ_NONE;
 }
 
-static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
+static int dma_setup(struct scsi_cmnd *cmd, int dir_in)
 {
     unsigned short cntr = CNTR_PDMD | CNTR_INTEN;
     unsigned long addr = virt_to_bus(cmd->SCp.ptr);
@@ -110,8 +109,8 @@ static int dma_setup (Scsi_Cmnd *cmd, int dir_in)
     return 0;
 }
 
-static void dma_stop (struct Scsi_Host *instance, Scsi_Cmnd *SCpnt,
-		      int status)
+static void dma_stop(struct Scsi_Host *instance, struct scsi_cmnd *SCpnt,
+		     int status)
 {
     /* disable SCSI interrupts */
     unsigned short cntr = CNTR_PDMD;
@@ -205,7 +204,7 @@ fail_register:
     return 0;
 }
 
-static int a3000_bus_reset(Scsi_Cmnd *cmd)
+static int a3000_bus_reset(struct scsi_cmnd *cmd)
 {
 	/* FIXME perform bus-specific reset */
 	

@@ -182,14 +182,8 @@
 #include <linux/dma-mapping.h>
 
 #include <scsi/sg.h>
-
 #include "scsi.h"
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,5,0)
-#include "hosts.h"
-#else
 #include <scsi/scsi_host.h>
-#endif
 
 #include "ips.h"
 
@@ -210,24 +204,11 @@ module_param(ips, charp, 0);
 /*
  * DRIVER_VER
  */
-#define IPS_VERSION_HIGH        "7.12"
-#define IPS_VERSION_LOW         ".05 "
+#define IPS_VERSION_HIGH        IPS_VER_MAJOR_STRING "." IPS_VER_MINOR_STRING
+#define IPS_VERSION_LOW         "." IPS_VER_BUILD_STRING " "
 
 #if !defined(__i386__) && !defined(__ia64__) && !defined(__x86_64__)
 #warning "This driver has only been tested on the x86/ia64/x86_64 platforms"
-#endif
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,5,0)
-#include <linux/blk.h>
-#include "sd.h"
-#define IPS_LOCK_SAVE(lock,flags) spin_lock_irqsave(&io_request_lock,flags)
-#define IPS_UNLOCK_RESTORE(lock,flags) spin_unlock_irqrestore(&io_request_lock,flags)
-#ifndef __devexit_p
-#define __devexit_p(x) x
-#endif
-#else
-#define IPS_LOCK_SAVE(lock,flags) do{spin_lock(lock);(void)flags;}while(0)
-#define IPS_UNLOCK_RESTORE(lock,flags) do{spin_unlock(lock);(void)flags;}while(0)
 #endif
 
 #define IPS_DMA_DIR(scb) ((!scb->scsi_cmd || ips_is_passthru(scb->scsi_cmd) || \
@@ -250,11 +231,11 @@ module_param(ips, charp, 0);
  */
 static int ips_detect(struct scsi_host_template *);
 static int ips_release(struct Scsi_Host *);
-static int ips_eh_abort(Scsi_Cmnd *);
-static int ips_eh_reset(Scsi_Cmnd *);
-static int ips_queue(Scsi_Cmnd *, void (*)(Scsi_Cmnd *));
+static int ips_eh_abort(struct scsi_cmnd *);
+static int ips_eh_reset(struct scsi_cmnd *);
+static int ips_queue(struct scsi_cmnd *, void (*)(struct scsi_cmnd *));
 static const char *ips_info(struct Scsi_Host *);
-static irqreturn_t do_ipsintr(int, void *, struct pt_regs *);
+static irqreturn_t do_ipsintr(int, void *);
 static int ips_hainit(ips_ha_t *);
 static int ips_map_status(ips_ha_t *, ips_scb_t *, ips_stat_t *);
 static int ips_send_wait(ips_ha_t *, ips_scb_t *, int, int);
@@ -325,24 +306,26 @@ static uint32_t ips_statupd_copperhead_memio(ips_ha_t *);
 static uint32_t ips_statupd_morpheus(ips_ha_t *);
 static ips_scb_t *ips_getscb(ips_ha_t *);
 static void ips_putq_scb_head(ips_scb_queue_t *, ips_scb_t *);
-static void ips_putq_wait_tail(ips_wait_queue_t *, Scsi_Cmnd *);
+static void ips_putq_wait_tail(ips_wait_queue_t *, struct scsi_cmnd *);
 static void ips_putq_copp_tail(ips_copp_queue_t *,
 				      ips_copp_wait_item_t *);
 static ips_scb_t *ips_removeq_scb_head(ips_scb_queue_t *);
 static ips_scb_t *ips_removeq_scb(ips_scb_queue_t *, ips_scb_t *);
-static Scsi_Cmnd *ips_removeq_wait_head(ips_wait_queue_t *);
-static Scsi_Cmnd *ips_removeq_wait(ips_wait_queue_t *, Scsi_Cmnd *);
+static struct scsi_cmnd *ips_removeq_wait_head(ips_wait_queue_t *);
+static struct scsi_cmnd *ips_removeq_wait(ips_wait_queue_t *,
+					  struct scsi_cmnd *);
 static ips_copp_wait_item_t *ips_removeq_copp(ips_copp_queue_t *,
 						     ips_copp_wait_item_t *);
 static ips_copp_wait_item_t *ips_removeq_copp_head(ips_copp_queue_t *);
 
-static int ips_is_passthru(Scsi_Cmnd *);
-static int ips_make_passthru(ips_ha_t *, Scsi_Cmnd *, ips_scb_t *, int);
+static int ips_is_passthru(struct scsi_cmnd *);
+static int ips_make_passthru(ips_ha_t *, struct scsi_cmnd *, ips_scb_t *, int);
 static int ips_usrcmd(ips_ha_t *, ips_passthru_t *, ips_scb_t *);
 static void ips_cleanup_passthru(ips_ha_t *, ips_scb_t *);
-static void ips_scmd_buf_write(Scsi_Cmnd * scmd, void *data,
+static void ips_scmd_buf_write(struct scsi_cmnd * scmd, void *data,
 			       unsigned int count);
-static void ips_scmd_buf_read(Scsi_Cmnd * scmd, void *data, unsigned int count);
+static void ips_scmd_buf_read(struct scsi_cmnd * scmd, void *data,
+			      unsigned int count);
 
 static int ips_proc_info(struct Scsi_Host *, char *, char **, off_t, int, int);
 static int ips_host_info(ips_ha_t *, char *, off_t, int);
@@ -385,24 +368,13 @@ static struct scsi_host_template ips_driver_template = {
 	.eh_abort_handler	= ips_eh_abort,
 	.eh_host_reset_handler	= ips_eh_reset,
 	.proc_name		= "ips",
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,5,0)
 	.proc_info		= ips_proc_info,
 	.slave_configure	= ips_slave_configure,
-#else
-	.proc_info		= ips_proc24_info,
-	.select_queue_depths	= ips_select_queue_depth,
-#endif
 	.bios_param		= ips_biosparam,
 	.this_id		= -1,
 	.sg_tablesize		= IPS_MAX_SG,
 	.cmd_per_lun		= 3,
 	.use_clustering		= ENABLE_CLUSTERING,
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-	.use_new_eh_code	= 1,
-#endif
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,20)  &&  LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-    .highmem_io          = 1,   
-#endif
 };
 
 
@@ -684,6 +656,8 @@ ips_release(struct Scsi_Host *sh)
 
 	METHOD_TRACE("ips_release", 1);
 
+	scsi_remove_host(sh);
+
 	for (i = 0; i < IPS_MAX_ADAPTERS && ips_sh[i] != sh; i++) ;
 
 	if (i == IPS_MAX_ADAPTERS) {
@@ -735,7 +709,6 @@ ips_release(struct Scsi_Host *sh)
 	/* free IRQ */
 	free_irq(ha->irq, ha);
 
-	IPS_REMOVE_HOST(sh);
 	scsi_host_put(sh);
 
 	ips_released_controllers++;
@@ -812,13 +785,11 @@ ips_halt(struct notifier_block *nb, ulong event, void *buf)
 /*   Abort a command (using the new error code stuff)                       */
 /* Note: this routine is called under the io_request_lock                   */
 /****************************************************************************/
-int
-ips_eh_abort(Scsi_Cmnd * SC)
+int ips_eh_abort(struct scsi_cmnd *SC)
 {
 	ips_ha_t *ha;
 	ips_copp_wait_item_t *item;
 	int ret;
-	unsigned long cpu_flags;
 	struct Scsi_Host *host;
 
 	METHOD_TRACE("ips_eh_abort", 1);
@@ -835,7 +806,7 @@ ips_eh_abort(Scsi_Cmnd * SC)
 	if (!ha->active)
 		return (FAILED);
 
-	IPS_LOCK_SAVE(host->host_lock, cpu_flags);
+	spin_lock(host->host_lock);
 
 	/* See if the command is on the copp queue */
 	item = ha->copp_waitlist.head;
@@ -856,7 +827,7 @@ ips_eh_abort(Scsi_Cmnd * SC)
 		ret = (FAILED);
 	}
 
-	IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);
+	spin_unlock(host->host_lock);
 	return ret;
 }
 
@@ -871,8 +842,7 @@ ips_eh_abort(Scsi_Cmnd * SC)
 /* NOTE: this routine is called under the io_request_lock spinlock          */
 /*                                                                          */
 /****************************************************************************/
-static int
-__ips_eh_reset(Scsi_Cmnd * SC)
+static int __ips_eh_reset(struct scsi_cmnd *SC)
 {
 	int ret;
 	int i;
@@ -968,7 +938,7 @@ __ips_eh_reset(Scsi_Cmnd * SC)
 	ret = (*ha->func.reset) (ha);
 
 	if (!ret) {
-		Scsi_Cmnd *scsi_cmd;
+		struct scsi_cmnd *scsi_cmd;
 
 		IPS_PRINTK(KERN_NOTICE, ha->pcidev,
 			   "Controller reset failed - controller now offline.\n");
@@ -997,7 +967,7 @@ __ips_eh_reset(Scsi_Cmnd * SC)
 	}
 
 	if (!ips_clear_adapter(ha, IPS_INTR_IORL)) {
-		Scsi_Cmnd *scsi_cmd;
+		struct scsi_cmnd *scsi_cmd;
 
 		IPS_PRINTK(KERN_NOTICE, ha->pcidev,
 			   "Controller reset failed - controller now offline.\n");
@@ -1059,8 +1029,7 @@ __ips_eh_reset(Scsi_Cmnd * SC)
 
 }
 
-static int
-ips_eh_reset(Scsi_Cmnd * SC)
+static int ips_eh_reset(struct scsi_cmnd *SC)
 {
 	int rc;
 
@@ -1083,8 +1052,7 @@ ips_eh_reset(Scsi_Cmnd * SC)
 /*    Linux obtains io_request_lock before calling this function            */
 /*                                                                          */
 /****************************************************************************/
-static int
-ips_queue(Scsi_Cmnd * SC, void (*done) (Scsi_Cmnd *))
+static int ips_queue(struct scsi_cmnd *SC, void (*done) (struct scsi_cmnd *))
 {
 	ips_ha_t *ha;
 	ips_passthru_t *pt;
@@ -1137,7 +1105,7 @@ ips_queue(Scsi_Cmnd * SC, void (*done) (Scsi_Cmnd *))
 		/* A Reset IOCTL is only sent by the boot CD in extreme cases.           */
 		/* There can never be any system activity ( network or disk ), but check */
 		/* anyway just as a good practice.                                       */
-		pt = (ips_passthru_t *) SC->request_buffer;
+		pt = (ips_passthru_t *) scsi_sglist(SC);
 		if ((pt->CoppCP.cmd.reset.op_code == IPS_CMD_RESET_CHANNEL) &&
 		    (pt->CoppCP.cmd.reset.adapter_flag == 1)) {
 			if (ha->scb_activelist.count != 0) {
@@ -1184,18 +1152,10 @@ ips_queue(Scsi_Cmnd * SC, void (*done) (Scsi_Cmnd *))
 /*   Set bios geometry for the controller                                   */
 /*                                                                          */
 /****************************************************************************/
-static int
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-ips_biosparam(Disk * disk, kdev_t dev, int geom[])
-{
-	ips_ha_t *ha = (ips_ha_t *) disk->device->host->hostdata;
-	unsigned long capacity = disk->capacity;
-#else
-ips_biosparam(struct scsi_device *sdev, struct block_device *bdev,
-	      sector_t capacity, int geom[])
+static int ips_biosparam(struct scsi_device *sdev, struct block_device *bdev,
+			 sector_t capacity, int geom[])
 {
 	ips_ha_t *ha = (ips_ha_t *) sdev->host->hostdata;
-#endif
 	int heads;
 	int sectors;
 	int cylinders;
@@ -1233,70 +1193,6 @@ ips_biosparam(struct scsi_device *sdev, struct block_device *bdev,
 	return (0);
 }
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,5,0)
-
-/* ips_proc24_info is a wrapper around ips_proc_info *
- * for compatibility with the 2.4 scsi parameters    */
-static int
-ips_proc24_info(char *buffer, char **start, off_t offset, int length,
-		              int hostno, int func)
-{
-	int i;
-
-	for (i = 0; i < ips_next_controller; i++) {
-		if (ips_sh[i] && ips_sh[i]->host_no == hostno) {
-			return ips_proc_info(ips_sh[i], buffer, start,
-					     offset, length, func);
-		}
-	}
-	return -EINVAL;	
-}
-
-/****************************************************************************/
-/*                                                                          */
-/* Routine Name: ips_select_queue_depth                                     */
-/*                                                                          */
-/* Routine Description:                                                     */
-/*                                                                          */
-/*   Select queue depths for the devices on the contoller                   */
-/*                                                                          */
-/****************************************************************************/
-static void
-ips_select_queue_depth(struct Scsi_Host *host, struct scsi_device * scsi_devs)
-{
-	struct scsi_device *device;
-	ips_ha_t *ha;
-	int count = 0;
-	int min;
-
-	ha = IPS_HA(host);
-	min = ha->max_cmds / 4;
-
-	for (device = scsi_devs; device; device = device->next) {
-		if (device->host == host) {
-			if ((device->channel == 0) && (device->type == 0))
-				count++;
-		}
-	}
-
-	for (device = scsi_devs; device; device = device->next) {
-		if (device->host == host) {
-			if ((device->channel == 0) && (device->type == 0)) {
-				device->queue_depth =
-				    (ha->max_cmds - 1) / count;
-				if (device->queue_depth < min)
-					device->queue_depth = min;
-			} else {
-				device->queue_depth = 2;
-			}
-
-			if (device->queue_depth < 2)
-				device->queue_depth = 2;
-		}
-	}
-}
-
-#else
 /****************************************************************************/
 /*                                                                          */
 /* Routine Name: ips_slave_configure                                        */
@@ -1324,7 +1220,6 @@ ips_slave_configure(struct scsi_device * SDptr)
 	SDptr->skip_ms_page_3f = 1;
 	return 0;
 }
-#endif
 
 /****************************************************************************/
 /*                                                                          */
@@ -1336,10 +1231,9 @@ ips_slave_configure(struct scsi_device * SDptr)
 /*                                                                          */
 /****************************************************************************/
 static irqreturn_t
-do_ipsintr(int irq, void *dev_id, struct pt_regs * regs)
+do_ipsintr(int irq, void *dev_id)
 {
 	ips_ha_t *ha;
-	unsigned long cpu_flags;
 	struct Scsi_Host *host;
 	int irqstatus;
 
@@ -1355,16 +1249,16 @@ do_ipsintr(int irq, void *dev_id, struct pt_regs * regs)
 		return IRQ_HANDLED;
 	}
 
-	IPS_LOCK_SAVE(host->host_lock, cpu_flags);
+	spin_lock(host->host_lock);
 
 	if (!ha->active) {
-		IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);
+		spin_unlock(host->host_lock);
 		return IRQ_HANDLED;
 	}
 
 	irqstatus = (*ha->func.intr) (ha);
 
-	IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);
+	spin_unlock(host->host_lock);
 
 	/* start the next command */
 	ips_next(ha, IPS_INTR_ON);
@@ -1602,8 +1496,7 @@ ips_proc_info(struct Scsi_Host *host, char *buffer, char **start, off_t offset,
 /*   Determine if the specified SCSI command is really a passthru command   */
 /*                                                                          */
 /****************************************************************************/
-static int
-ips_is_passthru(Scsi_Cmnd * SC)
+static int ips_is_passthru(struct scsi_cmnd *SC)
 {
 	unsigned long flags;
 
@@ -1615,30 +1508,22 @@ ips_is_passthru(Scsi_Cmnd * SC)
 	if ((SC->cmnd[0] == IPS_IOCTL_COMMAND) &&
 	    (SC->device->channel == 0) &&
 	    (SC->device->id == IPS_ADAPTER_ID) &&
-	    (SC->device->lun == 0) && SC->request_buffer) {
-		if ((!SC->use_sg) && SC->request_bufflen &&
-		    (((char *) SC->request_buffer)[0] == 'C') &&
-		    (((char *) SC->request_buffer)[1] == 'O') &&
-		    (((char *) SC->request_buffer)[2] == 'P') &&
-		    (((char *) SC->request_buffer)[3] == 'P'))
-			return 1;
-		else if (SC->use_sg) {
-			struct scatterlist *sg = SC->request_buffer;
-			char  *buffer; 
+	    (SC->device->lun == 0) && scsi_sglist(SC)) {
+                struct scatterlist *sg = scsi_sglist(SC);
+                char  *buffer;
 
-			/* kmap_atomic() ensures addressability of the user buffer.*/
-			/* local_irq_save() protects the KM_IRQ0 address slot.     */
-			local_irq_save(flags);
-			buffer = kmap_atomic(sg->page, KM_IRQ0) + sg->offset; 
-			if (buffer && buffer[0] == 'C' && buffer[1] == 'O' &&
-			    buffer[2] == 'P' && buffer[3] == 'P') {
-				kunmap_atomic(buffer - sg->offset, KM_IRQ0);
-				local_irq_restore(flags);
-				return 1;
-			}
-			kunmap_atomic(buffer - sg->offset, KM_IRQ0);
-			local_irq_restore(flags);
-		}
+                /* kmap_atomic() ensures addressability of the user buffer.*/
+                /* local_irq_save() protects the KM_IRQ0 address slot.     */
+                local_irq_save(flags);
+                buffer = kmap_atomic(sg_page(sg), KM_IRQ0) + sg->offset;
+                if (buffer && buffer[0] == 'C' && buffer[1] == 'O' &&
+                    buffer[2] == 'P' && buffer[3] == 'P') {
+                        kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                        local_irq_restore(flags);
+                        return 1;
+                }
+                kunmap_atomic(buffer - sg->offset, KM_IRQ0);
+                local_irq_restore(flags);
 	}
 	return 0;
 }
@@ -1685,22 +1570,18 @@ ips_alloc_passthru_buffer(ips_ha_t * ha, int length)
 /*                                                                          */
 /****************************************************************************/
 static int
-ips_make_passthru(ips_ha_t * ha, Scsi_Cmnd * SC, ips_scb_t * scb, int intr)
+ips_make_passthru(ips_ha_t *ha, struct scsi_cmnd *SC, ips_scb_t *scb, int intr)
 {
 	ips_passthru_t *pt;
 	int length = 0;
-	int ret;
+	int i, ret;
+        struct scatterlist *sg = scsi_sglist(SC);
 
 	METHOD_TRACE("ips_make_passthru", 1);
 
-	if (!SC->use_sg) {
-		length = SC->request_bufflen;
-	} else {
-		struct scatterlist *sg = SC->request_buffer;
-		int i;
-		for (i = 0; i < SC->use_sg; i++)
-			length += sg[i].length;
-	}
+        scsi_for_each_sg(SC, sg, scsi_sg_count(SC), i)
+                length += sg[i].length;
+
 	if (length < sizeof (ips_passthru_t)) {
 		/* wrong size */
 		DEBUG_VAR(1, "(%s%d) Passthru structure wrong size",
@@ -2124,7 +2005,7 @@ ips_cleanup_passthru(ips_ha_t * ha, ips_scb_t * scb)
 
 	METHOD_TRACE("ips_cleanup_passthru", 1);
 
-	if ((!scb) || (!scb->scsi_cmd) || (!scb->scsi_cmd->request_buffer)) {
+	if ((!scb) || (!scb->scsi_cmd) || (!scsi_sglist(scb->scsi_cmd))) {
 		DEBUG_VAR(1, "(%s%d) couldn't cleanup after passthru",
 			  ips_name, ha->host_num);
 
@@ -2734,12 +2615,11 @@ static void
 ips_next(ips_ha_t * ha, int intr)
 {
 	ips_scb_t *scb;
-	Scsi_Cmnd *SC;
-	Scsi_Cmnd *p;
-	Scsi_Cmnd *q;
+	struct scsi_cmnd *SC;
+	struct scsi_cmnd *p;
+	struct scsi_cmnd *q;
 	ips_copp_wait_item_t *item;
 	int ret;
-	unsigned long cpu_flags = 0;
 	struct Scsi_Host *host;
 	METHOD_TRACE("ips_next", 1);
 
@@ -2751,7 +2631,7 @@ ips_next(ips_ha_t * ha, int intr)
 	 * this command won't time out
 	 */
 	if (intr == IPS_INTR_ON)
-		IPS_LOCK_SAVE(host->host_lock, cpu_flags);
+		spin_lock(host->host_lock);
 
 	if ((ha->subsys->param[3] & 0x300000)
 	    && (ha->scb_activelist.count == 0)) {
@@ -2778,14 +2658,14 @@ ips_next(ips_ha_t * ha, int intr)
 		item = ips_removeq_copp_head(&ha->copp_waitlist);
 		ha->num_ioctl++;
 		if (intr == IPS_INTR_ON)
-			IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);
+			spin_unlock(host->host_lock);
 		scb->scsi_cmd = item->scsi_cmd;
 		kfree(item);
 
 		ret = ips_make_passthru(ha, scb->scsi_cmd, scb, intr);
 
 		if (intr == IPS_INTR_ON)
-			IPS_LOCK_SAVE(host->host_lock, cpu_flags);
+			spin_lock(host->host_lock);
 		switch (ret) {
 		case IPS_FAILURE:
 			if (scb->scsi_cmd) {
@@ -2847,7 +2727,7 @@ ips_next(ips_ha_t * ha, int intr)
 			dcdb_active[scmd_channel(p) -
 				    1] & (1 << scmd_id(p)))) {
 			ips_freescb(ha, scb);
-			p = (Scsi_Cmnd *) p->host_scribble;
+			p = (struct scsi_cmnd *) p->host_scribble;
 			continue;
 		}
 
@@ -2855,7 +2735,7 @@ ips_next(ips_ha_t * ha, int intr)
 		SC = ips_removeq_wait(&ha->scb_waitlist, q);
 
 		if (intr == IPS_INTR_ON)
-			IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);	/* Unlock HA after command is taken off queue */
+			spin_unlock(host->host_lock);	/* Unlock HA after command is taken off queue */
 
 		SC->result = DID_OK;
 		SC->host_scribble = NULL;
@@ -2875,41 +2755,26 @@ ips_next(ips_ha_t * ha, int intr)
 		/* copy in the CDB */
 		memcpy(scb->cdb, SC->cmnd, SC->cmd_len);
 
-		/* Now handle the data buffer */
-		if (SC->use_sg) {
+                scb->sg_count = scsi_dma_map(SC);
+                BUG_ON(scb->sg_count < 0);
+		if (scb->sg_count) {
 			struct scatterlist *sg;
 			int i;
 
-			sg = SC->request_buffer;
-			scb->sg_count = pci_map_sg(ha->pcidev, sg, SC->use_sg,
-						   SC->sc_data_direction);
 			scb->flags |= IPS_SCB_MAP_SG;
-			for (i = 0; i < scb->sg_count; i++) {
+
+                        scsi_for_each_sg(SC, sg, scb->sg_count, i) {
 				if (ips_fill_scb_sg_single
-				    (ha, sg_dma_address(&sg[i]), scb, i,
-				     sg_dma_len(&sg[i])) < 0)
+				    (ha, sg_dma_address(sg), scb, i,
+				     sg_dma_len(sg)) < 0)
 					break;
 			}
 			scb->dcdb.transfer_length = scb->data_len;
 		} else {
-			if (SC->request_bufflen) {
-				scb->data_busaddr =
-				    pci_map_single(ha->pcidev,
-						   SC->request_buffer,
-						   SC->request_bufflen,
-						   SC->sc_data_direction);
-				scb->flags |= IPS_SCB_MAP_SINGLE;
-				ips_fill_scb_sg_single(ha, scb->data_busaddr,
-						       scb, 0,
-						       SC->request_bufflen);
-				scb->dcdb.transfer_length = scb->data_len;
-			} else {
-				scb->data_busaddr = 0L;
-				scb->sg_len = 0;
-				scb->data_len = 0;
-				scb->dcdb.transfer_length = 0;
-			}
-
+                        scb->data_busaddr = 0L;
+                        scb->sg_len = 0;
+                        scb->data_len = 0;
+                        scb->dcdb.transfer_length = 0;
 		}
 
 		scb->dcdb.cmd_attribute =
@@ -2928,7 +2793,7 @@ ips_next(ips_ha_t * ha, int intr)
 			scb->dcdb.transfer_length = 0;
 		}
 		if (intr == IPS_INTR_ON)
-			IPS_LOCK_SAVE(host->host_lock, cpu_flags);
+			spin_lock(host->host_lock);
 
 		ret = ips_send_cmd(ha, scb);
 
@@ -2962,12 +2827,12 @@ ips_next(ips_ha_t * ha, int intr)
 			break;
 		}		/* end case */
 
-		p = (Scsi_Cmnd *) p->host_scribble;
+		p = (struct scsi_cmnd *) p->host_scribble;
 
 	}			/* end while */
 
 	if (intr == IPS_INTR_ON)
-		IPS_UNLOCK_RESTORE(host->host_lock, cpu_flags);
+		spin_unlock(host->host_lock);
 }
 
 /****************************************************************************/
@@ -3090,8 +2955,7 @@ ips_removeq_scb(ips_scb_queue_t * queue, ips_scb_t * item)
 /* ASSUMED to be called from within the HA lock                             */
 /*                                                                          */
 /****************************************************************************/
-static void
-ips_putq_wait_tail(ips_wait_queue_t * queue, Scsi_Cmnd * item)
+static void ips_putq_wait_tail(ips_wait_queue_t *queue, struct scsi_cmnd *item)
 {
 	METHOD_TRACE("ips_putq_wait_tail", 1);
 
@@ -3122,10 +2986,9 @@ ips_putq_wait_tail(ips_wait_queue_t * queue, Scsi_Cmnd * item)
 /* ASSUMED to be called from within the HA lock                             */
 /*                                                                          */
 /****************************************************************************/
-static Scsi_Cmnd *
-ips_removeq_wait_head(ips_wait_queue_t * queue)
+static struct scsi_cmnd *ips_removeq_wait_head(ips_wait_queue_t *queue)
 {
-	Scsi_Cmnd *item;
+	struct scsi_cmnd *item;
 
 	METHOD_TRACE("ips_removeq_wait_head", 1);
 
@@ -3135,7 +2998,7 @@ ips_removeq_wait_head(ips_wait_queue_t * queue)
 		return (NULL);
 	}
 
-	queue->head = (Scsi_Cmnd *) item->host_scribble;
+	queue->head = (struct scsi_cmnd *) item->host_scribble;
 	item->host_scribble = NULL;
 
 	if (queue->tail == item)
@@ -3157,10 +3020,10 @@ ips_removeq_wait_head(ips_wait_queue_t * queue)
 /* ASSUMED to be called from within the HA lock                             */
 /*                                                                          */
 /****************************************************************************/
-static Scsi_Cmnd *
-ips_removeq_wait(ips_wait_queue_t * queue, Scsi_Cmnd * item)
+static struct scsi_cmnd *ips_removeq_wait(ips_wait_queue_t *queue,
+					  struct scsi_cmnd *item)
 {
-	Scsi_Cmnd *p;
+	struct scsi_cmnd *p;
 
 	METHOD_TRACE("ips_removeq_wait", 1);
 
@@ -3173,8 +3036,8 @@ ips_removeq_wait(ips_wait_queue_t * queue, Scsi_Cmnd * item)
 
 	p = queue->head;
 
-	while ((p) && (item != (Scsi_Cmnd *) p->host_scribble))
-		p = (Scsi_Cmnd *) p->host_scribble;
+	while ((p) && (item != (struct scsi_cmnd *) p->host_scribble))
+		p = (struct scsi_cmnd *) p->host_scribble;
 
 	if (p) {
 		/* found a match */
@@ -3388,52 +3251,34 @@ ips_done(ips_ha_t * ha, ips_scb_t * scb)
 		 * the rest of the data and continue.
 		 */
 		if ((scb->breakup) || (scb->sg_break)) {
+                        struct scatterlist *sg;
+                        int i, sg_dma_index, ips_sg_index = 0;
+
 			/* we had a data breakup */
 			scb->data_len = 0;
 
-			if (scb->sg_count) {
-				/* S/G request */
-				struct scatterlist *sg;
-				int ips_sg_index = 0;
-				int sg_dma_index;
+                        sg = scsi_sglist(scb->scsi_cmd);
 
-				sg = scb->scsi_cmd->request_buffer;
+                        /* Spin forward to last dma chunk */
+                        sg_dma_index = scb->breakup;
+                        for (i = 0; i < scb->breakup; i++)
+                                sg = sg_next(sg);
 
-				/* Spin forward to last dma chunk */
-				sg_dma_index = scb->breakup;
+			/* Take care of possible partial on last chunk */
+                        ips_fill_scb_sg_single(ha,
+                                               sg_dma_address(sg),
+                                               scb, ips_sg_index++,
+                                               sg_dma_len(sg));
 
-				/* Take care of possible partial on last chunk */
-				ips_fill_scb_sg_single(ha,
-						       sg_dma_address(&sg
-								      [sg_dma_index]),
-						       scb, ips_sg_index++,
-						       sg_dma_len(&sg
-								  [sg_dma_index]));
-
-				for (; sg_dma_index < scb->sg_count;
-				     sg_dma_index++) {
-					if (ips_fill_scb_sg_single
-					    (ha,
-					     sg_dma_address(&sg[sg_dma_index]),
-					     scb, ips_sg_index++,
-					     sg_dma_len(&sg[sg_dma_index])) < 0)
-						break;
-
-				}
-
-			} else {
-				/* Non S/G Request */
-				(void) ips_fill_scb_sg_single(ha,
-							      scb->
-							      data_busaddr +
-							      (scb->sg_break *
-							       ha->max_xfer),
-							      scb, 0,
-							      scb->scsi_cmd->
-							      request_bufflen -
-							      (scb->sg_break *
-							       ha->max_xfer));
-			}
+                        for (; sg_dma_index < scsi_sg_count(scb->scsi_cmd);
+                             sg_dma_index++, sg = sg_next(sg)) {
+                                if (ips_fill_scb_sg_single
+                                    (ha,
+                                     sg_dma_address(sg),
+                                     scb, ips_sg_index++,
+                                     sg_dma_len(sg)) < 0)
+                                        break;
+                        }
 
 			scb->dcdb.transfer_length = scb->data_len;
 			scb->dcdb.cmd_attribute |=
@@ -3659,38 +3504,32 @@ ips_send_wait(ips_ha_t * ha, ips_scb_t * scb, int timeout, int intr)
 /* Routine Name: ips_scmd_buf_write                                         */
 /*                                                                          */
 /* Routine Description:                                                     */
-/*  Write data to Scsi_Cmnd request_buffer at proper offsets                */
+/*  Write data to struct scsi_cmnd request_buffer at proper offsets	    */
 /****************************************************************************/
 static void
-ips_scmd_buf_write(Scsi_Cmnd * scmd, void *data, unsigned
-		   int count)
+ips_scmd_buf_write(struct scsi_cmnd *scmd, void *data, unsigned int count)
 {
-	if (scmd->use_sg) {
-		int i;
-		unsigned int min_cnt, xfer_cnt;
-		char *cdata = (char *) data;
-		unsigned char *buffer;
-		unsigned long flags;
-		struct scatterlist *sg = scmd->request_buffer;
-		for (i = 0, xfer_cnt = 0;
-		     (i < scmd->use_sg) && (xfer_cnt < count); i++) {
-			min_cnt = min(count - xfer_cnt, sg[i].length);
+        int i;
+        unsigned int min_cnt, xfer_cnt;
+        char *cdata = (char *) data;
+        unsigned char *buffer;
+        unsigned long flags;
+        struct scatterlist *sg = scsi_sglist(scmd);
 
-			/* kmap_atomic() ensures addressability of the data buffer.*/
-			/* local_irq_save() protects the KM_IRQ0 address slot.     */
-			local_irq_save(flags);
-			buffer = kmap_atomic(sg[i].page, KM_IRQ0) + sg[i].offset;
-			memcpy(buffer, &cdata[xfer_cnt], min_cnt);
-			kunmap_atomic(buffer - sg[i].offset, KM_IRQ0);
-			local_irq_restore(flags);
+        for (i = 0, xfer_cnt = 0;
+             (i < scsi_sg_count(scmd)) && (xfer_cnt < count); i++) {
+                min_cnt = min(count - xfer_cnt, sg[i].length);
 
-			xfer_cnt += min_cnt;
-		}
+                /* kmap_atomic() ensures addressability of the data buffer.*/
+                /* local_irq_save() protects the KM_IRQ0 address slot.     */
+                local_irq_save(flags);
+                buffer = kmap_atomic(sg_page(&sg[i]), KM_IRQ0) + sg[i].offset;
+                memcpy(buffer, &cdata[xfer_cnt], min_cnt);
+                kunmap_atomic(buffer - sg[i].offset, KM_IRQ0);
+                local_irq_restore(flags);
 
-	} else {
-		unsigned int min_cnt = min(count, scmd->request_bufflen);
-		memcpy(scmd->request_buffer, data, min_cnt);
-	}
+                xfer_cnt += min_cnt;
+        }
 }
 
 /****************************************************************************/
@@ -3698,38 +3537,32 @@ ips_scmd_buf_write(Scsi_Cmnd * scmd, void *data, unsigned
 /* Routine Name: ips_scmd_buf_read                                          */
 /*                                                                          */
 /* Routine Description:                                                     */
-/*  Copy data from a Scsi_Cmnd to a new, linear buffer                      */
+/*  Copy data from a struct scsi_cmnd to a new, linear buffer		    */
 /****************************************************************************/
 static void
-ips_scmd_buf_read(Scsi_Cmnd * scmd, void *data, unsigned
-		  int count)
+ips_scmd_buf_read(struct scsi_cmnd *scmd, void *data, unsigned int count)
 {
-	if (scmd->use_sg) {
-		int i;
-		unsigned int min_cnt, xfer_cnt;
-		char *cdata = (char *) data;
-		unsigned char *buffer;
-		unsigned long flags;
-		struct scatterlist *sg = scmd->request_buffer;
-		for (i = 0, xfer_cnt = 0;
-		     (i < scmd->use_sg) && (xfer_cnt < count); i++) {
-			min_cnt = min(count - xfer_cnt, sg[i].length);
+        int i;
+        unsigned int min_cnt, xfer_cnt;
+        char *cdata = (char *) data;
+        unsigned char *buffer;
+        unsigned long flags;
+        struct scatterlist *sg = scsi_sglist(scmd);
 
-			/* kmap_atomic() ensures addressability of the data buffer.*/
-			/* local_irq_save() protects the KM_IRQ0 address slot.     */
-			local_irq_save(flags);
-			buffer = kmap_atomic(sg[i].page, KM_IRQ0) + sg[i].offset;
-			memcpy(&cdata[xfer_cnt], buffer, min_cnt);
-			kunmap_atomic(buffer - sg[i].offset, KM_IRQ0);
-			local_irq_restore(flags);
+        for (i = 0, xfer_cnt = 0;
+             (i < scsi_sg_count(scmd)) && (xfer_cnt < count); i++) {
+                min_cnt = min(count - xfer_cnt, sg[i].length);
 
-			xfer_cnt += min_cnt;
-		}
+                /* kmap_atomic() ensures addressability of the data buffer.*/
+                /* local_irq_save() protects the KM_IRQ0 address slot.     */
+                local_irq_save(flags);
+                buffer = kmap_atomic(sg_page(&sg[i]), KM_IRQ0) + sg[i].offset;
+                memcpy(&cdata[xfer_cnt], buffer, min_cnt);
+                kunmap_atomic(buffer - sg[i].offset, KM_IRQ0);
+                local_irq_restore(flags);
 
-	} else {
-		unsigned int min_cnt = min(count, scmd->request_bufflen);
-		memcpy(data, scmd->request_buffer, min_cnt);
-	}
+                xfer_cnt += min_cnt;
+        }
 }
 
 /****************************************************************************/
@@ -4363,7 +4196,7 @@ ips_rdcap(ips_ha_t * ha, ips_scb_t * scb)
 
 	METHOD_TRACE("ips_rdcap", 1);
 
-	if (scb->scsi_cmd->request_bufflen < 8)
+	if (scsi_bufflen(scb->scsi_cmd) < 8)
 		return (0);
 
 	cap.lba =
@@ -4748,8 +4581,7 @@ ips_freescb(ips_ha_t * ha, ips_scb_t * scb)
 
 	METHOD_TRACE("ips_freescb", 1);
 	if (scb->flags & IPS_SCB_MAP_SG)
-		pci_unmap_sg(ha->pcidev, scb->scsi_cmd->request_buffer,
-			     scb->scsi_cmd->use_sg, IPS_DMA_DIR(scb));
+                scsi_dma_unmap(scb->scsi_cmd);
 	else if (scb->flags & IPS_SCB_MAP_SINGLE)
 		pci_unmap_single(ha->pcidev, scb->data_busaddr, scb->data_len,
 				 IPS_DMA_DIR(scb));
@@ -5014,7 +4846,7 @@ ips_init_copperhead(ips_ha_t * ha)
 				break;
 
 			/* Delay for 1 Second */
-			msleep(IPS_ONE_SEC);
+			MDELAY(IPS_ONE_SEC);
 		}
 
 		if (j >= 45)
@@ -5040,7 +4872,7 @@ ips_init_copperhead(ips_ha_t * ha)
 				break;
 
 			/* Delay for 1 Second */
-			msleep(IPS_ONE_SEC);
+			MDELAY(IPS_ONE_SEC);
 		}
 
 		if (j >= 240)
@@ -5058,7 +4890,7 @@ ips_init_copperhead(ips_ha_t * ha)
 			break;
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 	}
 
 	if (i >= 240)
@@ -5108,7 +4940,7 @@ ips_init_copperhead_memio(ips_ha_t * ha)
 				break;
 
 			/* Delay for 1 Second */
-			msleep(IPS_ONE_SEC);
+			MDELAY(IPS_ONE_SEC);
 		}
 
 		if (j >= 45)
@@ -5134,7 +4966,7 @@ ips_init_copperhead_memio(ips_ha_t * ha)
 				break;
 
 			/* Delay for 1 Second */
-			msleep(IPS_ONE_SEC);
+			MDELAY(IPS_ONE_SEC);
 		}
 
 		if (j >= 240)
@@ -5152,7 +4984,7 @@ ips_init_copperhead_memio(ips_ha_t * ha)
 			break;
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 	}
 
 	if (i >= 240)
@@ -5204,7 +5036,7 @@ ips_init_morpheus(ips_ha_t * ha)
 			break;
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 	}
 
 	if (i >= 45) {
@@ -5230,7 +5062,7 @@ ips_init_morpheus(ips_ha_t * ha)
 			if (Post != 0x4F00)
 				break;
 			/* Delay for 1 Second */
-			msleep(IPS_ONE_SEC);
+			MDELAY(IPS_ONE_SEC);
 		}
 
 		if (i >= 120) {
@@ -5260,7 +5092,7 @@ ips_init_morpheus(ips_ha_t * ha)
 			break;
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 	}
 
 	if (i >= 240) {
@@ -5320,12 +5152,12 @@ ips_reset_copperhead(ips_ha_t * ha)
 		outb(IPS_BIT_RST, ha->io_addr + IPS_REG_SCPR);
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 
 		outb(0, ha->io_addr + IPS_REG_SCPR);
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 
 		if ((*ha->func.init) (ha))
 			break;
@@ -5365,12 +5197,12 @@ ips_reset_copperhead_memio(ips_ha_t * ha)
 		writeb(IPS_BIT_RST, ha->mem_ptr + IPS_REG_SCPR);
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 
 		writeb(0, ha->mem_ptr + IPS_REG_SCPR);
 
 		/* Delay for 1 Second */
-		msleep(IPS_ONE_SEC);
+		MDELAY(IPS_ONE_SEC);
 
 		if ((*ha->func.init) (ha))
 			break;
@@ -5411,7 +5243,7 @@ ips_reset_morpheus(ips_ha_t * ha)
 		writel(0x80000000, ha->mem_ptr + IPS_REG_I960_IDR);
 
 		/* Delay for 5 Seconds */
-		msleep(5 * IPS_ONE_SEC);
+		MDELAY(5 * IPS_ONE_SEC);
 
 		/* Do a PCI config read to wait for adapter */
 		pci_read_config_byte(ha->pcidev, 4, &junk);
@@ -7017,7 +6849,6 @@ ips_register_scsi(int index)
 	kfree(oldha);
 	ips_sh[index] = sh;
 	ips_ha[index] = ha;
-	IPS_SCSI_SET_DEVICE(sh, ha);
 
 	/* Store away needed values for later use */
 	sh->io_port = ha->io_addr;
@@ -7029,17 +6860,16 @@ ips_register_scsi(int index)
 	sh->cmd_per_lun = sh->hostt->cmd_per_lun;
 	sh->unchecked_isa_dma = sh->hostt->unchecked_isa_dma;
 	sh->use_clustering = sh->hostt->use_clustering;
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,7)
 	sh->max_sectors = 128;
-#endif
 
 	sh->max_id = ha->ntargets;
 	sh->max_lun = ha->nlun;
 	sh->max_channel = ha->nbus - 1;
 	sh->can_queue = ha->max_cmds - 1;
 
-	IPS_ADD_HOST(sh, NULL);
+	scsi_add_host(sh, NULL);
+	scsi_scan_host(sh);
+
 	return 0;
 }
 
@@ -7078,11 +6908,11 @@ ips_remove_device(struct pci_dev *pci_dev)
 static int __init
 ips_module_init(void)
 {
-	if (pci_module_init(&ips_pci_driver) < 0)
+	if (pci_register_driver(&ips_pci_driver) < 0)
 		return -ENODEV;
 	ips_driver_template.module = THIS_MODULE;
 	ips_order_controllers();
-	if (IPS_REGISTER_HOSTS(&ips_driver_template)) {
+	if (!ips_detect(&ips_driver_template)) {
 		pci_unregister_driver(&ips_pci_driver);
 		return -ENODEV;
 	}
@@ -7100,7 +6930,6 @@ ips_module_init(void)
 static void __exit
 ips_module_exit(void)
 {
-	IPS_UNREGISTER_HOSTS(&ips_driver_template);
 	pci_unregister_driver(&ips_pci_driver);
 	unregister_reboot_notifier(&ips_notifier);
 }
@@ -7120,7 +6949,7 @@ module_exit(ips_module_exit);
 static int __devinit
 ips_insert_device(struct pci_dev *pci_dev, const struct pci_device_id *ent)
 {
-	int index;
+	int uninitialized_var(index);
 	int rc;
 
 	METHOD_TRACE("ips_insert_device", 1);
@@ -7161,7 +6990,6 @@ ips_init_phase1(struct pci_dev *pci_dev, int *indexPtr)
 	uint32_t mem_addr;
 	uint32_t io_len;
 	uint32_t mem_len;
-	uint8_t revision_id;
 	uint8_t bus;
 	uint8_t func;
 	uint8_t irq;
@@ -7240,23 +7068,16 @@ ips_init_phase1(struct pci_dev *pci_dev, int *indexPtr)
 		}
 	}
 
-	/* get the revision ID */
-	if (pci_read_config_byte(pci_dev, PCI_REVISION_ID, &revision_id)) {
-		IPS_PRINTK(KERN_WARNING, pci_dev, "Can't get revision id.\n");
-		return -1;
-	}
-
 	subdevice_id = pci_dev->subsystem_device;
 
 	/* found a controller */
-	ha = kmalloc(sizeof (ips_ha_t), GFP_KERNEL);
+	ha = kzalloc(sizeof (ips_ha_t), GFP_KERNEL);
 	if (ha == NULL) {
 		IPS_PRINTK(KERN_WARNING, pci_dev,
 			   "Unable to allocate temporary ha struct\n");
 		return -1;
 	}
 
-	memset(ha, 0, sizeof (ips_ha_t));
 
 	ips_sh[index] = NULL;
 	ips_ha[index] = ha;
@@ -7271,7 +7092,7 @@ ips_init_phase1(struct pci_dev *pci_dev, int *indexPtr)
 	ha->mem_ptr = mem_ptr;
 	ha->ioremap_ptr = ioremap_ptr;
 	ha->host_num = (uint32_t) index;
-	ha->revision_id = revision_id;
+	ha->revision_id = pci_dev->revision;
 	ha->slot_num = PCI_SLOT(pci_dev->devfn);
 	ha->device_id = pci_dev->device;
 	ha->subdevice_id = subdevice_id;
@@ -7456,15 +7277,9 @@ ips_init_phase2(int index)
 	return SUCCESS;
 }
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,4,9)
 MODULE_LICENSE("GPL");
-#endif
-
 MODULE_DESCRIPTION("IBM ServeRAID Adapter Driver " IPS_VER_STRING);
-
-#ifdef MODULE_VERSION
 MODULE_VERSION(IPS_VER_STRING);
-#endif
 
 
 /*

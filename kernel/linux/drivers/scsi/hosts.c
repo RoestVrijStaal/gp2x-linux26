@@ -220,7 +220,7 @@ int scsi_add_host(struct Scsi_Host *shost, struct device *dev)
 	get_device(&shost->shost_gendev);
 
 	if (shost->transportt->host_size &&
-	    (shost->shost_data = kmalloc(shost->transportt->host_size,
+	    (shost->shost_data = kzalloc(shost->transportt->host_size,
 					 GFP_KERNEL)) == NULL)
 		goto out_del_classdev;
 
@@ -263,8 +263,15 @@ static void scsi_host_dev_release(struct device *dev)
 		kthread_stop(shost->ehandler);
 	if (shost->work_q)
 		destroy_workqueue(shost->work_q);
+	if (shost->uspace_req_q) {
+		kfree(shost->uspace_req_q->queuedata);
+		scsi_free_queue(shost->uspace_req_q);
+	}
 
 	scsi_destroy_command_freelist(shost);
+	if (shost->bqt)
+		blk_free_tags(shost->bqt);
+
 	kfree(shost->shost_data);
 
 	if (parent)
@@ -298,8 +305,8 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	if (!shost)
 		return NULL;
 
-	spin_lock_init(&shost->default_lock);
-	scsi_assign_lock(shost, &shost->default_lock);
+	shost->host_lock = &shost->default_lock;
+	spin_lock_init(shost->host_lock);
 	shost->shost_state = SHOST_CREATED;
 	INIT_LIST_HEAD(&shost->__devices);
 	INIT_LIST_HEAD(&shost->__targets);
@@ -335,6 +342,14 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 	shost->unchecked_isa_dma = sht->unchecked_isa_dma;
 	shost->use_clustering = sht->use_clustering;
 	shost->ordered_tag = sht->ordered_tag;
+	shost->active_mode = sht->supported_mode;
+	shost->use_sg_chaining = sht->use_sg_chaining;
+
+	if (sht->supported_mode == MODE_UNKNOWN)
+		/* means we didn't set it ... default to INITIATOR */
+		shost->active_mode = MODE_INITIATOR;
+	else
+		shost->active_mode = sht->supported_mode;
 
 	if (sht->max_host_blocked)
 		shost->max_host_blocked = sht->max_host_blocked;
@@ -428,7 +443,7 @@ struct Scsi_Host *scsi_host_lookup(unsigned short hostnum)
 	struct class_device *cdev;
 	struct Scsi_Host *shost = ERR_PTR(-ENXIO), *p;
 
-	down_read(&class->subsys.rwsem);
+	down(&class->sem);
 	list_for_each_entry(cdev, &class->children, node) {
 		p = class_to_shost(cdev);
 		if (p->host_no == hostnum) {
@@ -436,7 +451,7 @@ struct Scsi_Host *scsi_host_lookup(unsigned short hostnum)
 			break;
 		}
 	}
-	up_read(&class->subsys.rwsem);
+	up(&class->sem);
 
 	return shost;
 }
@@ -487,7 +502,9 @@ EXPORT_SYMBOL(scsi_is_host_device);
  * @work:	Work to queue for execution.
  *
  * Return value:
- * 	0 on success / != 0 for error
+ * 	1 - work queued for execution
+ *	0 - work is already queued
+ *	-EINVAL - work queue doesn't exist
  **/
 int scsi_queue_work(struct Scsi_Host *shost, struct work_struct *work)
 {
