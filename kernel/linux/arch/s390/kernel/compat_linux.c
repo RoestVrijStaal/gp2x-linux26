@@ -58,9 +58,9 @@
 #include <linux/vfs.h>
 #include <linux/ptrace.h>
 #include <linux/fadvise.h>
+#include <linux/ipc.h>
 
 #include <asm/types.h>
-#include <asm/ipc.h>
 #include <asm/uaccess.h>
 #include <asm/semaphore.h>
 
@@ -69,6 +69,12 @@
 
 #include "compat_linux.h"
 
+long psw_user32_bits	= (PSW_BASE32_BITS | PSW_MASK_DAT | PSW_ASC_HOME |
+			   PSW_MASK_IO | PSW_MASK_EXT | PSW_MASK_MCHECK |
+			   PSW_MASK_PSTATE | PSW_DEFAULT_KEY);
+long psw32_user_bits	= (PSW32_BASE_BITS | PSW32_MASK_DAT | PSW32_ASC_HOME |
+			   PSW32_MASK_IO | PSW32_MASK_EXT | PSW32_MASK_MCHECK |
+			   PSW32_MASK_PSTATE);
  
 /* For this source file, we want overflow handling. */
 
@@ -295,6 +301,7 @@ static inline long put_tv32(struct compat_timeval __user *o, struct timeval *i)
  *
  * This is really horribly ugly.
  */
+#ifdef CONFIG_SYSVIPC
 asmlinkage long sys32_ipc(u32 call, int first, int second, int third, u32 ptr)
 {
 	if (call >> 16)		/* hack for backward compatibility */
@@ -338,6 +345,7 @@ asmlinkage long sys32_ipc(u32 call, int first, int second, int third, u32 ptr)
 
 	return -ENOSYS;
 }
+#endif
 
 asmlinkage long sys32_truncate64(const char __user * path, unsigned long high, unsigned long low)
 {
@@ -357,9 +365,14 @@ asmlinkage long sys32_ftruncate64(unsigned int fd, unsigned long high, unsigned 
 
 int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 {
+	compat_ino_t ino;
 	int err;
 
 	if (!old_valid_dev(stat->dev) || !old_valid_dev(stat->rdev))
+		return -EOVERFLOW;
+
+	ino = stat->ino;
+	if (sizeof(ino) < sizeof(stat->ino) && ino != stat->ino)
 		return -EOVERFLOW;
 
 	err = put_user(old_encode_dev(stat->dev), &statbuf->st_dev);
@@ -385,51 +398,6 @@ int cp_compat_stat(struct kstat *stat, struct compat_stat __user *statbuf)
 	return err;
 }
 
-struct sysinfo32 {
-        s32 uptime;
-        u32 loads[3];
-        u32 totalram;
-        u32 freeram;
-        u32 sharedram;
-        u32 bufferram;
-        u32 totalswap;
-        u32 freeswap;
-        unsigned short procs;
-	unsigned short pads;
-	u32 totalhigh;
-	u32 freehigh;
-	unsigned int mem_unit;
-        char _f[8];
-};
-
-asmlinkage long sys32_sysinfo(struct sysinfo32 __user *info)
-{
-	struct sysinfo s;
-	int ret, err;
-	mm_segment_t old_fs = get_fs ();
-	
-	set_fs (KERNEL_DS);
-	ret = sys_sysinfo((struct sysinfo __user *) &s);
-	set_fs (old_fs);
-	err = put_user (s.uptime, &info->uptime);
-	err |= __put_user (s.loads[0], &info->loads[0]);
-	err |= __put_user (s.loads[1], &info->loads[1]);
-	err |= __put_user (s.loads[2], &info->loads[2]);
-	err |= __put_user (s.totalram, &info->totalram);
-	err |= __put_user (s.freeram, &info->freeram);
-	err |= __put_user (s.sharedram, &info->sharedram);
-	err |= __put_user (s.bufferram, &info->bufferram);
-	err |= __put_user (s.totalswap, &info->totalswap);
-	err |= __put_user (s.freeswap, &info->freeswap);
-	err |= __put_user (s.procs, &info->procs);
-	err |= __put_user (s.totalhigh, &info->totalhigh);
-	err |= __put_user (s.freehigh, &info->freehigh);
-	err |= __put_user (s.mem_unit, &info->mem_unit);
-	if (err)
-		return -EFAULT;
-	return ret;
-}
-
 asmlinkage long sys32_sched_rr_get_interval(compat_pid_t pid,
 				struct compat_timespec __user *interval)
 {
@@ -438,7 +406,8 @@ asmlinkage long sys32_sched_rr_get_interval(compat_pid_t pid,
 	mm_segment_t old_fs = get_fs ();
 	
 	set_fs (KERNEL_DS);
-	ret = sys_sched_rr_get_interval(pid, (struct timespec __user *) &t);
+	ret = sys_sched_rr_get_interval(pid,
+					(struct timespec __force __user *) &t);
 	set_fs (old_fs);
 	if (put_compat_timespec(&t, interval))
 		return -EFAULT;
@@ -465,8 +434,8 @@ asmlinkage long sys32_rt_sigprocmask(int how, compat_sigset_t __user *set,
 	}
 	set_fs (KERNEL_DS);
 	ret = sys_rt_sigprocmask(how,
-				 set ? (sigset_t __user *) &s : NULL,
-				 oset ? (sigset_t __user *) &s : NULL,
+				 set ? (sigset_t __force __user *) &s : NULL,
+				 oset ? (sigset_t __force __user *) &s : NULL,
 				 sigsetsize);
 	set_fs (old_fs);
 	if (ret) return ret;
@@ -492,7 +461,7 @@ asmlinkage long sys32_rt_sigpending(compat_sigset_t __user *set,
 	mm_segment_t old_fs = get_fs();
 		
 	set_fs (KERNEL_DS);
-	ret = sys_rt_sigpending((sigset_t __user *) &s, sigsetsize);
+	ret = sys_rt_sigpending((sigset_t __force __user *) &s, sigsetsize);
 	set_fs (old_fs);
 	if (!ret) {
 		switch (_NSIG_WORDS) {
@@ -517,7 +486,7 @@ sys32_rt_sigqueueinfo(int pid, int sig, compat_siginfo_t __user *uinfo)
 	if (copy_siginfo_from_user32(&info, uinfo))
 		return -EFAULT;
 	set_fs (KERNEL_DS);
-	ret = sys_rt_sigqueueinfo(pid, sig, (siginfo_t __user *) &info);
+	ret = sys_rt_sigqueueinfo(pid, sig, (siginfo_t __force __user *) &info);
 	set_fs (old_fs);
 	return ret;
 }
@@ -526,32 +495,34 @@ sys32_rt_sigqueueinfo(int pid, int sig, compat_siginfo_t __user *uinfo)
  * sys32_execve() executes a new program after the asm stub has set
  * things up for us.  This should basically do what I want it to.
  */
-asmlinkage long
-sys32_execve(struct pt_regs regs)
+asmlinkage long sys32_execve(void)
 {
-        int error;
-        char * filename;
+	struct pt_regs *regs = task_pt_regs(current);
+	char *filename;
+	unsigned long result;
+	int rc;
 
-        filename = getname(compat_ptr(regs.orig_gpr2));
-        error = PTR_ERR(filename);
-        if (IS_ERR(filename))
+	filename = getname(compat_ptr(regs->orig_gpr2));
+	if (IS_ERR(filename)) {
+		result = PTR_ERR(filename);
                 goto out;
-        error = compat_do_execve(filename, compat_ptr(regs.gprs[3]),
-				 compat_ptr(regs.gprs[4]), &regs);
-	if (error == 0)
-	{
-		task_lock(current);
-		current->ptrace &= ~PT_DTRACE;
-		task_unlock(current);
-		current->thread.fp_regs.fpc=0;
-		__asm__ __volatile__
-		        ("sr  0,0\n\t"
-		         "sfpc 0,0\n\t"
-			 : : :"0");
 	}
+	rc = compat_do_execve(filename, compat_ptr(regs->gprs[3]),
+			      compat_ptr(regs->gprs[4]), regs);
+	if (rc) {
+		result = rc;
+		goto out_putname;
+	}
+	task_lock(current);
+	current->ptrace &= ~PT_DTRACE;
+	task_unlock(current);
+	current->thread.fp_regs.fpc=0;
+	asm volatile("sfpc %0,0" : : "d" (0));
+	result = regs->gprs[2];
+out_putname:
         putname(filename);
 out:
-        return error;
+	return result;
 }
 
 
@@ -678,7 +649,7 @@ asmlinkage long sys32_sendfile(int out_fd, int in_fd, compat_off_t __user *offse
 		
 	set_fs(KERNEL_DS);
 	ret = sys_sendfile(out_fd, in_fd,
-			   offset ? (off_t __user *) &of : NULL, count);
+			   offset ? (off_t __force __user *) &of : NULL, count);
 	set_fs(old_fs);
 	
 	if (offset && put_user(of, offset))
@@ -699,7 +670,8 @@ asmlinkage long sys32_sendfile64(int out_fd, int in_fd,
 		
 	set_fs(KERNEL_DS);
 	ret = sys_sendfile64(out_fd, in_fd,
-			     offset ? (loff_t __user *) &lof : NULL, count);
+			     offset ? (loff_t __force __user *) &lof : NULL,
+			     count);
 	set_fs(old_fs);
 	
 	if (offset && put_user(lof, offset))
@@ -708,7 +680,7 @@ asmlinkage long sys32_sendfile64(int out_fd, int in_fd,
 	return ret;
 }
 
-#ifdef CONFIG_SYSCTL
+#ifdef CONFIG_SYSCTL_SYSCALL
 struct __sysctl_args32 {
 	u32 name;
 	int nlen;
@@ -753,7 +725,9 @@ asmlinkage long sys32_sysctl(struct __sysctl_args32 __user *args)
 			    put_user(oldlen, (u32 __user *)compat_ptr(tmp.oldlenp)))
 				error = -EFAULT;
 		}
-		copy_to_user(args->__unused, tmp.__unused, sizeof(tmp.__unused));
+		if (copy_to_user(args->__unused, tmp.__unused,
+				 sizeof(tmp.__unused)))
+			error = -EFAULT;
 	}
 	return error;
 }
@@ -949,19 +923,20 @@ asmlinkage long sys32_write(unsigned int fd, char __user * buf, size_t count)
 	return sys_write(fd, buf, count);
 }
 
-asmlinkage long sys32_clone(struct pt_regs regs)
+asmlinkage long sys32_clone(void)
 {
-        unsigned long clone_flags;
-        unsigned long newsp;
+	struct pt_regs *regs = task_pt_regs(current);
+	unsigned long clone_flags;
+	unsigned long newsp;
 	int __user *parent_tidptr, *child_tidptr;
 
-        clone_flags = regs.gprs[3] & 0xffffffffUL;
-        newsp = regs.orig_gpr2 & 0x7fffffffUL;
-	parent_tidptr = compat_ptr(regs.gprs[4]);
-	child_tidptr = compat_ptr(regs.gprs[5]);
-        if (!newsp)
-                newsp = regs.gprs[15];
-        return do_fork(clone_flags, newsp, &regs, 0,
+	clone_flags = regs->gprs[3] & 0xffffffffUL;
+	newsp = regs->orig_gpr2 & 0x7fffffffUL;
+	parent_tidptr = compat_ptr(regs->gprs[4]);
+	child_tidptr = compat_ptr(regs->gprs[5]);
+	if (!newsp)
+		newsp = regs->gprs[15];
+	return do_fork(clone_flags, newsp, regs, 0,
 		       parent_tidptr, child_tidptr);
 }
 
