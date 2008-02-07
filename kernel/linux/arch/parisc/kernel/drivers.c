@@ -424,7 +424,10 @@ struct parisc_device * create_tree_node(char id, struct device *parent)
 	/* make the generic dma mask a pointer to the parisc one */
 	dev->dev.dma_mask = &dev->dma_mask;
 	dev->dev.coherent_dma_mask = dev->dma_mask;
-	device_register(&dev->dev);
+	if (device_register(&dev->dev)) {
+		kfree(dev);
+		return NULL;
+	}
 
 	return dev;
 }
@@ -559,12 +562,23 @@ pa_dev_attr(rev, id.hversion_rev, "0x%x\n");
 pa_dev_attr_id(hversion, "0x%03x\n");
 pa_dev_attr_id(sversion, "0x%05x\n");
 
+static ssize_t modalias_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	struct parisc_device *padev = to_parisc_device(dev);
+	struct parisc_device_id *id = &padev->id;
+
+	return sprintf(buf, "parisc:t%02Xhv%04Xrev%02Xsv%08X\n",
+		(u8)id->hw_type, (u16)id->hversion, (u8)id->hversion_rev,
+		(u32)id->sversion);
+}
+
 static struct device_attribute parisc_device_attrs[] = {
 	__ATTR_RO(irq),
 	__ATTR_RO(hw_type),
 	__ATTR_RO(rev),
 	__ATTR_RO(hversion),
 	__ATTR_RO(sversion),
+	__ATTR_RO(modalias),
 	__ATTR_NULL,
 };
 
@@ -686,7 +700,9 @@ parse_tree_node(struct device *parent, int index, struct hardware_path *modpath)
 		.fn	= check_parent,
 	};
 
-	device_for_each_child(parent, &recurse_data, descend_children);
+	if (device_for_each_child(parent, &recurse_data, descend_children))
+		/* nothing */;
+
 	return d.dev;
 }
 
@@ -832,8 +848,8 @@ static void print_parisc_device(struct parisc_device *dev)
 	static int count;
 
 	print_pa_hwpath(dev, hw_path);
-	printk(KERN_INFO "%d. %s at 0x%lx [%s] { %d, 0x%x, 0x%.3x, 0x%.5x }",
-		++count, dev->name, dev->hpa.start, hw_path, dev->id.hw_type,
+	printk(KERN_INFO "%d. %s at 0x%p [%s] { %d, 0x%x, 0x%.3x, 0x%.5x }",
+		++count, dev->name, (void*) dev->hpa.start, hw_path, dev->id.hw_type,
 		dev->id.hversion_rev, dev->id.hversion, dev->id.sversion);
 
 	if (dev->num_addrs) {
@@ -850,8 +866,10 @@ static void print_parisc_device(struct parisc_device *dev)
  */
 void init_parisc_bus(void)
 {
-	bus_register(&parisc_bus_type);
-	device_register(&root);
+	if (bus_register(&parisc_bus_type))
+		panic("Could not register PA-RISC bus type\n");
+	if (device_register(&root))
+		panic("Could not register PA-RISC root device\n");
 	get_device(&root);
 }
 
