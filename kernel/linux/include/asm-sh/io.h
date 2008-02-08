@@ -107,19 +107,22 @@
 #define __raw_writew(v, a)	__writew(v, (void __iomem *)(a))
 #define __raw_writel(v, a)	__writel(v, (void __iomem *)(a))
 
+void __raw_writesl(unsigned long addr, const void *data, int longlen);
+void __raw_readsl(unsigned long addr, void *data, int longlen);
+
 /*
  * The platform header files may define some of these macros to use
  * the inlined versions where appropriate.  These macros may also be
  * redefined by userlevel programs.
  */
 #ifdef __readb
-# define readb(a)	({ unsigned long r_ = __raw_readb(a); mb(); r_; })
+# define readb(a)	({ unsigned int r_ = __raw_readb(a); mb(); r_; })
 #endif
 #ifdef __raw_readw
-# define readw(a)	({ unsigned long r_ = __raw_readw(a); mb(); r_; })
+# define readw(a)	({ unsigned int r_ = __raw_readw(a); mb(); r_; })
 #endif
 #ifdef __raw_readl
-# define readl(a)	({ unsigned long r_ = __raw_readl(a); mb(); r_; })
+# define readl(a)	({ unsigned int r_ = __raw_readl(a); mb(); r_; })
 #endif
 
 #ifdef __raw_writeb
@@ -131,6 +134,35 @@
 #ifdef __raw_writel
 # define writel(v,a)	({ __raw_writel((v),(a)); mb(); })
 #endif
+
+#define __BUILD_MEMORY_STRING(bwlq, type)				\
+									\
+static inline void writes##bwlq(volatile void __iomem *mem,		\
+				const void *addr, unsigned int count)	\
+{									\
+	const volatile type *__addr = addr;				\
+									\
+	while (count--) {						\
+		__raw_write##bwlq(*__addr, mem);			\
+		__addr++;						\
+	}								\
+}									\
+									\
+static inline void reads##bwlq(volatile void __iomem *mem, void *addr,	\
+			       unsigned int count)			\
+{									\
+	volatile type *__addr = addr;					\
+									\
+	while (count--) {						\
+		*__addr = __raw_read##bwlq(mem);			\
+		__addr++;						\
+	}								\
+}
+
+__BUILD_MEMORY_STRING(b, u8)
+__BUILD_MEMORY_STRING(w, u16)
+#define writesl __raw_writesl
+#define readsl  __raw_readsl
 
 #define readb_relaxed(a) readb(a)
 #define readw_relaxed(a) readw(a)
@@ -209,8 +241,14 @@ static inline void ctrl_outl(unsigned int b, unsigned long addr)
         *(volatile unsigned long*)addr = b;
 }
 
+static inline void ctrl_delay(void)
+{
+	ctrl_inw(P2SEG);
+}
+
 #define IO_SPACE_LIMIT 0xffffffff
 
+#ifdef CONFIG_MMU
 /*
  * Change virtual addresses to physical addresses and vv.
  * These are trivial on the 1:1 Linux/SuperH mapping
@@ -224,10 +262,10 @@ static inline void *phys_to_virt(unsigned long address)
 {
 	return (void *)P1SEGADDR(address);
 }
-
-#define virt_to_bus virt_to_phys
-#define bus_to_virt phys_to_virt
-#define page_to_bus page_to_phys
+#else
+#define phys_to_virt(address)	((void *)(address))
+#define virt_to_phys(address)	((unsigned long)(address))
+#endif
 
 /*
  * readX/writeX() are used to access memory mapped devices. On some
@@ -287,47 +325,6 @@ __ioremap_mode(unsigned long offset, unsigned long size, unsigned long flags)
 	__ioremap((offset), (size), (flags))
 #define iounmap(addr)					\
 	__iounmap((addr))
-
-static inline int check_signature(char __iomem *io_addr,
-			const unsigned char *signature, int length)
-{
-	int retval = 0;
-	do {
-		if (readb(io_addr) != *signature)
-			goto out;
-		io_addr++;
-		signature++;
-		length--;
-	} while (length);
-	retval = 1;
-out:
-	return retval;
-}
-
-/*
- * The caches on some architectures aren't dma-coherent and have need to
- * handle this in software.  There are three types of operations that
- * can be applied to dma buffers.
- *
- *  - dma_cache_wback_inv(start, size) makes caches and RAM coherent by
- *    writing the content of the caches back to memory, if necessary.
- *    The function also invalidates the affected part of the caches as
- *    necessary before DMA transfers from outside to memory.
- *  - dma_cache_inv(start, size) invalidates the affected parts of the
- *    caches.  Dirty lines of the caches may be written back or simply
- *    be discarded.  This operation is necessary before dma operations
- *    to the memory.
- *  - dma_cache_wback(start, size) writes back any dirty lines but does
- *    not invalidate the cache.  This can be used before DMA reads from
- *    memory,
- */
-
-#define dma_cache_wback_inv(_start,_size) \
-    __flush_purge_region(_start,_size)
-#define dma_cache_inv(_start,_size) \
-    __flush_invalidate_region(_start,_size)
-#define dma_cache_wback(_start,_size) \
-    __flush_wback_region(_start,_size)
 
 /*
  * Convert a physical pointer to a virtual kernel pointer for /dev/mem

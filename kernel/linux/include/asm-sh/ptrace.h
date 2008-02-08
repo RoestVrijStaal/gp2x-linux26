@@ -1,8 +1,6 @@
 #ifndef __ASM_SH_PTRACE_H
 #define __ASM_SH_PTRACE_H
 
-#include <asm/ubc.h>
-
 /*
  * Copyright (C) 1999, 2000  Niibe Yutaka
  *
@@ -43,9 +41,6 @@
 
 #define REG_FPSCR	55
 #define REG_FPUL	56
-
-/* options set using PTRACE_SETOPTIONS */
-#define PTRACE_O_TRACESYSGOOD     0x00000001
 
 /*
  * This struct defines the way the registers are stored on the
