@@ -24,7 +24,11 @@
 #include <linux/platform_device.h>
 
 #include <asm/io.h>
+#ifdef CONFIG_40x
+#include <asm/ibm405.h>
+#else
 #include <asm/ibm44x.h>
+#endif
 
 struct ndfc_nand_mtd {
 	struct mtd_info			mtd;
@@ -56,7 +60,7 @@ static void ndfc_select_chip(struct mtd_info *mtd, int chip)
 		ccr |= NDFC_CCR_BS(chip + pchip->chip_offset);
 	} else
 		ccr |= NDFC_CCR_RESET_CE;
-	writel(ccr, ndfc->ndfcbase + NDFC_CCR);
+	__raw_writel(ccr, ndfc->ndfcbase + NDFC_CCR);
 }
 
 static void ndfc_hwcontrol(struct mtd_info *mtd, int cmd, unsigned int ctrl)
@@ -168,7 +172,7 @@ static void ndfc_chip_init(struct ndfc_nand_mtd *mtd)
 	chip->ecc.mode = NAND_ECC_HW;
 	chip->ecc.size = 256;
 	chip->ecc.bytes = 3;
-	chip->ecclayout = mtd->pl_chip->ecclayout;
+	chip->ecclayout = chip->ecc.layout = mtd->pl_chip->ecclayout;
 	mtd->mtd.priv = chip;
 	mtd->mtd.owner = THIS_MODULE;
 }
@@ -230,7 +234,11 @@ static int ndfc_nand_probe(struct platform_device *pdev)
 	struct ndfc_controller *ndfc = &ndfc_ctrl;
 	unsigned long long phys = settings->ndfc_erpn | res->start;
 
+#ifndef CONFIG_PHYS_64BIT
+	ndfc->ndfcbase = ioremap((phys_addr_t)phys, res->end - res->start + 1);
+#else
 	ndfc->ndfcbase = ioremap64(phys, res->end - res->start + 1);
+#endif
 	if (!ndfc->ndfcbase) {
 		printk(KERN_ERR "NDFC: ioremap failed\n");
 		return -EIO;
