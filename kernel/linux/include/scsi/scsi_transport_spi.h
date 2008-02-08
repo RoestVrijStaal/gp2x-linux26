@@ -53,7 +53,8 @@ struct spi_transport_attrs {
 	unsigned int support_ius; /* support Information Units */
 	unsigned int support_qas; /* supports quick arbitration and selection */
 	/* Private Fields */
-	unsigned int dv_pending:1; /* Internal flag */
+	unsigned int dv_pending:1; /* Internal flag: DV Requested */
+	unsigned int dv_in_progress:1;	/* Internal: DV started */
 	struct mutex dv_mutex; /* semaphore to serialise dv */
 };
 
@@ -84,6 +85,7 @@ struct spi_host_attrs {
 #define spi_pcomp_en(x)	(((struct spi_transport_attrs *)&(x)->starget_data)->pcomp_en)
 #define spi_hold_mcs(x)	(((struct spi_transport_attrs *)&(x)->starget_data)->hold_mcs)
 #define spi_initial_dv(x)	(((struct spi_transport_attrs *)&(x)->starget_data)->initial_dv)
+#define spi_dv_pending(x) (((struct spi_transport_attrs *)&(x)->starget_data)->dv_pending)
 
 #define spi_support_sync(x)	(((struct spi_transport_attrs *)&(x)->starget_data)->support_sync)
 #define spi_support_wide(x)	(((struct spi_transport_attrs *)&(x)->starget_data)->support_wide)
