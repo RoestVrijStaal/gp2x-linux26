@@ -13,11 +13,12 @@
 struct arch_thread {
         unsigned long debugregs[8];
         int debugregs_seq;
+        unsigned long fs;
         struct faultinfo faultinfo;
 };
 
 /* REP NOP (PAUSE) is a good thing to insert into busy-wait loops. */
-extern inline void rep_nop(void)
+static inline void rep_nop(void)
 {
 	__asm__ __volatile__("rep;nop": : :"memory");
 }
@@ -25,8 +26,9 @@ extern inline void rep_nop(void)
 #define cpu_relax()   rep_nop()
 
 #define INIT_ARCH_THREAD { .debugregs  		= { [ 0 ... 7 ] = 0 }, \
-                           .debugregs_seq	= 0, \
-                           .faultinfo		= { 0, 0, 0 } }
+                           .debugregs_seq	= 0,			       \
+			   .fs			= 0, \
+			   .faultinfo		= { 0, 0, 0 } }
 
 static inline void arch_flush_thread(struct arch_thread *thread)
 {
