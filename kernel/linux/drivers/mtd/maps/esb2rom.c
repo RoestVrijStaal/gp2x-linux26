@@ -1,12 +1,18 @@
 /*
- * ichxrom.c
+ * esb2rom.c
  *
- * Normal mappings of chips in physical memory
- * $Id: ichxrom.c,v 1.19 2005/11/07 11:14:27 gleixner Exp $
+ * Normal mappings of flash chips in physical memory
+ * through the Intel ESB2 Southbridge.
+ *
+ * This was derived from ichxrom.c in May 2006 by
+ *	Lew Glendenning <lglendenning@lnxi.com>
+ *
+ * Eric Biederman, of course, was a major help in this effort.
  */
 
 #include <linux/module.h>
 #include <linux/types.h>
+#include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <asm/io.h>
@@ -18,21 +24,76 @@
 #include <linux/pci_ids.h>
 #include <linux/list.h>
 
-#define xstr(s) str(s)
-#define str(s) #s
-#define MOD_NAME xstr(KBUILD_BASENAME)
+#define MOD_NAME KBUILD_BASENAME
 
 #define ADDRESS_NAME_LEN 18
 
 #define ROM_PROBE_STEP_SIZE (64*1024) /* 64KiB */
 
-#define BIOS_CNTL	0x4e
-#define FWH_DEC_EN1	0xE3
-#define FWH_DEC_EN2	0xF0
-#define FWH_SEL1	0xE8
-#define FWH_SEL2	0xEE
+#define BIOS_CNTL		0xDC
+#define BIOS_LOCK_ENABLE	0x02
+#define BIOS_WRITE_ENABLE	0x01
 
-struct ichxrom_window {
+/* This became a 16-bit register, and EN2 has disappeared */
+#define FWH_DEC_EN1	0xD8
+#define FWH_F8_EN	0x8000
+#define FWH_F0_EN	0x4000
+#define FWH_E8_EN	0x2000
+#define FWH_E0_EN	0x1000
+#define FWH_D8_EN	0x0800
+#define FWH_D0_EN	0x0400
+#define FWH_C8_EN	0x0200
+#define FWH_C0_EN	0x0100
+#define FWH_LEGACY_F_EN	0x0080
+#define FWH_LEGACY_E_EN	0x0040
+/* reserved  0x0020 and 0x0010 */
+#define FWH_70_EN	0x0008
+#define FWH_60_EN	0x0004
+#define FWH_50_EN	0x0002
+#define FWH_40_EN	0x0001
+
+/* these are 32-bit values */
+#define FWH_SEL1	0xD0
+#define FWH_SEL2	0xD4
+
+#define FWH_8MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN | FWH_C0_EN | \
+			 FWH_70_EN | FWH_60_EN | FWH_50_EN | FWH_40_EN)
+
+#define FWH_7MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN | FWH_C0_EN | \
+			 FWH_70_EN | FWH_60_EN | FWH_50_EN)
+
+#define FWH_6MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN | FWH_C0_EN | \
+			 FWH_70_EN | FWH_60_EN)
+
+#define FWH_5MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN | FWH_C0_EN | \
+			 FWH_70_EN)
+
+#define FWH_4MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN | FWH_C0_EN)
+
+#define FWH_3_5MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN | FWH_C8_EN)
+
+#define FWH_3MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN | FWH_D0_EN)
+
+#define FWH_2_5MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN | \
+			 FWH_D8_EN)
+
+#define FWH_2MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN | FWH_E0_EN)
+
+#define FWH_1_5MiB	(FWH_F8_EN | FWH_F0_EN | FWH_E8_EN)
+
+#define FWH_1MiB	(FWH_F8_EN | FWH_F0_EN)
+
+#define FWH_0_5MiB	(FWH_F8_EN)
+
+
+struct esb2rom_window {
 	void __iomem* virt;
 	unsigned long phys;
 	unsigned long size;
@@ -41,7 +102,7 @@ struct ichxrom_window {
 	struct pci_dev *pdev;
 };
 
-struct ichxrom_map_info {
+struct esb2rom_map_info {
 	struct list_head list;
 	struct map_info map;
 	struct mtd_info *mtd;
@@ -49,19 +110,19 @@ struct ichxrom_map_info {
 	char map_name[sizeof(MOD_NAME) + 2 + ADDRESS_NAME_LEN];
 };
 
-static struct ichxrom_window ichxrom_window = {
-	.maps = LIST_HEAD_INIT(ichxrom_window.maps),
+static struct esb2rom_window esb2rom_window = {
+	.maps = LIST_HEAD_INIT(esb2rom_window.maps),
 };
 
-static void ichxrom_cleanup(struct ichxrom_window *window)
+static void esb2rom_cleanup(struct esb2rom_window *window)
 {
-	struct ichxrom_map_info *map, *scratch;
-	u16 word;
+	struct esb2rom_map_info *map, *scratch;
+	u8 byte;
 
 	/* Disable writes through the rom window */
-	pci_read_config_word(window->pdev, BIOS_CNTL, &word);
-	pci_write_config_word(window->pdev, BIOS_CNTL, word & ~1);
-	pci_dev_put(window->pdev);
+	pci_read_config_byte(window->pdev, BIOS_CNTL, &byte);
+	pci_write_config_byte(window->pdev, BIOS_CNTL,
+		byte & ~BIOS_WRITE_ENABLE);
 
 	/* Free all of the mtd devices */
 	list_for_each_entry_safe(map, scratch, &window->maps, list) {
@@ -79,91 +140,97 @@ static void ichxrom_cleanup(struct ichxrom_window *window)
 		window->virt = NULL;
 		window->phys = 0;
 		window->size = 0;
-		window->pdev = NULL;
 	}
+	pci_dev_put(window->pdev);
 }
 
-
-static int __devinit ichxrom_init_one (struct pci_dev *pdev,
-	const struct pci_device_id *ent)
+static int __devinit esb2rom_init_one(struct pci_dev *pdev,
+				      const struct pci_device_id *ent)
 {
 	static char *rom_probe_types[] = { "cfi_probe", "jedec_probe", NULL };
-	struct ichxrom_window *window = &ichxrom_window;
-	struct ichxrom_map_info *map = NULL;
+	struct esb2rom_window *window = &esb2rom_window;
+	struct esb2rom_map_info *map = NULL;
 	unsigned long map_top;
 	u8 byte;
 	u16 word;
 
-	/* For now I just handle the ichx and I assume there
+	/* For now I just handle the ecb2 and I assume there
 	 * are not a lot of resources up at the top of the address
 	 * space.  It is possible to handle other devices in the
-	 * top 16MB but it is very painful.  Also since
+	 * top 16MiB but it is very painful.  Also since
 	 * you can only really attach a FWH to an ICHX there
 	 * a number of simplifications you can make.
 	 *
-	 * Also you can page firmware hubs if an 8MB window isn't enough
+	 * Also you can page firmware hubs if an 8MiB window isn't enough
 	 * but don't currently handle that case either.
 	 */
-	window->pdev = pdev;
+	window->pdev = pci_dev_get(pdev);
+
+	/* RLG:  experiment 2.  Force the window registers to the widest values */
+
+/*
+	pci_read_config_word(pdev, FWH_DEC_EN1, &word);
+	printk(KERN_DEBUG "Original FWH_DEC_EN1 : %x\n", word);
+	pci_write_config_byte(pdev, FWH_DEC_EN1, 0xff);
+	pci_read_config_byte(pdev, FWH_DEC_EN1, &byte);
+	printk(KERN_DEBUG "New FWH_DEC_EN1 : %x\n", byte);
+
+	pci_read_config_byte(pdev, FWH_DEC_EN2, &byte);
+	printk(KERN_DEBUG "Original FWH_DEC_EN2 : %x\n", byte);
+	pci_write_config_byte(pdev, FWH_DEC_EN2, 0x0f);
+	pci_read_config_byte(pdev, FWH_DEC_EN2, &byte);
+	printk(KERN_DEBUG "New FWH_DEC_EN2 : %x\n", byte);
+*/
 
 	/* Find a region continuous to the end of the ROM window  */
 	window->phys = 0;
-	pci_read_config_byte(pdev, FWH_DEC_EN1, &byte);
-	if (byte == 0xff) {
+	pci_read_config_word(pdev, FWH_DEC_EN1, &word);
+	printk(KERN_DEBUG "pci_read_config_word : %x\n", word);
+
+	if ((word & FWH_8MiB) == FWH_8MiB)
+		window->phys = 0xff400000;
+	else if ((word & FWH_7MiB) == FWH_7MiB)
+		window->phys = 0xff500000;
+	else if ((word & FWH_6MiB) == FWH_6MiB)
+		window->phys = 0xff600000;
+	else if ((word & FWH_5MiB) == FWH_5MiB)
+		window->phys = 0xFF700000;
+	else if ((word & FWH_4MiB) == FWH_4MiB)
 		window->phys = 0xffc00000;
-		pci_read_config_byte(pdev, FWH_DEC_EN2, &byte);
-		if ((byte & 0x0f) == 0x0f) {
-			window->phys = 0xff400000;
-		}
-		else if ((byte & 0x0e) == 0x0e) {
-			window->phys = 0xff500000;
-		}
-		else if ((byte & 0x0c) == 0x0c) {
-			window->phys = 0xff600000;
-		}
-		else if ((byte & 0x08) == 0x08) {
-			window->phys = 0xff700000;
-		}
-	}
-	else if ((byte & 0xfe) == 0xfe) {
+	else if ((word & FWH_3_5MiB) == FWH_3_5MiB)
 		window->phys = 0xffc80000;
-	}
-	else if ((byte & 0xfc) == 0xfc) {
+	else if ((word & FWH_3MiB) == FWH_3MiB)
 		window->phys = 0xffd00000;
-	}
-	else if ((byte & 0xf8) == 0xf8) {
+	else if ((word & FWH_2_5MiB) == FWH_2_5MiB)
 		window->phys = 0xffd80000;
-	}
-	else if ((byte & 0xf0) == 0xf0) {
+	else if ((word & FWH_2MiB) == FWH_2MiB)
 		window->phys = 0xffe00000;
-	}
-	else if ((byte & 0xe0) == 0xe0) {
+	else if ((word & FWH_1_5MiB) == FWH_1_5MiB)
 		window->phys = 0xffe80000;
-	}
-	else if ((byte & 0xc0) == 0xc0) {
+	else if ((word & FWH_1MiB) == FWH_1MiB)
 		window->phys = 0xfff00000;
-	}
-	else if ((byte & 0x80) == 0x80) {
+	else if ((word & FWH_0_5MiB) == FWH_0_5MiB)
 		window->phys = 0xfff80000;
-	}
 
 	if (window->phys == 0) {
 		printk(KERN_ERR MOD_NAME ": Rom window is closed\n");
 		goto out;
 	}
+
+	/* reserved  0x0020 and 0x0010 */
 	window->phys -= 0x400000UL;
 	window->size = (0xffffffffUL - window->phys) + 1UL;
 
 	/* Enable writes through the rom window */
-	pci_read_config_word(pdev, BIOS_CNTL, &word);
-	if (!(word & 1)  && (word & (1<<1))) {
+	pci_read_config_byte(pdev, BIOS_CNTL, &byte);
+	if (!(byte & BIOS_WRITE_ENABLE)  && (byte & (BIOS_LOCK_ENABLE))) {
 		/* The BIOS will generate an error if I enable
 		 * this device, so don't even try.
 		 */
 		printk(KERN_ERR MOD_NAME ": firmware access control, I can't enable writes\n");
 		goto out;
 	}
-	pci_write_config_word(pdev, BIOS_CNTL, word | 1);
+	pci_write_config_byte(pdev, BIOS_CNTL, byte | BIOS_WRITE_ENABLE);
 
 	/*
 	 * Try to reserve the window mem region.  If this fails then
@@ -177,7 +244,7 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 		window->rsrc.parent = NULL;
 		printk(KERN_DEBUG MOD_NAME
 			": %s(): Unable to register resource"
-			" 0x%.16llx-0x%.16llx - kernel bug?\n",
+			" 0x%.08llx-0x%.08llx - kernel bug?\n",
 			__func__,
 			(unsigned long long)window->rsrc.start,
 			(unsigned long long)window->rsrc.end);
@@ -194,26 +261,26 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 	/* Get the first address to look for an rom chip at */
 	map_top = window->phys;
 	if ((window->phys & 0x3fffff) != 0) {
+		/* if not aligned on 4MiB, look 4MiB lower in address space */
 		map_top = window->phys + 0x400000;
 	}
 #if 1
 	/* The probe sequence run over the firmware hub lock
 	 * registers sets them to 0x7 (no access).
-	 * Probe at most the last 4M of the address space.
+	 * (Insane hardware design, but most copied Intel's.)
+	 * ==> Probe at most the last 4M of the address space.
 	 */
-	if (map_top < 0xffc00000) {
+	if (map_top < 0xffc00000)
 		map_top = 0xffc00000;
-	}
 #endif
 	/* Loop through and look for rom chips */
-	while((map_top - 1) < 0xffffffffUL) {
+	while ((map_top - 1) < 0xffffffffUL) {
 		struct cfi_private *cfi;
 		unsigned long offset;
 		int i;
 
-		if (!map) {
+		if (!map)
 			map = kmalloc(sizeof(*map), GFP_KERNEL);
-		}
 		if (!map) {
 			printk(KERN_ERR MOD_NAME ": kmalloc failed");
 			goto out;
@@ -235,8 +302,7 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 		 * needs to use a different method.
 		 */
 		for(map->map.bankwidth = 32; map->map.bankwidth;
-			map->map.bankwidth >>= 1)
-		{
+			map->map.bankwidth >>= 1) {
 			char **probe_type;
 			/* Skip bankwidths that are not supported */
 			if (!map_bankwidth_supported(map->map.bankwidth))
@@ -284,9 +350,8 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 		map->map.virt = window->virt;
 		map->map.phys = window->phys;
 		cfi = map->map.fldrv_priv;
-		for(i = 0; i < cfi->numchips; i++) {
+		for(i = 0; i < cfi->numchips; i++)
 			cfi->chips[i].start += offset;
-		}
 
 		/* Now that the mtd devices is complete claim and export it */
 		map->mtd->owner = THIS_MODULE;
@@ -295,7 +360,6 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 			map->mtd = NULL;
 			goto out;
 		}
-
 
 		/* Calculate the new value of map_top */
 		map_top += map->mtd->size;
@@ -311,20 +375,19 @@ static int __devinit ichxrom_init_one (struct pci_dev *pdev,
 
 	/* See if I have any map structures */
 	if (list_empty(&window->maps)) {
-		ichxrom_cleanup(window);
+		esb2rom_cleanup(window);
 		return -ENODEV;
 	}
 	return 0;
 }
 
-
-static void __devexit ichxrom_remove_one (struct pci_dev *pdev)
+static void __devexit esb2rom_remove_one (struct pci_dev *pdev)
 {
-	struct ichxrom_window *window = &ichxrom_window;
-	ichxrom_cleanup(window);
+	struct esb2rom_window *window = &esb2rom_window;
+	esb2rom_cleanup(window);
 }
 
-static struct pci_device_id ichxrom_pci_tbl[] __devinitdata = {
+static struct pci_device_id esb2rom_pci_tbl[] __devinitdata = {
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801BA_0,
 	  PCI_ANY_ID, PCI_ANY_ID, },
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801CA_0,
@@ -335,49 +398,58 @@ static struct pci_device_id ichxrom_pci_tbl[] __devinitdata = {
 	  PCI_ANY_ID, PCI_ANY_ID, },
 	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ESB_1,
 	  PCI_ANY_ID, PCI_ANY_ID, },
+	{ PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_ESB2_0,
+	  PCI_ANY_ID, PCI_ANY_ID, },
 	{ 0, },
 };
 
 #if 0
-MODULE_DEVICE_TABLE(pci, ichxrom_pci_tbl);
+MODULE_DEVICE_TABLE(pci, esb2rom_pci_tbl);
 
-static struct pci_driver ichxrom_driver = {
+static struct pci_driver esb2rom_driver = {
 	.name =		MOD_NAME,
-	.id_table =	ichxrom_pci_tbl,
-	.probe =	ichxrom_init_one,
-	.remove =	ichxrom_remove_one,
+	.id_table =	esb2rom_pci_tbl,
+	.probe =	esb2rom_init_one,
+	.remove =	esb2rom_remove_one,
 };
 #endif
 
-static int __init init_ichxrom(void)
+static int __init init_esb2rom(void)
 {
 	struct pci_dev *pdev;
 	struct pci_device_id *id;
+	int retVal;
 
 	pdev = NULL;
-	for (id = ichxrom_pci_tbl; id->vendor; id++) {
+	for (id = esb2rom_pci_tbl; id->vendor; id++) {
+		printk(KERN_DEBUG "device id = %x\n", id->device);
 		pdev = pci_get_device(id->vendor, id->device, NULL);
 		if (pdev) {
+			printk(KERN_DEBUG "matched device = %x\n", id->device);
 			break;
 		}
 	}
 	if (pdev) {
-		return ichxrom_init_one(pdev, &ichxrom_pci_tbl[0]);
+		printk(KERN_DEBUG "matched device id %x\n", id->device);
+		retVal = esb2rom_init_one(pdev, &esb2rom_pci_tbl[0]);
+		pci_dev_put(pdev);
+		printk(KERN_DEBUG "retVal = %d\n", retVal);
+		return retVal;
 	}
 	return -ENXIO;
 #if 0
-	return pci_register_driver(&ichxrom_driver);
+	return pci_register_driver(&esb2rom_driver);
 #endif
 }
 
-static void __exit cleanup_ichxrom(void)
+static void __exit cleanup_esb2rom(void)
 {
-	ichxrom_remove_one(ichxrom_window.pdev);
+	esb2rom_remove_one(esb2rom_window.pdev);
 }
 
-module_init(init_ichxrom);
-module_exit(cleanup_ichxrom);
+module_init(init_esb2rom);
+module_exit(cleanup_esb2rom);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Eric Biederman <ebiederman@lnxi.com>");
-MODULE_DESCRIPTION("MTD map driver for BIOS chips on the ICHX southbridge");
+MODULE_AUTHOR("Lew Glendenning <lglendenning@lnxi.com>");
+MODULE_DESCRIPTION("MTD map driver for BIOS chips on the ESB2 southbridge");

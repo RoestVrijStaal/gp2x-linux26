@@ -62,7 +62,7 @@ static int physmap_flash_remove(struct platform_device *dev)
 	}
 
 	if (info->map.virt != NULL)
-		iounmap((void *)info->map.virt);
+		iounmap(info->map.virt);
 
 	if (info->res != NULL) {
 		release_resource(info->res);
@@ -89,15 +89,14 @@ static int physmap_flash_probe(struct platform_device *dev)
 		return -ENODEV;
 
        	printk(KERN_NOTICE "physmap platform flash device: %.8llx at %.8llx\n",
-	    (unsigned long long)dev->resource->end - dev->resource->start + 1,
+	    (unsigned long long)(dev->resource->end - dev->resource->start + 1),
 	    (unsigned long long)dev->resource->start);
 
-	info = kmalloc(sizeof(struct physmap_flash_info), GFP_KERNEL);
+	info = kzalloc(sizeof(struct physmap_flash_info), GFP_KERNEL);
 	if (info == NULL) {
 		err = -ENOMEM;
 		goto err_out;
 	}
-	memset(info, 0, sizeof(*info));
 
 	platform_set_drvdata(dev, info);
 
@@ -158,9 +157,42 @@ err_out:
 	return err;
 }
 
+#ifdef CONFIG_PM
+static int physmap_flash_suspend(struct platform_device *dev, pm_message_t state)
+{
+	struct physmap_flash_info *info = platform_get_drvdata(dev);
+	int ret = 0;
+
+	if (info)
+		ret = info->mtd->suspend(info->mtd);
+
+	return ret;
+}
+
+static int physmap_flash_resume(struct platform_device *dev)
+{
+	struct physmap_flash_info *info = platform_get_drvdata(dev);
+	if (info)
+		info->mtd->resume(info->mtd);
+	return 0;
+}
+
+static void physmap_flash_shutdown(struct platform_device *dev)
+{
+	struct physmap_flash_info *info = platform_get_drvdata(dev);
+	if (info && info->mtd->suspend(info->mtd) == 0)
+		info->mtd->resume(info->mtd);
+}
+#endif
+
 static struct platform_driver physmap_flash_driver = {
 	.probe		= physmap_flash_probe,
 	.remove		= physmap_flash_remove,
+#ifdef CONFIG_PM
+	.suspend	= physmap_flash_suspend,
+	.resume		= physmap_flash_resume,
+	.shutdown	= physmap_flash_shutdown,
+#endif
 	.driver		= {
 		.name	= "physmap-flash",
 	},
