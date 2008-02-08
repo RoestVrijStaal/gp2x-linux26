@@ -4,7 +4,7 @@
  * service. It is used with both the legacy mc146818 and also  EFI
  * Struct rtc_time and first 12 ioctl by Paul Gortmaker, 1996 - separated out
  * from <linux/mc146818rtc.h> to this file for 2.4 kernels.
- * 
+ *
  * Copyright (C) 1999 Hewlett-Packard Co.
  * Copyright (C) 1999 Stephane Eranian <eranian@hpl.hp.com>
  */
@@ -13,7 +13,7 @@
 
 /*
  * The struct used to pass data via the following ioctl. Similar to the
- * struct tm in <time.h>, but it needs to be here so that the kernel 
+ * struct tm in <time.h>, but it needs to be here so that the kernel
  * source is self contained, allowing cross-compiles, etc. etc.
  */
 
@@ -50,7 +50,7 @@ struct rtc_wkalrm {
  *   pll_value*pll_posmult/pll_clock
  * -ve pll_value means clock will run slower by
  *   pll_value*pll_negmult/pll_clock
- */ 
+ */
 
 struct rtc_pll_info {
 	int pll_ctrl;       /* placeholder for fancier control */
@@ -133,20 +133,22 @@ struct rtc_class_ops {
 #define RTC_DEVICE_NAME_SIZE 20
 struct rtc_task;
 
+/* flags */
+#define RTC_DEV_BUSY 0
+
 struct rtc_device
 {
-	struct class_device class_dev;
+	struct device dev;
 	struct module *owner;
 
 	int id;
 	char name[RTC_DEVICE_NAME_SIZE];
 
-	struct rtc_class_ops *ops;
+	const struct rtc_class_ops *ops;
 	struct mutex ops_lock;
 
-	struct class_device *rtc_dev;
 	struct cdev char_dev;
-	struct mutex char_lock;
+	unsigned long flags;
 
 	unsigned long irq_data;
 	spinlock_t irq_lock;
@@ -168,35 +170,34 @@ struct rtc_device
 	unsigned int uie_timer_active:1;
 #endif
 };
-#define to_rtc_device(d) container_of(d, struct rtc_device, class_dev)
+#define to_rtc_device(d) container_of(d, struct rtc_device, dev)
 
 extern struct rtc_device *rtc_device_register(const char *name,
 					struct device *dev,
-					struct rtc_class_ops *ops,
+					const struct rtc_class_ops *ops,
 					struct module *owner);
-extern void rtc_device_unregister(struct rtc_device *rdev);
-extern int rtc_interface_register(struct class_interface *intf);
+extern void rtc_device_unregister(struct rtc_device *rtc);
 
-extern int rtc_read_time(struct class_device *class_dev, struct rtc_time *tm);
-extern int rtc_set_time(struct class_device *class_dev, struct rtc_time *tm);
-extern int rtc_set_mmss(struct class_device *class_dev, unsigned long secs);
-extern int rtc_read_alarm(struct class_device *class_dev,
+extern int rtc_read_time(struct rtc_device *rtc, struct rtc_time *tm);
+extern int rtc_set_time(struct rtc_device *rtc, struct rtc_time *tm);
+extern int rtc_set_mmss(struct rtc_device *rtc, unsigned long secs);
+extern int rtc_read_alarm(struct rtc_device *rtc,
 			struct rtc_wkalrm *alrm);
-extern int rtc_set_alarm(struct class_device *class_dev,
+extern int rtc_set_alarm(struct rtc_device *rtc,
 				struct rtc_wkalrm *alrm);
-extern void rtc_update_irq(struct class_device *class_dev,
+extern void rtc_update_irq(struct rtc_device *rtc,
 			unsigned long num, unsigned long events);
 
-extern struct class_device *rtc_class_open(char *name);
-extern void rtc_class_close(struct class_device *class_dev);
+extern struct rtc_device *rtc_class_open(char *name);
+extern void rtc_class_close(struct rtc_device *rtc);
 
-extern int rtc_irq_register(struct class_device *class_dev,
+extern int rtc_irq_register(struct rtc_device *rtc,
 				struct rtc_task *task);
-extern void rtc_irq_unregister(struct class_device *class_dev,
+extern void rtc_irq_unregister(struct rtc_device *rtc,
 				struct rtc_task *task);
-extern int rtc_irq_set_state(struct class_device *class_dev,
+extern int rtc_irq_set_state(struct rtc_device *rtc,
 				struct rtc_task *task, int enabled);
-extern int rtc_irq_set_freq(struct class_device *class_dev,
+extern int rtc_irq_set_freq(struct rtc_device *rtc,
 				struct rtc_task *task, int freq);
 
 typedef struct rtc_task {
@@ -208,7 +209,7 @@ int rtc_register(rtc_task_t *task);
 int rtc_unregister(rtc_task_t *task);
 int rtc_control(rtc_task_t *t, unsigned int cmd, unsigned long arg);
 void rtc_get_rtc_time(struct rtc_time *rtc_tm);
-irqreturn_t rtc_interrupt(int irq, void *dev_id, struct pt_regs *regs);
+irqreturn_t rtc_interrupt(int irq, void *dev_id);
 
 #endif /* __KERNEL__ */
 

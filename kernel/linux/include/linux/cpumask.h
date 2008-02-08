@@ -8,8 +8,8 @@
  * See detailed comments in the file linux/bitmap.h describing the
  * data type on which these cpumasks are based.
  *
- * For details of cpumask_scnprintf() and cpumask_parse(),
- * see bitmap_scnprintf() and bitmap_parse() in lib/bitmap.c.
+ * For details of cpumask_scnprintf() and cpumask_parse_user(),
+ * see bitmap_scnprintf() and bitmap_parse_user() in lib/bitmap.c.
  * For details of cpulist_scnprintf() and cpulist_parse(), see
  * bitmap_scnlistprintf() and bitmap_parselist(), also in bitmap.c.
  * For details of cpu_remap(), see bitmap_bitremap in lib/bitmap.c
@@ -49,7 +49,7 @@
  * unsigned long *cpus_addr(mask)	Array of unsigned long's in mask
  *
  * int cpumask_scnprintf(buf, len, mask) Format cpumask for printing
- * int cpumask_parse(ubuf, ulen, mask)	Parse ascii string as cpumask
+ * int cpumask_parse_user(ubuf, ulen, mask)	Parse ascii string as cpumask
  * int cpulist_scnprintf(buf, len, mask) Format cpumask as list for printing
  * int cpulist_parse(buf, map)		Parse ascii string as cpulist
  * int cpu_remap(oldbit, old, new)	newbit = map(old, new)(oldbit)
@@ -273,12 +273,12 @@ static inline int __cpumask_scnprintf(char *buf, int len,
 	return bitmap_scnprintf(buf, len, srcp->bits, nbits);
 }
 
-#define cpumask_parse(ubuf, ulen, dst) \
-			__cpumask_parse((ubuf), (ulen), &(dst), NR_CPUS)
-static inline int __cpumask_parse(const char __user *buf, int len,
+#define cpumask_parse_user(ubuf, ulen, dst) \
+			__cpumask_parse_user((ubuf), (ulen), &(dst), NR_CPUS)
+static inline int __cpumask_parse_user(const char __user *buf, int len,
 					cpumask_t *dstp, int nbits)
 {
-	return bitmap_parse(buf, len, dstp->bits, nbits);
+	return bitmap_parse_user(buf, len, dstp->bits, nbits);
 }
 
 #define cpulist_scnprintf(buf, len, src) \
@@ -397,12 +397,14 @@ extern cpumask_t cpu_present_map;
 #define cpu_present(cpu)	((cpu) == 0)
 #endif
 
+#define cpu_is_offline(cpu)	unlikely(!cpu_online(cpu))
+
 #ifdef CONFIG_SMP
-int highest_possible_processor_id(void);
+extern int nr_cpu_ids;
 #define any_online_cpu(mask) __any_online_cpu(&(mask))
 int __any_online_cpu(const cpumask_t *mask);
 #else
-#define highest_possible_processor_id()	0
+#define nr_cpu_ids			1
 #define any_online_cpu(mask)		0
 #endif
 

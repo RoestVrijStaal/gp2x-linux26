@@ -30,11 +30,11 @@ struct anon_vma {
 
 #ifdef CONFIG_MMU
 
-extern kmem_cache_t *anon_vma_cachep;
+extern struct kmem_cache *anon_vma_cachep;
 
 static inline struct anon_vma *anon_vma_alloc(void)
 {
-	return kmem_cache_alloc(anon_vma_cachep, SLAB_KERNEL);
+	return kmem_cache_alloc(anon_vma_cachep, GFP_KERNEL);
 }
 
 static inline void anon_vma_free(struct anon_vma *anon_vma)
@@ -72,19 +72,16 @@ void __anon_vma_link(struct vm_area_struct *);
 void page_add_anon_rmap(struct page *, struct vm_area_struct *, unsigned long);
 void page_add_new_anon_rmap(struct page *, struct vm_area_struct *, unsigned long);
 void page_add_file_rmap(struct page *);
-void page_remove_rmap(struct page *);
+void page_remove_rmap(struct page *, struct vm_area_struct *);
 
-/**
- * page_dup_rmap - duplicate pte mapping to a page
- * @page:	the page to add the mapping to
- *
- * For copy_page_range only: minimal extract from page_add_rmap,
- * avoiding unnecessary tests (already checked) so it's quicker.
- */
-static inline void page_dup_rmap(struct page *page)
+#ifdef CONFIG_DEBUG_VM
+void page_dup_rmap(struct page *page, struct vm_area_struct *vma, unsigned long address);
+#else
+static inline void page_dup_rmap(struct page *page, struct vm_area_struct *vma, unsigned long address)
 {
 	atomic_inc(&page->_mapcount);
 }
+#endif
 
 /*
  * Called from mm/vmscan.c to handle paging out
@@ -103,6 +100,14 @@ pte_t *page_check_address(struct page *, struct mm_struct *,
  */
 unsigned long page_address_in_vma(struct page *, struct vm_area_struct *);
 
+/*
+ * Cleans the PTEs of shared mappings.
+ * (and since clean PTEs should also be readonly, write protects them too)
+ *
+ * returns the number of cleaned PTEs.
+ */
+int page_mkclean(struct page *);
+
 #else	/* !CONFIG_MMU */
 
 #define anon_vma_init()		do {} while (0)
@@ -111,6 +116,12 @@ unsigned long page_address_in_vma(struct page *, struct vm_area_struct *);
 
 #define page_referenced(page,l) TestClearPageReferenced(page)
 #define try_to_unmap(page, refs) SWAP_FAIL
+
+static inline int page_mkclean(struct page *page)
+{
+	return 0;
+}
+
 
 #endif	/* CONFIG_MMU */
 

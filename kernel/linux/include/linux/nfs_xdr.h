@@ -1,7 +1,6 @@
 #ifndef _LINUX_NFS_XDR_H
 #define _LINUX_NFS_XDR_H
 
-#include <linux/sunrpc/xprt.h>
 #include <linux/nfsacl.h>
 
 /*
@@ -63,7 +62,8 @@ struct nfs_fattr {
 #define NFS_ATTR_FATTR		0x0002		/* post-op attributes */
 #define NFS_ATTR_FATTR_V3	0x0004		/* NFSv3 attributes */
 #define NFS_ATTR_FATTR_V4	0x0008		/* NFSv4 change attribute */
-#define NFS_ATTR_FATTR_V4_REFERRAL	0x0010		/* NFSv4 referral */
+#define NFS_ATTR_WCC_V4		0x0010		/* pre-op change attribute */
+#define NFS_ATTR_FATTR_V4_REFERRAL	0x0020		/* NFSv4 referral */
 
 /*
  * Info on the file system
@@ -120,7 +120,7 @@ struct nfs_openargs {
 	struct nfs_seqid *	seqid;
 	int			open_flags;
 	__u64                   clientid;
-	__u32                   id;
+	__u64                   id;
 	union {
 		struct iattr *  attrs;    /* UNCHECKED, GUARDED */
 		nfs4_verifier   verifier; /* EXCLUSIVE */
@@ -145,6 +145,7 @@ struct nfs_openres {
 	nfs4_stateid		delegation;
 	__u32			do_recall;
 	__u64			maxsize;
+	__u32			attrset[NFS4_BITMAP_SIZE];
 };
 
 /*
@@ -181,7 +182,7 @@ struct nfs_closeres {
  *   */
 struct nfs_lowner {
 	__u64			clientid;
-	u32			id;
+	__u64			id;
 };
 
 struct nfs_lock_args {
@@ -267,7 +268,7 @@ struct nfs_writeargs {
 
 struct nfs_writeverf {
 	enum nfs3_stable_how	committed;
-	__u32			verifier[2];
+	__be32			verifier[2];
 };
 
 struct nfs_writeres {
@@ -275,6 +276,21 @@ struct nfs_writeres {
 	struct nfs_writeverf *	verf;
 	__u32			count;
 	const struct nfs_server *server;
+};
+
+/*
+ * Common arguments to the unlink call
+ */
+struct nfs_removeargs {
+	const struct nfs_fh	*fh;
+	struct qstr		name;
+	const u32 *		bitmask;
+};
+
+struct nfs_removeres {
+	const struct nfs_server *server;
+	struct nfs4_change_info	cinfo;
+	struct nfs_fattr	dir_attr;
 };
 
 /*
@@ -359,8 +375,8 @@ struct nfs_symlinkargs {
 	struct nfs_fh *		fromfh;
 	const char *		fromname;
 	unsigned int		fromlen;
-	const char *		topath;
-	unsigned int		tolen;
+	struct page **		pages;
+	unsigned int		pathlen;
 	struct iattr *		sattr;
 };
 
@@ -421,7 +437,7 @@ struct nfs3_createargs {
 	unsigned int		len;
 	struct iattr *		sattr;
 	enum nfs3_createmode	createmode;
-	__u32			verifier[2];
+	__be32			verifier[2];
 };
 
 struct nfs3_mkdirargs {
@@ -435,8 +451,8 @@ struct nfs3_symlinkargs {
 	struct nfs_fh *		fromfh;
 	const char *		fromname;
 	unsigned int		fromlen;
-	const char *		topath;
-	unsigned int		tolen;
+	struct page **		pages;
+	unsigned int		pathlen;
 	struct iattr *		sattr;
 };
 
@@ -468,7 +484,7 @@ struct nfs3_linkargs {
 struct nfs3_readdirargs {
 	struct nfs_fh *		fh;
 	__u64			cookie;
-	__u32			verf[2];
+	__be32			verf[2];
 	int			plus;
 	unsigned int            count;
 	struct page **		pages;
@@ -504,7 +520,7 @@ struct nfs3_linkres {
 
 struct nfs3_readdirres {
 	struct nfs_fattr *	dir_attr;
-	__u32 *			verf;
+	__be32 *		verf;
 	int			plus;
 };
 
@@ -523,10 +539,13 @@ typedef u64 clientid4;
 
 struct nfs4_accessargs {
 	const struct nfs_fh *		fh;
+	const u32 *			bitmask;
 	u32				access;
 };
 
 struct nfs4_accessres {
+	const struct nfs_server *	server;
+	struct nfs_fattr *		fattr;
 	u32				supported;
 	u32				access;
 };
@@ -534,7 +553,10 @@ struct nfs4_accessres {
 struct nfs4_create_arg {
 	u32				ftype;
 	union {
-		struct qstr *		symlink;    /* NF4LNK */
+		struct {
+			struct page **	pages;
+			unsigned int	len;
+		} symlink;   /* NF4LNK */
 		struct {
 			u32		specdata1;
 			u32		specdata2;
@@ -626,18 +648,6 @@ struct nfs4_readlink {
 	unsigned int			pgbase;
 	unsigned int			pglen;   /* zero-copy data */
 	struct page **			pages;   /* zero-copy data */
-};
-
-struct nfs4_remove_arg {
-	const struct nfs_fh *		fh;
-	const struct qstr *		name;
-	const u32 *			bitmask;
-};
-
-struct nfs4_remove_res {
-	const struct nfs_server *	server;
-	struct nfs4_change_info		cinfo;
-	struct nfs_fattr *		dir_attr;
 };
 
 struct nfs4_rename_arg {
@@ -765,11 +775,14 @@ struct nfs_access_entry;
 struct nfs_rpc_ops {
 	int	version;		/* Protocol version */
 	struct dentry_operations *dentry_ops;
-	struct inode_operations *dir_inode_ops;
-	struct inode_operations *file_inode_ops;
+	const struct inode_operations *dir_inode_ops;
+	const struct inode_operations *file_inode_ops;
 
 	int	(*getroot) (struct nfs_server *, struct nfs_fh *,
 			    struct nfs_fsinfo *);
+	int	(*lookupfh)(struct nfs_server *, struct nfs_fh *,
+			    struct qstr *, struct nfs_fh *,
+			    struct nfs_fattr *);
 	int	(*getattr) (struct nfs_server *, struct nfs_fh *,
 			    struct nfs_fattr *);
 	int	(*setattr) (struct dentry *, struct nfs_fattr *,
@@ -779,21 +792,16 @@ struct nfs_rpc_ops {
 	int	(*access)  (struct inode *, struct nfs_access_entry *);
 	int	(*readlink)(struct inode *, struct page *, unsigned int,
 			    unsigned int);
-	int	(*read)    (struct nfs_read_data *);
-	int	(*write)   (struct nfs_write_data *);
-	int	(*commit)  (struct nfs_write_data *);
 	int	(*create)  (struct inode *, struct dentry *,
 			    struct iattr *, int, struct nameidata *);
 	int	(*remove)  (struct inode *, struct qstr *);
-	int	(*unlink_setup)  (struct rpc_message *,
-			    struct dentry *, struct qstr *);
-	int	(*unlink_done) (struct dentry *, struct rpc_task *);
+	void	(*unlink_setup)  (struct rpc_message *, struct inode *dir);
+	int	(*unlink_done) (struct rpc_task *, struct inode *);
 	int	(*rename)  (struct inode *, struct qstr *,
 			    struct inode *, struct qstr *);
 	int	(*link)    (struct inode *, struct inode *, struct qstr *);
-	int	(*symlink) (struct inode *, struct qstr *, struct qstr *,
-			    struct iattr *, struct nfs_fh *,
-			    struct nfs_fattr *);
+	int	(*symlink) (struct inode *, struct dentry *, struct page *,
+			    unsigned int, struct iattr *);
 	int	(*mkdir)   (struct inode *, struct dentry *, struct iattr *);
 	int	(*rmdir)   (struct inode *, struct qstr *);
 	int	(*readdir) (struct dentry *, struct rpc_cred *,
@@ -806,7 +814,8 @@ struct nfs_rpc_ops {
 			    struct nfs_fsinfo *);
 	int	(*pathconf) (struct nfs_server *, struct nfs_fh *,
 			     struct nfs_pathconf *);
-	u32 *	(*decode_dirent)(u32 *, struct nfs_entry *, int plus);
+	int	(*set_capabilities)(struct nfs_server *, struct nfs_fh *);
+	__be32 *(*decode_dirent)(__be32 *, struct nfs_entry *, int plus);
 	void	(*read_setup)   (struct nfs_read_data *);
 	int	(*read_done)  (struct rpc_task *, struct nfs_read_data *);
 	void	(*write_setup)  (struct nfs_write_data *, int how);
@@ -829,9 +838,9 @@ struct nfs_rpc_ops {
 /*
  * Function vectors etc. for the NFS client
  */
-extern struct nfs_rpc_ops	nfs_v2_clientops;
-extern struct nfs_rpc_ops	nfs_v3_clientops;
-extern struct nfs_rpc_ops	nfs_v4_clientops;
+extern const struct nfs_rpc_ops	nfs_v2_clientops;
+extern const struct nfs_rpc_ops	nfs_v3_clientops;
+extern const struct nfs_rpc_ops	nfs_v4_clientops;
 extern struct rpc_version	nfs_version2;
 extern struct rpc_version	nfs_version3;
 extern struct rpc_version	nfs_version4;

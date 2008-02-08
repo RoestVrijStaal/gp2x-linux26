@@ -120,7 +120,7 @@ struct reiserfs_journal_cnode {
 	struct buffer_head *bh;	/* real buffer head */
 	struct super_block *sb;	/* dev of real buffer head */
 	__u32 blocknr;		/* block number of real buffer head, == 0 when buffer on disk */
-	long state;
+	unsigned long state;
 	struct reiserfs_journal_list *jlist;	/* journal list this cnode lives in */
 	struct reiserfs_journal_cnode *next;	/* next in transaction list */
 	struct reiserfs_journal_cnode *prev;	/* prev in transaction list */
@@ -181,7 +181,7 @@ struct reiserfs_journal {
 	struct block_device *j_dev_bd;
 	int j_1st_reserved_block;	/* first block on s_dev of reserved area journal */
 
-	long j_state;
+	unsigned long j_state;
 	unsigned long j_trans_id;
 	unsigned long j_mount_id;
 	unsigned long j_start;	/* start of current waiting commit (index into j_ap_blocks) */
@@ -249,7 +249,8 @@ struct reiserfs_journal {
 	int j_errno;
 
 	/* when flushing ordered buffers, throttle new ordered writers */
-	struct work_struct j_work;
+	struct delayed_work j_work;
+	struct super_block *j_work_sb;
 	atomic_t j_async_throttle;
 };
 
@@ -264,10 +265,7 @@ enum journal_state_bits {
 typedef __u32(*hashf_t) (const signed char *, int);
 
 struct reiserfs_bitmap_info {
-	// FIXME: Won't work with block sizes > 8K
-	__u16 first_zero_hint;
-	__u16 free_count;
-	struct buffer_head *bh;	/* the actual bitmap */
+	__u32 free_count;
 };
 
 struct proc_dir_entry;
@@ -401,9 +399,10 @@ struct reiserfs_sb_info {
 	int reserved_blocks;	/* amount of blocks reserved for further allocations */
 	spinlock_t bitmap_lock;	/* this lock on now only used to protect reserved_blocks variable */
 	struct dentry *priv_root;	/* root of /.reiserfs_priv */
+#ifdef CONFIG_REISERFS_FS_XATTR
 	struct dentry *xattr_root;	/* root of /.reiserfs_priv/.xa */
 	struct rw_semaphore xattr_dir_sem;
-
+#endif
 	int j_errno;
 #ifdef CONFIG_QUOTA
 	char *s_qf_names[MAXQUOTAS];
@@ -414,6 +413,7 @@ struct reiserfs_sb_info {
 /* Definitions of reiserfs on-disk properties: */
 #define REISERFS_3_5 0
 #define REISERFS_3_6 1
+#define REISERFS_OLD_FORMAT 2
 
 enum reiserfs_mount_options {
 /* Mount options */
@@ -429,7 +429,7 @@ enum reiserfs_mount_options {
 /* -o hash={tea, rupasov, r5, detect} is meant for properly mounting 
 ** reiserfs disks from 3.5.19 or earlier.  99% of the time, this option
 ** is not required.  If the normal autodection code can't determine which
-** hash to use (because both hases had the same value for a file)
+** hash to use (because both hashes had the same value for a file)
 ** use this option to force a specific hash.  It won't allow you to override
 ** the existing hash on the FS, so if you have a tea hash disk, and mount
 ** with -o hash=rupasov, the mount will fail.

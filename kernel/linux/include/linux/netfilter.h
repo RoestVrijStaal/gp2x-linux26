@@ -51,7 +51,7 @@ struct sk_buff;
 struct net_device;
 
 typedef unsigned int nf_hookfn(unsigned int hooknum,
-			       struct sk_buff **skb,
+			       struct sk_buff *skb,
 			       const struct net_device *in,
 			       const struct net_device *out,
 			       int (*okfn)(struct sk_buff *));
@@ -88,9 +88,8 @@ struct nf_sockopt_ops
 	int (*compat_get)(struct sock *sk, int optval,
 			void __user *user, int *len);
 
-	/* Number of users inside set() or get(). */
-	unsigned int use;
-	struct task_struct *cleanup_task;
+	/* Use the module struct to lock set/get code in place */
+	struct module *owner;
 };
 
 /* Each queued (to userspace) skbuff has one of these. */
@@ -116,6 +115,16 @@ void nf_unregister_hooks(struct nf_hook_ops *reg, unsigned int n);
    need to check permissions yourself! */
 int nf_register_sockopt(struct nf_sockopt_ops *reg);
 void nf_unregister_sockopt(struct nf_sockopt_ops *reg);
+
+#ifdef CONFIG_SYSCTL
+/* Sysctl registration */
+struct ctl_table_header *nf_register_sysctl_table(struct ctl_table *path,
+						  struct ctl_table *table);
+void nf_unregister_sysctl_table(struct ctl_table_header *header,
+				struct ctl_table *table);
+extern struct ctl_table nf_net_netfilter_sysctl_path[];
+extern struct ctl_table nf_net_ipv4_netfilter_sysctl_path[];
+#endif /* CONFIG_SYSCTL */
 
 extern struct list_head nf_hooks[NPROTO][NF_MAX_HOOKS];
 
@@ -162,8 +171,8 @@ struct nf_logger {
 
 /* Function to register/unregister log function. */
 int nf_log_register(int pf, struct nf_logger *logger);
-int nf_log_unregister_pf(int pf);
-void nf_log_unregister_logger(struct nf_logger *logger);
+void nf_log_unregister(struct nf_logger *logger);
+void nf_log_unregister_pf(int pf);
 
 /* Calls the registered backend logging function */
 void nf_log_packet(int pf,
@@ -174,7 +183,7 @@ void nf_log_packet(int pf,
 		   struct nf_loginfo *li,
 		   const char *fmt, ...);
 
-int nf_hook_slow(int pf, unsigned int hook, struct sk_buff **pskb,
+int nf_hook_slow(int pf, unsigned int hook, struct sk_buff *skb,
 		 struct net_device *indev, struct net_device *outdev,
 		 int (*okfn)(struct sk_buff *), int thresh);
 
@@ -186,7 +195,7 @@ int nf_hook_slow(int pf, unsigned int hook, struct sk_buff **pskb,
  *	value indicates the packet has been consumed by the hook.
  */
 static inline int nf_hook_thresh(int pf, unsigned int hook,
-				 struct sk_buff **pskb,
+				 struct sk_buff *skb,
 				 struct net_device *indev,
 				 struct net_device *outdev,
 				 int (*okfn)(struct sk_buff *), int thresh,
@@ -198,14 +207,14 @@ static inline int nf_hook_thresh(int pf, unsigned int hook,
 	if (list_empty(&nf_hooks[pf][hook]))
 		return 1;
 #endif
-	return nf_hook_slow(pf, hook, pskb, indev, outdev, okfn, thresh);
+	return nf_hook_slow(pf, hook, skb, indev, outdev, okfn, thresh);
 }
 
-static inline int nf_hook(int pf, unsigned int hook, struct sk_buff **pskb,
+static inline int nf_hook(int pf, unsigned int hook, struct sk_buff *skb,
 			  struct net_device *indev, struct net_device *outdev,
 			  int (*okfn)(struct sk_buff *))
 {
-	return nf_hook_thresh(pf, hook, pskb, indev, outdev, okfn, INT_MIN, 1);
+	return nf_hook_thresh(pf, hook, skb, indev, outdev, okfn, INT_MIN, 1);
 }
                    
 /* Activate hook; either okfn or kfree_skb called, unless a hook
@@ -232,13 +241,13 @@ static inline int nf_hook(int pf, unsigned int hook, struct sk_buff **pskb,
 
 #define NF_HOOK_THRESH(pf, hook, skb, indev, outdev, okfn, thresh)	       \
 ({int __ret;								       \
-if ((__ret=nf_hook_thresh(pf, hook, &(skb), indev, outdev, okfn, thresh, 1)) == 1)\
+if ((__ret=nf_hook_thresh(pf, hook, (skb), indev, outdev, okfn, thresh, 1)) == 1)\
 	__ret = (okfn)(skb);						       \
 __ret;})
 
 #define NF_HOOK_COND(pf, hook, skb, indev, outdev, okfn, cond)		       \
 ({int __ret;								       \
-if ((__ret=nf_hook_thresh(pf, hook, &(skb), indev, outdev, okfn, INT_MIN, cond)) == 1)\
+if ((__ret=nf_hook_thresh(pf, hook, (skb), indev, outdev, okfn, INT_MIN, cond)) == 1)\
 	__ret = (okfn)(skb);						       \
 __ret;})
 
@@ -265,14 +274,12 @@ struct nf_queue_handler {
 };
 extern int nf_register_queue_handler(int pf, 
                                      struct nf_queue_handler *qh);
-extern int nf_unregister_queue_handler(int pf);
+extern int nf_unregister_queue_handler(int pf,
+				       struct nf_queue_handler *qh);
 extern void nf_unregister_queue_handlers(struct nf_queue_handler *qh);
 extern void nf_reinject(struct sk_buff *skb,
 			struct nf_info *info,
 			unsigned int verdict);
-
-extern void (*ip_ct_attach)(struct sk_buff *, struct sk_buff *);
-extern void nf_ct_attach(struct sk_buff *, struct sk_buff *);
 
 /* FIXME: Before cache is ever used, this must be implemented for real. */
 extern void nf_invalidate_cache(int pf);
@@ -280,15 +287,37 @@ extern void nf_invalidate_cache(int pf);
 /* Call this before modifying an existing packet: ensures it is
    modifiable and linear to the point you care about (writable_len).
    Returns true or false. */
-extern int skb_make_writable(struct sk_buff **pskb, unsigned int writable_len);
+extern int skb_make_writable(struct sk_buff *skb, unsigned int writable_len);
+
+static inline void nf_csum_replace4(__sum16 *sum, __be32 from, __be32 to)
+{
+	__be32 diff[] = { ~from, to };
+
+	*sum = csum_fold(csum_partial((char *)diff, sizeof(diff), ~csum_unfold(*sum)));
+}
+
+static inline void nf_csum_replace2(__sum16 *sum, __be16 from, __be16 to)
+{
+	nf_csum_replace4(sum, (__force __be32)from, (__force __be32)to);
+}
+
+extern void nf_proto_csum_replace4(__sum16 *sum, struct sk_buff *skb,
+				      __be32 from, __be32 to, int pseudohdr);
+
+static inline void nf_proto_csum_replace2(__sum16 *sum, struct sk_buff *skb,
+				      __be16 from, __be16 to, int pseudohdr)
+{
+	nf_proto_csum_replace4(sum, skb, (__force __be32)from,
+				(__force __be32)to, pseudohdr);
+}
 
 struct nf_afinfo {
 	unsigned short	family;
-	unsigned int	(*checksum)(struct sk_buff *skb, unsigned int hook,
+	__sum16		(*checksum)(struct sk_buff *skb, unsigned int hook,
 				    unsigned int dataoff, u_int8_t protocol);
 	void		(*saveroute)(const struct sk_buff *skb,
 				     struct nf_info *info);
-	int		(*reroute)(struct sk_buff **skb,
+	int		(*reroute)(struct sk_buff *skb,
 				   const struct nf_info *info);
 	int		route_key_size;
 };
@@ -299,12 +328,12 @@ static inline struct nf_afinfo *nf_get_afinfo(unsigned short family)
 	return rcu_dereference(nf_afinfo[family]);
 }
 
-static inline unsigned int
+static inline __sum16
 nf_checksum(struct sk_buff *skb, unsigned int hook, unsigned int dataoff,
 	    u_int8_t protocol, unsigned short family)
 {
 	struct nf_afinfo *afinfo;
-	unsigned int csum = 0;
+	__sum16 csum = 0;
 
 	rcu_read_lock();
 	afinfo = nf_get_afinfo(family);
@@ -325,7 +354,7 @@ extern void (*ip_nat_decode_session)(struct sk_buff *, struct flowi *);
 static inline void
 nf_nat_decode_session(struct sk_buff *skb, struct flowi *fl, int family)
 {
-#ifdef CONFIG_IP_NF_NAT_NEEDED
+#if defined(CONFIG_IP_NF_NAT_NEEDED) || defined(CONFIG_NF_NAT_NEEDED)
 	void (*decodefn)(struct sk_buff *, struct flowi *);
 
 	if (family == AF_INET && (decodefn = ip_nat_decode_session) != NULL)
@@ -342,25 +371,32 @@ extern struct proc_dir_entry *proc_net_netfilter;
 #define NF_HOOK(pf, hook, skb, indev, outdev, okfn) (okfn)(skb)
 #define NF_HOOK_COND(pf, hook, skb, indev, outdev, okfn, cond) (okfn)(skb)
 static inline int nf_hook_thresh(int pf, unsigned int hook,
-				 struct sk_buff **pskb,
+				 struct sk_buff *skb,
 				 struct net_device *indev,
 				 struct net_device *outdev,
 				 int (*okfn)(struct sk_buff *), int thresh,
 				 int cond)
 {
-	return okfn(*pskb);
+	return okfn(skb);
 }
-static inline int nf_hook(int pf, unsigned int hook, struct sk_buff **pskb,
+static inline int nf_hook(int pf, unsigned int hook, struct sk_buff *skb,
 			  struct net_device *indev, struct net_device *outdev,
 			  int (*okfn)(struct sk_buff *))
 {
 	return 1;
 }
-static inline void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb) {}
 struct flowi;
 static inline void
 nf_nat_decode_session(struct sk_buff *skb, struct flowi *fl, int family) {}
 #endif /*CONFIG_NETFILTER*/
+
+#if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
+extern void (*ip_ct_attach)(struct sk_buff *, struct sk_buff *);
+extern void nf_ct_attach(struct sk_buff *, struct sk_buff *);
+extern void (*nf_ct_destroy)(struct nf_conntrack *);
+#else
+static inline void nf_ct_attach(struct sk_buff *new, struct sk_buff *skb) {}
+#endif
 
 #endif /*__KERNEL__*/
 #endif /*__LINUX_NETFILTER_H*/

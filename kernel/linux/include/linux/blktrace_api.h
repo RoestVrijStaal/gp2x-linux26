@@ -20,6 +20,7 @@ enum blktrace_cat {
 	BLK_TC_PC	= 1 << 9,	/* pc requests */
 	BLK_TC_NOTIFY	= 1 << 10,	/* special message */
 	BLK_TC_AHEAD	= 1 << 11,	/* readahead */
+	BLK_TC_META	= 1 << 12,	/* metadata */
 
 	BLK_TC_END	= 1 << 15,	/* only 16-bits, reminder */
 };
@@ -49,6 +50,15 @@ enum blktrace_act {
 };
 
 /*
+ * Notify events.
+ */
+enum blktrace_notify {
+	__BLK_TN_PROCESS = 0,		/* establish pid/name mapping */
+	__BLK_TN_TIMESTAMP,		/* include system clock */
+};
+
+
+/*
  * Trace actions in full. Additionally, read or write is masked
  */
 #define BLK_TA_QUEUE		(__BLK_TA_QUEUE | BLK_TC_ACT(BLK_TC_QUEUE))
@@ -66,6 +76,9 @@ enum blktrace_act {
 #define BLK_TA_SPLIT		(__BLK_TA_SPLIT)
 #define BLK_TA_BOUNCE		(__BLK_TA_BOUNCE)
 #define BLK_TA_REMAP		(__BLK_TA_REMAP | BLK_TC_ACT(BLK_TC_QUEUE))
+
+#define BLK_TN_PROCESS		(__BLK_TN_PROCESS | BLK_TC_ACT(BLK_TC_NOTIFY))
+#define BLK_TN_TIMESTAMP	(__BLK_TN_TIMESTAMP | BLK_TC_ACT(BLK_TC_NOTIFY))
 
 #define BLK_IO_TRACE_MAGIC	0x65617400
 #define BLK_IO_TRACE_VERSION	0x07
@@ -92,7 +105,7 @@ struct blk_io_trace {
  */
 struct blk_io_trace_remap {
 	__be32 device;
-	u32 __pad;
+	__be32 device_from;
 	__be64 sector;
 };
 
@@ -129,10 +142,14 @@ struct blk_user_trace_setup {
 	u32 pid;
 };
 
+#ifdef __KERNEL__
 #if defined(CONFIG_BLK_DEV_IO_TRACE)
 extern int blk_trace_ioctl(struct block_device *, unsigned, char __user *);
-extern void blk_trace_shutdown(request_queue_t *);
+extern void blk_trace_shutdown(struct request_queue *);
 extern void __blk_add_trace(struct blk_trace *, sector_t, int, int, u32, int, int, void *);
+extern int do_blk_trace_setup(struct request_queue *q,
+	struct block_device *bdev, struct blk_user_trace_setup *buts);
+
 
 /**
  * blk_add_trace_rq - Add a trace for a request oriented action
@@ -148,7 +165,7 @@ static inline void blk_add_trace_rq(struct request_queue *q, struct request *rq,
 				    u32 what)
 {
 	struct blk_trace *bt = q->blk_trace;
-	int rw = rq->flags & 0x03;
+	int rw = rq->cmd_flags & 0x03;
 
 	if (likely(!bt))
 		return;
@@ -259,6 +276,7 @@ static inline void blk_add_trace_remap(struct request_queue *q, struct bio *bio,
 		return;
 
 	r.device = cpu_to_be32(dev);
+	r.device_from = cpu_to_be32(bio->bi_bdev->bd_dev);
 	r.sector = cpu_to_be64(to);
 
 	__blk_add_trace(bt, from, bio->bi_size, bio->bi_rw, BLK_TA_REMAP, !bio_flagged(bio, BIO_UPTODATE), sizeof(r), &r);
@@ -272,6 +290,7 @@ static inline void blk_add_trace_remap(struct request_queue *q, struct bio *bio,
 #define blk_add_trace_generic(q, rq, rw, what)	do { } while (0)
 #define blk_add_trace_pdu_int(q, what, bio, pdu)	do { } while (0)
 #define blk_add_trace_remap(q, bio, dev, f, t)	do {} while (0)
+#define do_blk_trace_setup(q, bdev, buts)	(-ENOTTY)
 #endif /* CONFIG_BLK_DEV_IO_TRACE */
-
+#endif /* __KERNEL__ */
 #endif

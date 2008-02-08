@@ -2,7 +2,10 @@
   File: linux/reiserfs_xattr.h
 */
 
-#include <linux/xattr.h>
+#ifndef _LINUX_REISERFS_XATTR_H
+#define _LINUX_REISERFS_XATTR_H
+
+#include <linux/types.h>
 
 /* Magic value in header */
 #define REISERFS_XATTR_MAGIC 0x52465841	/* "RFXA" */
@@ -13,7 +16,18 @@ struct reiserfs_xattr_header {
 };
 
 #ifdef __KERNEL__
+
 #include <linux/init.h>
+#include <linux/list.h>
+#include <linux/rwsem.h>
+#include <linux/reiserfs_fs_i.h>
+#include <linux/reiserfs_fs.h>
+
+struct inode;
+struct dentry;
+struct iattr;
+struct super_block;
+struct nameidata;
 
 struct reiserfs_xattr_handler {
 	char *prefix;
@@ -49,9 +63,7 @@ int reiserfs_xattr_set(struct inode *, const char *, const void *, size_t, int);
 
 extern struct reiserfs_xattr_handler user_handler;
 extern struct reiserfs_xattr_handler trusted_handler;
-#ifdef CONFIG_REISERFS_FS_SECURITY
 extern struct reiserfs_xattr_handler security_handler;
-#endif
 
 int reiserfs_xattr_register_handlers(void) __init;
 void reiserfs_xattr_unregister_handlers(void);
@@ -97,6 +109,11 @@ static inline void reiserfs_mark_inode_private(struct inode *inode)
 	inode->i_flags |= S_PRIVATE;
 }
 
+static inline void reiserfs_init_xattr_rwsem(struct inode *inode)
+{
+	init_rwsem(&REISERFS_I(inode)->xattr_sem);
+}
+
 #else
 
 #define is_reiserfs_priv_object(inode) 0
@@ -129,6 +146,11 @@ static inline int reiserfs_xattr_init(struct super_block *sb, int mount_flags)
 	sb->s_flags = (sb->s_flags & ~MS_POSIXACL);	/* to be sure */
 	return 0;
 };
-#endif
+static inline void reiserfs_init_xattr_rwsem(struct inode *inode)
+{
+}
+#endif  /*  CONFIG_REISERFS_FS_XATTR  */
 
-#endif				/* __KERNEL__ */
+#endif  /*  __KERNEL__  */
+
+#endif  /*  _LINUX_REISERFS_XATTR_H  */
