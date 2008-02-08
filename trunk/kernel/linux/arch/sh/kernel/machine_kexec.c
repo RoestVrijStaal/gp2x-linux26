@@ -29,12 +29,6 @@ extern const unsigned char relocate_new_kernel[];
 extern const unsigned int relocate_new_kernel_size;
 extern void *gdb_vbr_vector;
 
-/*
- * Provide a dummy crash_notes definition while crash dump arrives to ppc.
- * This prevents breakage of crash_notes attribute in kernel/ksysfs.c.
- */
-void *crash_notes = NULL;
-
 void machine_shutdown(void)
 {
 }
@@ -65,12 +59,12 @@ static void kexec_info(struct kimage *image)
 	        printk("  segment[%d]: 0x%08x - 0x%08x (0x%08x)\n",
 		       i,
 		       (unsigned int)image->segment[i].mem,
-		       (unsigned int)image->segment[i].mem + image->segment[i].memsz,
+		       (unsigned int)image->segment[i].mem +
+				     image->segment[i].memsz,
 		       (unsigned int)image->segment[i].memsz);
- 	}
+	}
 	printk("  start     : 0x%08x\n\n", (unsigned int)image->start);
 }
-
 
 /*
  * Do not allocate memory (or fail in any way) in machine_kexec().
@@ -107,6 +101,6 @@ NORET_TYPE void machine_kexec(struct kimage *image)
 
 	/* now call it */
 	rnk = (relocate_new_kernel_t) reboot_code_buffer;
-       	(*rnk)(page_list, reboot_code_buffer, image->start, vbr_reg);
+	(*rnk)(page_list, reboot_code_buffer, image->start, vbr_reg);
 }
 
