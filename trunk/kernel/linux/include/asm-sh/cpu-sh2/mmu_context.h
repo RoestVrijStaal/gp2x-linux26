@@ -1,5 +1,5 @@
 /*
- * include/asm-sh/cpu-sh2/shmparam.h
+ * include/asm-sh/cpu-sh2/mmu_context.h
  *
  * Copyright (C) 2003  Paul Mundt
  *
@@ -7,10 +7,10 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  */
-#ifndef __ASM_CPU_SH2_SHMPARAM_H
-#define __ASM_CPU_SH2_SHMPARAM_H
+#ifndef __ASM_CPU_SH2_MMU_CONTEXT_H
+#define __ASM_CPU_SH2_MMU_CONTEXT_H
 
-#define	SHMLBA PAGE_SIZE		 /* attach addr a multiple of this */
+/* No MMU */
 
-#endif /* __ASM_CPU_SH2_SHMPARAM_H */
+#endif /* __ASM_CPU_SH2_MMU_CONTEXT_H */
 
