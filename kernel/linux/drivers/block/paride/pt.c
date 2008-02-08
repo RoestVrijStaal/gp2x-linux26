@@ -232,7 +232,7 @@ static char pt_scratch[512];	/* scratch block buffer */
 
 /* kernel glue structures */
 
-static struct file_operations pt_fops = {
+static const struct file_operations pt_fops = {
 	.owner = THIS_MODULE,
 	.read = pt_read,
 	.write = pt_write,
@@ -664,7 +664,7 @@ static int pt_open(struct inode *inode, struct file *file)
 		goto out;
 
 	err = -EROFS;
-	if ((!tape->flags & PT_WRITE_OK) && (file->f_mode & 2))
+	if ((!(tape->flags & PT_WRITE_OK)) && (file->f_mode & 2))
 		goto out;
 
 	if (!(iminor(inode) & 128))
@@ -946,12 +946,12 @@ static int __init pt_init(void)
 	int err;
 
 	if (disable) {
-		err = -1;
+		err = -EINVAL;
 		goto out;
 	}
 
 	if (pt_detect()) {
-		err = -1;
+		err = -ENODEV;
 		goto out;
 	}
 
