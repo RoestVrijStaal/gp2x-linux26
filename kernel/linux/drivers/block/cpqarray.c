@@ -19,7 +19,6 @@
  *    Questions/Comments/Bugfixes to iss_storagedev@hp.com
  *
  */
-#include <linux/config.h>	/* CONFIG_PROC_FS */
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/pci.h>
@@ -38,6 +37,7 @@
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
 #include <linux/genhd.h>
+#include <linux/scatterlist.h>
 #include <asm/uaccess.h>
 #include <asm/io.h>
 
@@ -162,7 +162,7 @@ static int ida_ioctl(struct inode *inode, struct file *filep, unsigned int cmd, 
 static int ida_getgeo(struct block_device *bdev, struct hd_geometry *geo);
 static int ida_ctlr_ioctl(ctlr_info_t *h, int dsk, ida_ioctl_t *io);
 
-static void do_ida_request(request_queue_t *q);
+static void do_ida_request(struct request_queue *q);
 static void start_io(ctlr_info_t *h);
 
 static inline void addQ(cmdlist_t **Qptr, cmdlist_t *c);
@@ -170,7 +170,7 @@ static inline cmdlist_t *removeQ(cmdlist_t **Qptr, cmdlist_t *c);
 static inline void complete_buffers(struct bio *bio, int ok);
 static inline void complete_command(cmdlist_t *cmd, int timeout);
 
-static irqreturn_t do_ida_intr(int irq, void *dev_id, struct pt_regs * regs);
+static irqreturn_t do_ida_intr(int irq, void *dev_id);
 static void ida_timer(unsigned long tdata);
 static int ida_revalidate(struct gendisk *disk);
 static int revalidate_allvol(ctlr_info_t *host);
@@ -392,7 +392,7 @@ static void __devexit cpqarray_remove_one_eisa (int i)
 /* pdev is NULL for eisa */
 static int __init cpqarray_register_ctlr( int i, struct pci_dev *pdev)
 {
-	request_queue_t *q;
+	struct request_queue *q;
 	int j;
 
 	/* 
@@ -421,18 +421,17 @@ static int __init cpqarray_register_ctlr( int i, struct pci_dev *pdev)
 			goto Enomem2;
 	}
 
-	hba[i]->cmd_pool = (cmdlist_t *)pci_alloc_consistent(
+	hba[i]->cmd_pool = pci_alloc_consistent(
 		hba[i]->pci_dev, NR_CMDS * sizeof(cmdlist_t),
 		&(hba[i]->cmd_pool_dhandle));
-	hba[i]->cmd_pool_bits = kmalloc(
-		((NR_CMDS+BITS_PER_LONG-1)/BITS_PER_LONG)*sizeof(unsigned long),
+	hba[i]->cmd_pool_bits = kcalloc(
+		(NR_CMDS+BITS_PER_LONG-1)/BITS_PER_LONG, sizeof(unsigned long),
 		GFP_KERNEL);
 
 	if (!hba[i]->cmd_pool_bits || !hba[i]->cmd_pool)
 			goto Enomem1;
 
 	memset(hba[i]->cmd_pool, 0, NR_CMDS * sizeof(cmdlist_t));
-	memset(hba[i]->cmd_pool_bits, 0, ((NR_CMDS+BITS_PER_LONG-1)/BITS_PER_LONG)*sizeof(unsigned long));
 	printk(KERN_INFO "cpqarray: Finding drives on %s",
 		hba[i]->devname);
 
@@ -887,7 +886,7 @@ static inline cmdlist_t *removeQ(cmdlist_t **Qptr, cmdlist_t *c)
  * are in here (either via the dummy do_ida_request functions or by being
  * called from the interrupt handler
  */
-static void do_ida_request(request_queue_t *q)
+static void do_ida_request(struct request_queue *q)
 {
 	ctlr_info_t *h = q->queuedata;
 	cmdlist_t *c;
@@ -920,6 +919,7 @@ queue_next:
 DBGPX(
 	printk("sector=%d, nr_sectors=%d\n", creq->sector, creq->nr_sectors);
 );
+	sg_init_table(tmp_sg, SG_MAX);
 	seg = blk_rq_map_sg(q, creq, tmp_sg);
 
 	/* Now do all the DMA Mappings */
@@ -931,7 +931,7 @@ DBGPX(
 	{
 		c->req.sg[i].size = tmp_sg[i].length;
 		c->req.sg[i].addr = (__u32) pci_map_page(h->pci_dev,
-						 tmp_sg[i].page,
+						 sg_page(&tmp_sg[i]),
 						 tmp_sg[i].offset,
 						 tmp_sg[i].length, dir);
 	}
@@ -983,14 +983,12 @@ static void start_io(ctlr_info_t *h)
 static inline void complete_buffers(struct bio *bio, int ok)
 {
 	struct bio *xbh;
-	while(bio) {
-		int nr_sectors = bio_sectors(bio);
 
+	while (bio) {
 		xbh = bio->bi_next;
 		bio->bi_next = NULL;
 		
-		blk_finished_io(nr_sectors);
-		bio_endio(bio, nr_sectors << 9, ok ? 0 : -EIO);
+		bio_endio(bio, ok ? 0 : -EIO);
 
 		bio = xbh;
 	}
@@ -1000,6 +998,7 @@ static inline void complete_buffers(struct bio *bio, int ok)
  */
 static inline void complete_command(cmdlist_t *cmd, int timeout)
 {
+	struct request *rq = cmd->rq;
 	int ok=1;
 	int i, ddir;
 
@@ -1031,12 +1030,18 @@ static inline void complete_command(cmdlist_t *cmd, int timeout)
                 pci_unmap_page(hba[cmd->ctlr]->pci_dev, cmd->req.sg[i].addr,
 				cmd->req.sg[i].size, ddir);
 
-	complete_buffers(cmd->rq->bio, ok);
+	complete_buffers(rq->bio, ok);
 
-	add_disk_randomness(cmd->rq->rq_disk);
+	if (blk_fs_request(rq)) {
+		const int rw = rq_data_dir(rq);
 
-        DBGPX(printk("Done with %p\n", cmd->rq););
-	end_that_request_last(cmd->rq, ok ? 1 : -EIO);
+		disk_stat_add(rq->rq_disk, sectors[rw], rq->nr_sectors);
+	}
+
+	add_disk_randomness(rq->rq_disk);
+
+	DBGPX(printk("Done with %p\n", rq););
+	end_that_request_last(rq, ok ? 1 : -EIO);
 }
 
 /*
@@ -1044,7 +1049,7 @@ static inline void complete_command(cmdlist_t *cmd, int timeout)
  *  Find the command on the completion queue, remove it, tell the OS and
  *  try to queue up more IO
  */
-static irqreturn_t do_ida_intr(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t do_ida_intr(int irq, void *dev_id)
 {
 	ctlr_info_t *h = dev_id;
 	cmdlist_t *c;
@@ -1620,7 +1625,7 @@ static void start_fwbk(int ctlr)
 		" processing\n");
 	/* Command does not return anything, but idasend command needs a 
 		buffer */
-	id_ctlr_buf = (id_ctlr_t *)kmalloc(sizeof(id_ctlr_t), GFP_KERNEL);
+	id_ctlr_buf = kmalloc(sizeof(id_ctlr_t), GFP_KERNEL);
 	if(id_ctlr_buf==NULL)
 	{
 		printk(KERN_WARNING "cpqarray: Out of memory. "
@@ -1655,44 +1660,29 @@ static void getgeometry(int ctlr)
 
 	info_p->log_drv_map = 0;	
 	
-	id_ldrive = (id_log_drv_t *)kmalloc(sizeof(id_log_drv_t), GFP_KERNEL);
-	if(id_ldrive == NULL)
-	{
+	id_ldrive = kzalloc(sizeof(id_log_drv_t), GFP_KERNEL);
+	if (!id_ldrive)	{
 		printk( KERN_ERR "cpqarray:  out of memory.\n");
-		return;
+		goto err_0;
 	}
 
-	id_ctlr_buf = (id_ctlr_t *)kmalloc(sizeof(id_ctlr_t), GFP_KERNEL);
-	if(id_ctlr_buf == NULL)
-	{
-		kfree(id_ldrive);
+	id_ctlr_buf = kzalloc(sizeof(id_ctlr_t), GFP_KERNEL);
+	if (!id_ctlr_buf) {
 		printk( KERN_ERR "cpqarray:  out of memory.\n");
-		return;
+		goto err_1;
 	}
 
-	id_lstatus_buf = (sense_log_drv_stat_t *)kmalloc(sizeof(sense_log_drv_stat_t), GFP_KERNEL);
-	if(id_lstatus_buf == NULL)
-	{
-		kfree(id_ctlr_buf);
-		kfree(id_ldrive);
+	id_lstatus_buf = kzalloc(sizeof(sense_log_drv_stat_t), GFP_KERNEL);
+	if (!id_lstatus_buf) {
 		printk( KERN_ERR "cpqarray:  out of memory.\n");
-		return;
+		goto err_2;
 	}
 
-	sense_config_buf = (config_t *)kmalloc(sizeof(config_t), GFP_KERNEL);
-	if(sense_config_buf == NULL)
-	{
-		kfree(id_lstatus_buf);
-		kfree(id_ctlr_buf);
-		kfree(id_ldrive);
+	sense_config_buf = kzalloc(sizeof(config_t), GFP_KERNEL);
+	if (!sense_config_buf) {
 		printk( KERN_ERR "cpqarray:  out of memory.\n");
-		return;
+		goto err_3;
 	}
-
-	memset(id_ldrive, 0, sizeof(id_log_drv_t));
-	memset(id_ctlr_buf, 0, sizeof(id_ctlr_t));
-	memset(id_lstatus_buf, 0, sizeof(sense_log_drv_stat_t));
-	memset(sense_config_buf, 0, sizeof(config_t));
 
 	info_p->phys_drives = 0;
 	info_p->log_drv_map = 0;
@@ -1707,13 +1697,8 @@ static void getgeometry(int ctlr)
 		 * so the idastubopen will fail on all logical drives
 		 * on the controller.
 		 */
-		 /* Free all the buffers and return */ 
 		printk(KERN_ERR "cpqarray: error sending ID controller\n");
-		kfree(sense_config_buf);
-                kfree(id_lstatus_buf);
-                kfree(id_ctlr_buf);
-                kfree(id_ldrive);
-                return;
+                goto err_4;
         }
 
 	info_p->log_drives = id_ctlr_buf->nr_drvs;
@@ -1759,12 +1744,7 @@ static void getgeometry(int ctlr)
 				" failed to report status of logical drive %d\n"
 			 "Access to this controller has been disabled\n",
 				ctlr, log_unit);
-			/* Free all the buffers and return */
-                	kfree(sense_config_buf);
-                	kfree(id_lstatus_buf);
-                	kfree(id_ctlr_buf);
-                	kfree(id_ldrive);
-                	return;
+                	goto err_4;
 		}
 		/*
 		   Make sure the logical drive is configured
@@ -1793,14 +1773,8 @@ static void getgeometry(int ctlr)
 				 sizeof(config_t), 0, 0, log_unit);
 				if (ret_code == IO_ERROR) {
 					info_p->log_drv_map = 0;
-					/* Free all the buffers and return */
                 			printk(KERN_ERR "cpqarray: error sending sense config\n");
-                			kfree(sense_config_buf);
-                			kfree(id_lstatus_buf);
-                			kfree(id_ctlr_buf);
-                			kfree(id_ldrive);
-                			return;
-
+                			goto err_4;
 				}
 
 				info_p->phys_drives =
@@ -1815,12 +1789,18 @@ static void getgeometry(int ctlr)
 			log_index = log_index + 1;
 		}		/* end of if logical drive configured */
 	}			/* end of for log_unit */
-	kfree(sense_config_buf);
-  	kfree(id_ldrive);
-  	kfree(id_lstatus_buf);
-	kfree(id_ctlr_buf);
-	return;
 
+	/* Free all the buffers and return */
+err_4:
+	kfree(sense_config_buf);
+err_3:
+  	kfree(id_lstatus_buf);
+err_2:
+	kfree(id_ctlr_buf);
+err_1:
+  	kfree(id_ldrive);
+err_0:
+	return;
 }
 
 static void __exit cpqarray_exit(void)

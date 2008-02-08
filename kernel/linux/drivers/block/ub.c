@@ -25,6 +25,7 @@
 #include <linux/usb_usual.h>
 #include <linux/blkdev.h>
 #include <linux/timer.h>
+#include <linux/scatterlist.h>
 #include <scsi/scsi.h>
 
 #define DRV_NAME "ub"
@@ -358,11 +359,11 @@ static void ub_cmd_build_block(struct ub_dev *sc, struct ub_lun *lun,
 static void ub_cmd_build_packet(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_scsi_cmd *cmd, struct ub_request *urq);
 static void ub_rw_cmd_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
-static void ub_end_rq(struct request *rq, int uptodate);
+static void ub_end_rq(struct request *rq, unsigned int status);
 static int ub_rw_cmd_retry(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_request *urq, struct ub_scsi_cmd *cmd);
 static int ub_submit_scsi(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
-static void ub_urb_complete(struct urb *urb, struct pt_regs *pt);
+static void ub_urb_complete(struct urb *urb);
 static void ub_scsi_action(unsigned long _dev);
 static void ub_scsi_dispatch(struct ub_dev *sc);
 static void ub_scsi_urb_compl(struct ub_dev *sc, struct ub_scsi_cmd *cmd);
@@ -376,7 +377,7 @@ static int ub_submit_clear_stall(struct ub_dev *sc, struct ub_scsi_cmd *cmd,
     int stalled_pipe);
 static void ub_top_sense_done(struct ub_dev *sc, struct ub_scsi_cmd *scmd);
 static void ub_reset_enter(struct ub_dev *sc, int try);
-static void ub_reset_task(void *arg);
+static void ub_reset_task(struct work_struct *work);
 static int ub_sync_tur(struct ub_dev *sc, struct ub_lun *lun);
 static int ub_sync_read_cap(struct ub_dev *sc, struct ub_lun *lun,
     struct ub_capacity *ret);
@@ -503,7 +504,7 @@ static void ub_cleanup(struct ub_dev *sc)
 {
 	struct list_head *p;
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 
 	while (!list_empty(&sc->luns)) {
 		p = sc->luns.next;
@@ -619,7 +620,7 @@ static struct ub_scsi_cmd *ub_cmdq_pop(struct ub_dev *sc)
  * The request function is our main entry point
  */
 
-static void ub_request_fn(request_queue_t *q)
+static void ub_request_fn(struct request_queue *q)
 {
 	struct ub_lun *lun = q->queuedata;
 	struct request *rq;
@@ -639,9 +640,15 @@ static int ub_request_fn_1(struct ub_lun *lun, struct request *rq)
 	struct ub_request *urq;
 	int n_elem;
 
-	if (atomic_read(&sc->poison) || lun->changed) {
+	if (atomic_read(&sc->poison)) {
 		blkdev_dequeue_request(rq);
-		ub_end_rq(rq, 0);
+		ub_end_rq(rq, DID_NO_CONNECT << 16);
+		return 0;
+	}
+
+	if (lun->changed && !blk_pc_request(rq)) {
+		blkdev_dequeue_request(rq);
+		ub_end_rq(rq, SAM_STAT_CHECK_CONDITION);
 		return 0;
 	}
 
@@ -650,6 +657,7 @@ static int ub_request_fn_1(struct ub_lun *lun, struct request *rq)
 	if ((cmd = ub_get_cmd(lun)) == NULL)
 		return -1;
 	memset(cmd, 0, sizeof(struct ub_scsi_cmd));
+	sg_init_table(cmd->sgv, UB_MAX_REQ_SG);
 
 	blkdev_dequeue_request(rq);
 
@@ -693,7 +701,7 @@ static int ub_request_fn_1(struct ub_lun *lun, struct request *rq)
 
 drop:
 	ub_put_cmd(lun, cmd);
-	ub_end_rq(rq, 0);
+	ub_end_rq(rq, DID_ERROR << 16);
 	return 0;
 }
 
@@ -761,47 +769,53 @@ static void ub_rw_cmd_done(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	struct ub_lun *lun = cmd->lun;
 	struct ub_request *urq = cmd->back;
 	struct request *rq;
-	int uptodate;
+	unsigned int scsi_status;
 
 	rq = urq->rq;
 
 	if (cmd->error == 0) {
-		uptodate = 1;
-
 		if (blk_pc_request(rq)) {
 			if (cmd->act_len >= rq->data_len)
 				rq->data_len = 0;
 			else
 				rq->data_len -= cmd->act_len;
 		}
+		scsi_status = 0;
 	} else {
-		uptodate = 0;
-
 		if (blk_pc_request(rq)) {
 			/* UB_SENSE_SIZE is smaller than SCSI_SENSE_BUFFERSIZE */
 			memcpy(rq->sense, sc->top_sense, UB_SENSE_SIZE);
 			rq->sense_len = UB_SENSE_SIZE;
 			if (sc->top_sense[0] != 0)
-				rq->errors = SAM_STAT_CHECK_CONDITION;
+				scsi_status = SAM_STAT_CHECK_CONDITION;
 			else
-				rq->errors = DID_ERROR << 16;
+				scsi_status = DID_ERROR << 16;
 		} else {
 			if (cmd->error == -EIO) {
 				if (ub_rw_cmd_retry(sc, lun, urq, cmd) == 0)
 					return;
 			}
+			scsi_status = SAM_STAT_CHECK_CONDITION;
 		}
 	}
 
 	urq->rq = NULL;
 
 	ub_put_cmd(lun, cmd);
-	ub_end_rq(rq, uptodate);
+	ub_end_rq(rq, scsi_status);
 	blk_start_queue(lun->disk->queue);
 }
 
-static void ub_end_rq(struct request *rq, int uptodate)
+static void ub_end_rq(struct request *rq, unsigned int scsi_status)
 {
+	int uptodate;
+
+	if (scsi_status == 0) {
+		uptodate = 1;
+	} else {
+		uptodate = 0;
+		rq->errors = scsi_status;
+	}
 	end_that_request_first(rq, uptodate, rq->hard_nr_sectors);
 	end_that_request_last(rq, uptodate);
 }
@@ -947,7 +961,7 @@ static void ub_urb_timeout(unsigned long arg)
  * the sc->lock taken) and from an interrupt (while we do NOT have
  * the sc->lock taken). Therefore, bounce this off to a tasklet.
  */
-static void ub_urb_complete(struct urb *urb, struct pt_regs *pt)
+static void ub_urb_complete(struct urb *urb)
 {
 	struct ub_dev *sc = urb->context;
 
@@ -1297,9 +1311,8 @@ static void ub_data_start(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	else
 		pipe = sc->send_bulk_pipe;
 	sc->last_pipe = pipe;
-	usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe,
-	    page_address(sg->page) + sg->offset, sg->length,
-	    ub_urb_complete, sc);
+	usb_fill_bulk_urb(&sc->work_urb, sc->dev, pipe, sg_virt(sg),
+	    sg->length, ub_urb_complete, sc);
 	sc->work_urb.actual_length = 0;
 	sc->work_urb.error_count = 0;
 	sc->work_urb.status = 0;
@@ -1415,9 +1428,9 @@ static void ub_state_sense(struct ub_dev *sc, struct ub_scsi_cmd *cmd)
 	scmd->state = UB_CMDST_INIT;
 	scmd->nsg = 1;
 	sg = &scmd->sgv[0];
-	sg->page = virt_to_page(sc->top_sense);
-	sg->offset = (unsigned long)sc->top_sense & (PAGE_SIZE-1);
-	sg->length = UB_SENSE_SIZE;
+	sg_init_table(sg, UB_MAX_REQ_SG);
+	sg_set_page(sg, virt_to_page(sc->top_sense), UB_SENSE_SIZE,
+			(unsigned long)sc->top_sense & (PAGE_SIZE-1));
 	scmd->len = UB_SENSE_SIZE;
 	scmd->lun = cmd->lun;
 	scmd->done = ub_top_sense_done;
@@ -1535,10 +1548,8 @@ static void ub_reset_enter(struct ub_dev *sc, int try)
 #endif
 
 #if 0 /* We let them stop themselves. */
-	struct list_head *p;
 	struct ub_lun *lun;
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_stop_queue(lun->disk->queue);
 	}
 #endif
@@ -1546,11 +1557,10 @@ static void ub_reset_enter(struct ub_dev *sc, int try)
 	schedule_work(&sc->reset_work);
 }
 
-static void ub_reset_task(void *arg)
+static void ub_reset_task(struct work_struct *work)
 {
-	struct ub_dev *sc = arg;
+	struct ub_dev *sc = container_of(work, struct ub_dev, reset_work);
 	unsigned long flags;
-	struct list_head *p;
 	struct ub_lun *lun;
 	int lkr, rc;
 
@@ -1596,8 +1606,7 @@ static void ub_reset_task(void *arg)
 	spin_lock_irqsave(sc->lock, flags);
 	sc->reset = 0;
 	tasklet_schedule(&sc->tasklet);
-	list_for_each(p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		blk_start_queue(lun->disk->queue);
 	}
 	wake_up(&sc->reset_wait);
@@ -1701,7 +1710,7 @@ static int ub_bd_ioctl(struct inode *inode, struct file *filp,
 	struct gendisk *disk = inode->i_bdev->bd_disk;
 	void __user *usermem = (void __user *) arg;
 
-	return scsi_cmd_ioctl(filp, disk, cmd, usermem);
+	return scsi_cmd_ioctl(filp, disk->queue, disk, cmd, usermem);
 }
 
 /*
@@ -1855,9 +1864,8 @@ static int ub_sync_read_cap(struct ub_dev *sc, struct ub_lun *lun,
 	cmd->state = UB_CMDST_INIT;
 	cmd->nsg = 1;
 	sg = &cmd->sgv[0];
-	sg->page = virt_to_page(p);
-	sg->offset = (unsigned long)p & (PAGE_SIZE-1);
-	sg->length = 8;
+	sg_init_table(sg, UB_MAX_REQ_SG);
+	sg_set_page(sg, virt_to_page(p), 8, (unsigned long)p & (PAGE_SIZE-1));
 	cmd->len = 8;
 	cmd->lun = lun;
 	cmd->done = ub_probe_done;
@@ -1911,7 +1919,7 @@ err_alloc:
 
 /*
  */
-static void ub_probe_urb_complete(struct urb *urb, struct pt_regs *pt)
+static void ub_probe_urb_complete(struct urb *urb)
 {
 	struct completion *cop = urb->context;
 	complete(cop);
@@ -2120,10 +2128,13 @@ static int ub_get_pipes(struct ub_dev *sc, struct usb_device *dev,
 		if ((ep->bmAttributes & USB_ENDPOINT_XFERTYPE_MASK)
 				== USB_ENDPOINT_XFER_BULK) {
 			/* BULK in or out? */
-			if (ep->bEndpointAddress & USB_DIR_IN)
-				ep_in = ep;
-			else
-				ep_out = ep;
+			if (ep->bEndpointAddress & USB_DIR_IN) {
+				if (ep_in == NULL)
+					ep_in = ep;
+			} else {
+				if (ep_out == NULL)
+					ep_out = ep;
+			}
 		}
 	}
 
@@ -2167,7 +2178,7 @@ static int ub_probe(struct usb_interface *intf,
 	usb_init_urb(&sc->work_urb);
 	tasklet_init(&sc->tasklet, ub_scsi_action, (unsigned long)sc);
 	atomic_set(&sc->poison, 0);
-	INIT_WORK(&sc->reset_work, ub_reset_task, sc);
+	INIT_WORK(&sc->reset_work, ub_reset_task);
 	init_waitqueue_head(&sc->reset_wait);
 
 	init_timer(&sc->work_timer);
@@ -2262,7 +2273,7 @@ err_core:
 static int ub_probe_lun(struct ub_dev *sc, int lnum)
 {
 	struct ub_lun *lun;
-	request_queue_t *q;
+	struct request_queue *q;
 	struct gendisk *disk;
 	int rc;
 
@@ -2333,7 +2344,6 @@ err_alloc:
 static void ub_disconnect(struct usb_interface *intf)
 {
 	struct ub_dev *sc = usb_get_intfdata(intf);
-	struct list_head *p;
 	struct ub_lun *lun;
 	unsigned long flags;
 
@@ -2388,8 +2398,7 @@ static void ub_disconnect(struct usb_interface *intf)
 	/*
 	 * Unregister the upper layer.
 	 */
-	list_for_each (p, &sc->luns) {
-		lun = list_entry(p, struct ub_lun, link);
+	list_for_each_entry(lun, &sc->luns, link) {
 		del_gendisk(lun->disk);
 		/*
 		 * I wish I could do:
