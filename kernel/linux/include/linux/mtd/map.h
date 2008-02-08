@@ -125,7 +125,15 @@
 #endif
 
 #ifndef map_bankwidth
-#error "No bus width supported. What's the point?"
+#warning "No CONFIG_MTD_MAP_BANK_WIDTH_xx selected. No NOR chip support can work"
+static inline int map_bankwidth(void *map)
+{
+	BUG();
+	return 0;
+}
+#define map_bankwidth_is_large(map) (0)
+#define map_words(map) (0)
+#define MAX_MAP_BANKWIDTH 1
 #endif
 
 static inline int map_bankwidth_supported(int w)
@@ -183,7 +191,7 @@ typedef union {
 struct map_info {
 	char *name;
 	unsigned long size;
-	unsigned long phys;
+	resource_size_t phys;
 #define NO_XIP (-1UL)
 
 	void __iomem *virt;

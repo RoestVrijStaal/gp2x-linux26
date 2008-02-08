@@ -3,7 +3,8 @@
  *
  *  OneNAND Register header file
  *
- *  Copyright (C) 2005 Samsung Electronics
+ *  Copyright (C) 2005-2007 Samsung Electronics
+ *  Kyungmin Park <kyungmin.park@samsung.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -72,6 +73,9 @@
 #define ONENAND_DEVICE_VCC_MASK		(0x3)
 
 #define ONENAND_DEVICE_DENSITY_512Mb	(0x002)
+#define ONENAND_DEVICE_DENSITY_1Gb	(0x003)
+#define ONENAND_DEVICE_DENSITY_2Gb	(0x004)
+#define ONENAND_DEVICE_DENSITY_4Gb	(0x005)
 
 /*
  * Version ID Register F002h (R)
@@ -79,9 +83,11 @@
 #define ONENAND_VERSION_PROCESS_SHIFT	(8)
 
 /*
- * Start Address 1 F100h (R/W)
+ * Start Address 1 F100h (R/W) & Start Address 2 F101h (R/W)
  */
 #define ONENAND_DDP_SHIFT		(15)
+#define ONENAND_DDP_CHIP0		(0)
+#define ONENAND_DDP_CHIP1		(1 << ONENAND_DDP_SHIFT)
 
 /*
  * Start Address 8 F107h (R/W)
@@ -107,9 +113,12 @@
 #define ONENAND_CMD_READOOB		(0x13)
 #define ONENAND_CMD_PROG		(0x80)
 #define ONENAND_CMD_PROGOOB		(0x1A)
+#define ONENAND_CMD_2X_PROG		(0x7D)
+#define ONENAND_CMD_2X_CACHE_PROG	(0x7F)
 #define ONENAND_CMD_UNLOCK		(0x23)
 #define ONENAND_CMD_LOCK		(0x2A)
 #define ONENAND_CMD_LOCK_TIGHT		(0x2C)
+#define ONENAND_CMD_UNLOCK_ALL		(0x27)
 #define ONENAND_CMD_ERASE		(0x94)
 #define ONENAND_CMD_RESET		(0xF0)
 #define ONENAND_CMD_OTP_ACCESS		(0x65)
@@ -177,6 +186,7 @@
  * ECC Status Reigser FF00h (R)
  */
 #define ONENAND_ECC_1BIT		(1 << 0)
+#define ONENAND_ECC_1BIT_ALL		(0x5555)
 #define ONENAND_ECC_2BIT		(1 << 1)
 #define ONENAND_ECC_2BIT_ALL		(0xAAAA)
 
