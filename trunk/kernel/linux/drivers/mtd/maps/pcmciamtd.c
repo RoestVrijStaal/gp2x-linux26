@@ -602,6 +602,10 @@ static int pcmciamtd_config(struct pcmcia_device *link)
 	ret = pcmcia_request_configuration(link, &link->conf);
 	if(ret != CS_SUCCESS) {
 		cs_error(link, RequestConfiguration, ret);
+		if (dev->win_base) {
+			iounmap(dev->win_base);
+			dev->win_base = NULL;
+		}
 		return -ENODEV;
 	}
 
@@ -731,11 +735,10 @@ static int pcmciamtd_probe(struct pcmcia_device *link)
 	struct pcmciamtd_dev *dev;
 
 	/* Create new memory card device */
-	dev = kmalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev) return -ENOMEM;
 	DEBUG(1, "dev=0x%p", dev);
 
-	memset(dev, 0, sizeof(*dev));
 	dev->p_dev = link;
 	link->priv = dev;
 
