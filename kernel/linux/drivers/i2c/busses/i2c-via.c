@@ -4,7 +4,7 @@
 
     i2c Support for Via Technologies 82C586B South Bridge
 
-    Copyright (c) 1998, 1999 Kyösti Mälkki <kmalkki@cc.hut.fi>
+    Copyright (c) 1998, 1999 KyÃ¶sti MÃ¤lkki <kmalkki@cc.hut.fi>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -81,12 +81,12 @@ static struct i2c_algo_bit_data bit_data = {
 	.getsda		= bit_via_getsda,
 	.getscl		= bit_via_getscl,
 	.udelay		= 5,
-	.mdelay		= 5,
 	.timeout	= HZ
 };
 
 static struct i2c_adapter vt586b_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_B_VIA,
 	.class          = I2C_CLASS_HWMON,
 	.name		= "VIA i2c",
 	.algo_data	= &bit_data,
@@ -138,7 +138,7 @@ static int __devinit vt586b_probe(struct pci_dev *dev, const struct pci_device_i
 	outb(inb(I2C_DIR) & ~(I2C_SDA | I2C_SCL), I2C_DIR);
 	outb(inb(I2C_OUT) & ~(I2C_SDA | I2C_SCL), I2C_OUT);
 
-	/* set up the driverfs linkage to our parent device */
+	/* set up the sysfs linkage to our parent device */
 	vt586b_adapter.dev.parent = &dev->dev;
 
 	res = i2c_bit_add_bus(&vt586b_adapter);
@@ -152,7 +152,7 @@ static int __devinit vt586b_probe(struct pci_dev *dev, const struct pci_device_i
 
 static void __devexit vt586b_remove(struct pci_dev *dev)
 {
-	i2c_bit_del_bus(&vt586b_adapter);
+	i2c_del_adapter(&vt586b_adapter);
 	release_region(I2C_DIR, IOSPACE);
 	pm_io_base = 0;
 }
@@ -176,7 +176,7 @@ static void __exit i2c_vt586b_exit(void)
 }
 
 
-MODULE_AUTHOR("Kyösti Mälkki <kmalkki@cc.hut.fi>");
+MODULE_AUTHOR("KyÃ¶sti MÃ¤lkki <kmalkki@cc.hut.fi>");
 MODULE_DESCRIPTION("i2c for Via vt82c586b southbridge");
 MODULE_LICENSE("GPL");
 
