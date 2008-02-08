@@ -2,11 +2,16 @@
 #define __ASM_SH_BITOPS_H
 
 #ifdef __KERNEL__
+
+#ifndef _LINUX_BITOPS_H
+#error only <linux/bitops.h> can be included directly
+#endif
+
 #include <asm/system.h>
 /* For __swab32 */
 #include <asm/byteorder.h>
 
-static __inline__ void set_bit(int nr, volatile void * addr)
+static inline void set_bit(int nr, volatile void * addr)
 {
 	int	mask;
 	volatile unsigned int *a = addr;
@@ -24,7 +29,7 @@ static __inline__ void set_bit(int nr, volatile void * addr)
  */
 #define smp_mb__before_clear_bit()	barrier()
 #define smp_mb__after_clear_bit()	barrier()
-static __inline__ void clear_bit(int nr, volatile void * addr)
+static inline void clear_bit(int nr, volatile void * addr)
 {
 	int	mask;
 	volatile unsigned int *a = addr;
@@ -37,7 +42,7 @@ static __inline__ void clear_bit(int nr, volatile void * addr)
 	local_irq_restore(flags);
 }
 
-static __inline__ void change_bit(int nr, volatile void * addr)
+static inline void change_bit(int nr, volatile void * addr)
 {
 	int	mask;
 	volatile unsigned int *a = addr;
@@ -50,7 +55,7 @@ static __inline__ void change_bit(int nr, volatile void * addr)
 	local_irq_restore(flags);
 }
 
-static __inline__ int test_and_set_bit(int nr, volatile void * addr)
+static inline int test_and_set_bit(int nr, volatile void * addr)
 {
 	int	mask, retval;
 	volatile unsigned int *a = addr;
@@ -66,7 +71,7 @@ static __inline__ int test_and_set_bit(int nr, volatile void * addr)
 	return retval;
 }
 
-static __inline__ int test_and_clear_bit(int nr, volatile void * addr)
+static inline int test_and_clear_bit(int nr, volatile void * addr)
 {
 	int	mask, retval;
 	volatile unsigned int *a = addr;
@@ -82,7 +87,7 @@ static __inline__ int test_and_clear_bit(int nr, volatile void * addr)
 	return retval;
 }
 
-static __inline__ int test_and_change_bit(int nr, volatile void * addr)
+static inline int test_and_change_bit(int nr, volatile void * addr)
 {
 	int	mask, retval;
 	volatile unsigned int *a = addr;
@@ -100,7 +105,7 @@ static __inline__ int test_and_change_bit(int nr, volatile void * addr)
 
 #include <asm-generic/bitops/non-atomic.h>
 
-static __inline__ unsigned long ffz(unsigned long word)
+static inline unsigned long ffz(unsigned long word)
 {
 	unsigned long result;
 
@@ -120,7 +125,7 @@ static __inline__ unsigned long ffz(unsigned long word)
  *
  * Undefined if no bit exists, so code should check against 0 first.
  */
-static __inline__ unsigned long __ffs(unsigned long word)
+static inline unsigned long __ffs(unsigned long word)
 {
 	unsigned long result;
 
@@ -137,6 +142,7 @@ static __inline__ unsigned long __ffs(unsigned long word)
 #include <asm-generic/bitops/find.h>
 #include <asm-generic/bitops/ffs.h>
 #include <asm-generic/bitops/hweight.h>
+#include <asm-generic/bitops/lock.h>
 #include <asm-generic/bitops/sched.h>
 #include <asm-generic/bitops/ext2-non-atomic.h>
 #include <asm-generic/bitops/ext2-atomic.h>
