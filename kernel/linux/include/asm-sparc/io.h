@@ -256,6 +256,35 @@ extern void iounmap(volatile void __iomem *addr);
 #define iowrite16(val,X)		writew(val,X)
 #define iowrite32(val,X)		writel(val,X)
 
+static inline void ioread8_rep(void __iomem *port, void *buf, unsigned long count)
+{
+	insb((unsigned long __force)port, buf, count);
+}
+static inline void ioread16_rep(void __iomem *port, void *buf, unsigned long count)
+{
+	insw((unsigned long __force)port, buf, count);
+}
+
+static inline void ioread32_rep(void __iomem *port, void *buf, unsigned long count)
+{
+	insl((unsigned long __force)port, buf, count);
+}
+
+static inline void iowrite8_rep(void __iomem *port, const void *buf, unsigned long count)
+{
+	outsb((unsigned long __force)port, buf, count);
+}
+
+static inline void iowrite16_rep(void __iomem *port, const void *buf, unsigned long count)
+{
+	outsw((unsigned long __force)port, buf, count);
+}
+
+static inline void iowrite32_rep(void __iomem *port, const void *buf, unsigned long count)
+{
+	outsl((unsigned long __force)port, buf, count);
+}
+
 /* Create a virtual mapping cookie for an IO port range */
 extern void __iomem *ioport_map(unsigned long port, unsigned int nr);
 extern void ioport_unmap(void __iomem *);
@@ -280,13 +309,6 @@ extern void sbus_iounmap(volatile void __iomem *vaddr, unsigned long size);
  */
 #define RTC_PORT(x)   (rtc_port + (x))
 #define RTC_ALWAYS_BCD  0
-
-/* Nothing to do */
-/* P3: Only IDE DMA may need these. XXX Verify that it still does... */
-
-#define dma_cache_inv(_start,_size)		do { } while (0)
-#define dma_cache_wback(_start,_size)		do { } while (0)
-#define dma_cache_wback_inv(_start,_size)	do { } while (0)
 
 #endif
 
