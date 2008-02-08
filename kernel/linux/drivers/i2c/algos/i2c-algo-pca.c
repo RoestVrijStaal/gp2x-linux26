@@ -350,12 +350,12 @@ static int pca_init(struct i2c_algo_pca_data *adap)
 	pca_outw(adap, I2C_PCA_ADR, own << 1);
 
 	pca_set_con(adap, I2C_PCA_CON_ENSIO | clock);
-	udelay(500); /* 500 µs for oscilator to stabilise */
+	udelay(500); /* 500 Âµs for oscilator to stabilise */
 
 	return 0;
 }
 
-static struct i2c_algorithm pca_algo = {
+static const struct i2c_algorithm pca_algo = {
 	.master_xfer	= pca_xfer,
 	.functionality	= pca_func,
 };
@@ -381,14 +381,7 @@ int i2c_pca_add_bus(struct i2c_adapter *adap)
 
 	return rval;
 }
-
-int i2c_pca_del_bus(struct i2c_adapter *adap)
-{
-	return i2c_del_adapter(adap);
-}
-
 EXPORT_SYMBOL(i2c_pca_add_bus);
-EXPORT_SYMBOL(i2c_pca_del_bus);
 
 MODULE_AUTHOR("Ian Campbell <icampbell@arcom.com>");
 MODULE_DESCRIPTION("I2C-Bus PCA9564 algorithm");

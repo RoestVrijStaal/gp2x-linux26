@@ -19,7 +19,7 @@
     Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.		     */
 /* ------------------------------------------------------------------------- */
 
-/* With some changes from Kyösti Mälkki <kmalkki@cc.hut.fi> and 
+/* With some changes from KyÃ¶sti MÃ¤lkki <kmalkki@cc.hut.fi> and
    Frodo Looijaard <frodol@dds.nl> ,and also from Martin Bailey
    <mbailey@littlefeet-inc.com> */
 
@@ -458,7 +458,7 @@ static u32 pcf_func(struct i2c_adapter *adap)
 
 /* -----exported algorithm data: -------------------------------------	*/
 
-static struct i2c_algorithm pcf_algo = {
+static const struct i2c_algorithm pcf_algo = {
 	.master_xfer	= pcf_xfer,
 	.functionality	= pcf_func,
 };
@@ -486,15 +486,7 @@ int i2c_pcf_add_bus(struct i2c_adapter *adap)
 
 	return rval;
 }
-
-
-int i2c_pcf_del_bus(struct i2c_adapter *adap)
-{
-	return i2c_del_adapter(adap);
-}
-
 EXPORT_SYMBOL(i2c_pcf_add_bus);
-EXPORT_SYMBOL(i2c_pcf_del_bus);
 
 MODULE_AUTHOR("Hans Berglund <hb@spacetec.no>");
 MODULE_DESCRIPTION("I2C-Bus PCF8584 algorithm");
