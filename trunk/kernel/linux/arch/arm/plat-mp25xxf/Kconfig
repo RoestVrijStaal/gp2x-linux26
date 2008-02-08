@@ -1,20 +1,32 @@
-menu "MagicEyes MMSP2 Implementations"
-depends on ARCH_MMSP2
+if ARCH_MP25XXF
 
 choice
-	prompt "Select target board"
+	prompt "System Type"
+	default ARCH_MP2520F
+
+config	ARCH_MP2520F
+	bool "MP2520F (MMSP2) SoC"
+
+config	ARCH_MP2530F
+	bool "MP2530/31F (MMSP2+) SoC"
+
+endchoice
+
+choice
+	prompt "Board Type"
 
 config MACH_GP2X
 	bool "GP2X Portable Console"
+	depends on ARCH_MP2520F
 	select MMSP2_SHADOW_ENABLE
 	help
 	  Say Y here if you intend to run this kernel on the GameparkHoldings GP2X portable console.
 endchoice
 
-endmenu
-
 config MMSP2_SHADOW_ENABLE
-	depends on ARCH_MMSP2
+	depends on ARCH_MP2520F
 	bool  "Enable Shadow Config Pin"
 	help
 	  Enable support for Shadow Config Pin of the CPU (Memory Configuration)
+
+endif
