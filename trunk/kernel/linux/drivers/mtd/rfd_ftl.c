@@ -768,7 +768,7 @@ static void rfd_ftl_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 	if (mtd->type != MTD_NORFLASH)
 		return;
 
-	part = kcalloc(1, sizeof(struct partition), GFP_KERNEL);
+	part = kzalloc(sizeof(struct partition), GFP_KERNEL);
 	if (!part)
 		return;
 
@@ -779,15 +779,13 @@ static void rfd_ftl_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 	else {
 		if (!mtd->erasesize) {
 			printk(KERN_WARNING PREFIX "please provide block_size");
-			return;
-		}
-		else
+			goto out;
+		} else
 			part->block_size = mtd->erasesize;
 	}
 
 	if (scan_header(part) == 0) {
 		part->mbd.size = part->sector_count;
-		part->mbd.blksize = SECTOR_SIZE;
 		part->mbd.tr = tr;
 		part->mbd.devnum = -1;
 		if (!(mtd->flags & MTD_WRITEABLE))
@@ -804,7 +802,7 @@ static void rfd_ftl_add_mtd(struct mtd_blktrans_ops *tr, struct mtd_info *mtd)
 		if (!add_mtd_blktrans_dev((void*)part))
 			return;
 	}
-
+out:
 	kfree(part);
 }
 
@@ -829,6 +827,8 @@ struct mtd_blktrans_ops rfd_ftl_tr = {
 	.name		= "rfd",
 	.major		= RFD_FTL_MAJOR,
 	.part_bits	= PART_BITS,
+	.blksize 	= SECTOR_SIZE,
+
 	.readsect	= rfd_ftl_readsect,
 	.writesect	= rfd_ftl_writesect,
 	.getgeo		= rfd_ftl_getgeo,
