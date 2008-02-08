@@ -48,14 +48,11 @@ static unsigned short normal_i2c[] = { 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26,
 /* Insmod parameters */
 I2C_CLIENT_INSMOD_2(pcf8574, pcf8574a);
 
-/* Initial values */
-#define PCF8574_INIT 255	/* All outputs on (input mode) */
-
 /* Each client has this additional data */
 struct pcf8574_data {
 	struct i2c_client client;
 
-	u8 write;			/* Remember last written value */
+	int write;			/* Remember last written value */
 };
 
 static int pcf8574_attach_adapter(struct i2c_adapter *adapter);
@@ -85,7 +82,11 @@ static DEVICE_ATTR(read, S_IRUGO, show_read, NULL);
 static ssize_t show_write(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct pcf8574_data *data = i2c_get_clientdata(to_i2c_client(dev));
-	return sprintf(buf, "%u\n", data->write);
+
+	if (data->write < 0)
+		return data->write;
+
+	return sprintf(buf, "%d\n", data->write);
 }
 
 static ssize_t set_write(struct device *dev, struct device_attribute *attr, const char *buf,
@@ -104,6 +105,16 @@ static ssize_t set_write(struct device *dev, struct device_attribute *attr, cons
 }
 
 static DEVICE_ATTR(write, S_IWUSR | S_IRUGO, show_write, set_write);
+
+static struct attribute *pcf8574_attributes[] = {
+	&dev_attr_read.attr,
+	&dev_attr_write.attr,
+	NULL
+};
+
+static const struct attribute_group pcf8574_attr_group = {
+	.attrs = pcf8574_attributes,
+};
 
 /*
  * Real code
@@ -166,13 +177,13 @@ static int pcf8574_detect(struct i2c_adapter *adapter, int address, int kind)
 	pcf8574_init_client(new_client);
 
 	/* Register sysfs hooks */
-	device_create_file(&new_client->dev, &dev_attr_read);
-	device_create_file(&new_client->dev, &dev_attr_write);
+	err = sysfs_create_group(&new_client->dev.kobj, &pcf8574_attr_group);
+	if (err)
+		goto exit_detach;
 	return 0;
 
-/* OK, this is not exactly good programming practice, usually. But it is
-   very code-efficient in this case. */
-
+      exit_detach:
+	i2c_detach_client(new_client);
       exit_free:
 	kfree(data);
       exit:
@@ -182,6 +193,8 @@ static int pcf8574_detect(struct i2c_adapter *adapter, int address, int kind)
 static int pcf8574_detach_client(struct i2c_client *client)
 {
 	int err;
+
+	sysfs_remove_group(&client->dev.kobj, &pcf8574_attr_group);
 
 	if ((err = i2c_detach_client(client)))
 		return err;
@@ -194,8 +207,7 @@ static int pcf8574_detach_client(struct i2c_client *client)
 static void pcf8574_init_client(struct i2c_client *client)
 {
 	struct pcf8574_data *data = i2c_get_clientdata(client);
-	data->write = PCF8574_INIT;
-	i2c_smbus_write_byte(client, data->write);
+	data->write = -EAGAIN;
 }
 
 static int __init pcf8574_init(void)
