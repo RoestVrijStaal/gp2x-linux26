@@ -117,7 +117,6 @@
 #include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <linux/smp_lock.h>
 #include <linux/wait.h>
 #include <linux/reboot.h>
 #include <linux/kmod.h>
@@ -129,6 +128,7 @@
 #include <asm/sections.h>
 #include <asm/of_device.h>
 #include <asm/macio.h>
+#include <asm/of_platform.h>
 
 #include "therm_pm72.h"
 
@@ -318,10 +318,9 @@ static struct i2c_client *attach_i2c_chip(int id, const char *name)
 	if (adap == NULL)
 		return NULL;
 
-	clt = kmalloc(sizeof(struct i2c_client), GFP_KERNEL);
+	clt = kzalloc(sizeof(struct i2c_client), GFP_KERNEL);
 	if (clt == NULL)
 		return NULL;
-	memset(clt, 0, sizeof(struct i2c_client));
 
 	clt->addr = (id >> 1) & 0x7f;
 	clt->adapter = adap;
@@ -660,7 +659,7 @@ static int read_eeprom(int cpu, struct mpu_data *out)
 {
 	struct device_node *np;
 	char nodename[64];
-	u8 *data;
+	const u8 *data;
 	int len;
 
 	/* prom.c routine for finding a node by path is a bit brain dead
@@ -673,7 +672,7 @@ static int read_eeprom(int cpu, struct mpu_data *out)
 		printk(KERN_ERR "therm_pm72: Failed to retrieve cpuid node from device-tree\n");
 		return -ENODEV;
 	}
-	data = (u8 *)get_property(np, "cpuid", &len);
+	data = of_get_property(np, "cpuid", &len);
 	if (data == NULL) {
 		printk(KERN_ERR "therm_pm72: Failed to retrieve cpuid property from device-tree\n");
 		of_node_put(np);
@@ -1336,7 +1335,7 @@ static int init_backside_state(struct backside_pid_state *state)
 	 */
 	u3 = of_find_node_by_path("/u3@0,f8000000");
 	if (u3 != NULL) {
-		u32 *vers = (u32 *)get_property(u3, "device-rev", NULL);
+		const u32 *vers = of_get_property(u3, "device-rev", NULL);
 		if (vers)
 			if (((*vers) & 0x3f) < 0x34)
 				u3h = 0;
@@ -1770,7 +1769,8 @@ static int call_critical_overtemp(void)
 				"PATH=/sbin:/usr/sbin:/bin:/usr/bin",
 				NULL };
 
-	return call_usermodehelper(critical_overtemp_path, argv, envp, 0);
+	return call_usermodehelper(critical_overtemp_path,
+				   argv, envp, UMH_WAIT_EXEC);
 }
 
 
@@ -2111,8 +2111,8 @@ static void fcu_lookup_fans(struct device_node *fcu_node)
 
 	while ((np = of_get_next_child(fcu_node, np)) != NULL) {
 		int type = -1;
-		char *loc;
-		u32 *reg;
+		const char *loc;
+		const u32 *reg;
 
 		DBG(" control: %s, type: %s\n", np->name, np->type);
 
@@ -2128,8 +2128,8 @@ static void fcu_lookup_fans(struct device_node *fcu_node)
 			continue;
 
 		/* Lookup for a matching location */
-		loc = (char *)get_property(np, "location", NULL);
-		reg = (u32 *)get_property(np, "reg", NULL);
+		loc = of_get_property(np, "location", NULL);
+		reg = of_get_property(np, "reg", NULL);
 		if (loc == NULL || reg == NULL)
 			continue;
 		DBG(" matching location: %s, reg: 0x%08x\n", loc, *reg);
@@ -2236,14 +2236,14 @@ static int __init therm_pm72_init(void)
 		return -ENODEV;
 	}
 
-	of_register_driver(&fcu_of_platform_driver);
+	of_register_platform_driver(&fcu_of_platform_driver);
 	
 	return 0;
 }
 
 static void __exit therm_pm72_exit(void)
 {
-	of_unregister_driver(&fcu_of_platform_driver);
+	of_unregister_platform_driver(&fcu_of_platform_driver);
 
 	if (of_dev)
 		of_device_unregister(of_dev);
