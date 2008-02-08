@@ -30,9 +30,9 @@ BEGIN_FTR_SECTION;							\
 	mfspr	ra,SPRN_PURR;		/* get processor util. reg */	\
 END_FTR_SECTION_IFSET(CPU_FTR_PURR);					\
 BEGIN_FTR_SECTION;							\
-	mftb	ra;			/* or get TB if no PURR */	\
+	MFTB(ra);			/* or get TB if no PURR */	\
 END_FTR_SECTION_IFCLR(CPU_FTR_PURR);					\
-	ld	rb,PACA_STARTPURR(r13);				\
+	ld	rb,PACA_STARTPURR(r13);					\
 	std	ra,PACA_STARTPURR(r13);					\
 	subf	rb,rb,ra;		/* subtract start value */	\
 	ld	ra,PACA_USER_TIME(r13);					\
@@ -45,9 +45,9 @@ BEGIN_FTR_SECTION;							\
 	mfspr	ra,SPRN_PURR;		/* get processor util. reg */	\
 END_FTR_SECTION_IFSET(CPU_FTR_PURR);					\
 BEGIN_FTR_SECTION;							\
-	mftb	ra;			/* or get TB if no PURR */	\
+	MFTB(ra);			/* or get TB if no PURR */	\
 END_FTR_SECTION_IFCLR(CPU_FTR_PURR);					\
-	ld	rb,PACA_STARTPURR(r13);				\
+	ld	rb,PACA_STARTPURR(r13);					\
 	std	ra,PACA_STARTPURR(r13);					\
 	subf	rb,rb,ra;		/* subtract start value */	\
 	ld	ra,PACA_SYSTEM_TIME(r13);				\
@@ -155,6 +155,20 @@ name: \
 	.type GLUE(.,name),@function; \
 GLUE(.,name):
 
+#define _INIT_GLOBAL(name) \
+	.section ".text.init.refok"; \
+	.align 2 ; \
+	.globl name; \
+	.globl GLUE(.,name); \
+	.section ".opd","aw"; \
+name: \
+	.quad GLUE(.,name); \
+	.quad .TOC.@tocbase; \
+	.quad 0; \
+	.previous; \
+	.type GLUE(.,name),@function; \
+GLUE(.,name):
+
 #define _KPROBE(name) \
 	.section ".kprobes.text","a"; \
 	.align 2 ; \
@@ -181,7 +195,23 @@ name: \
 	.type GLUE(.,name),@function; \
 GLUE(.,name):
 
+#define _INIT_STATIC(name) \
+	.section ".text.init.refok"; \
+	.align 2 ; \
+	.section ".opd","aw"; \
+name: \
+	.quad GLUE(.,name); \
+	.quad .TOC.@tocbase; \
+	.quad 0; \
+	.previous; \
+	.type GLUE(.,name),@function; \
+GLUE(.,name):
+
 #else /* 32-bit */
+
+#define _ENTRY(n)	\
+	.globl n;	\
+n:
 
 #define _GLOBAL(n)	\
 	.text;		\
@@ -274,6 +304,16 @@ END_FTR_SECTION_IFSET(CPU_FTR_601)
 #define ISYNC_601
 #endif
 
+#ifdef CONFIG_PPC_CELL
+#define MFTB(dest)			\
+90:	mftb  dest;			\
+BEGIN_FTR_SECTION_NESTED(96);		\
+	cmpwi dest,0;			\
+	beq-  90b;			\
+END_FTR_SECTION_NESTED(CPU_FTR_CELL_TB_BUG, CPU_FTR_CELL_TB_BUG, 96)
+#else
+#define MFTB(dest)			mftb dest
+#endif
 
 #ifndef CONFIG_SMP
 #define TLBSYNC

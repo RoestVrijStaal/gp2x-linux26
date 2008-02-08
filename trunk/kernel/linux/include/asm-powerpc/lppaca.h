@@ -27,7 +27,9 @@
 //
 //
 //----------------------------------------------------------------------------
+#include <linux/cache.h>
 #include <asm/types.h>
+#include <asm/mmu.h>
 
 /* The Hypervisor barfs if the lppaca crosses a page boundary.  A 1k
  * alignment is sufficient to prevent this */
@@ -96,7 +98,7 @@ struct lppaca {
 	u64	saved_gpr5;		// Saved GPR5                   x30-x37
 
 	u8	reserved4;		// Reserved			x38-x38
-	u8	cpuctls_task_attrs;	// Task attributes for cpuctls  x39-x39
+	u8	donate_dedicated_cpu;	// Donate dedicated CPU cycles  x39-x39
 	u8	fpregs_in_use;		// FP regs in use               x3A-x3A
 	u8	pmcregs_in_use;		// PMC regs in use              x3B-x3B
 	volatile u32 saved_decr;	// Saved Decr Value             x3C-x3F
@@ -114,7 +116,7 @@ struct lppaca {
 
 
 //=============================================================================
-// CACHE_LINE_3 0x0100 - 0x007F: This line is shared with other processors
+// CACHE_LINE_3 0x0100 - 0x017F: This line is shared with other processors
 //=============================================================================
 	// This is the yield_count.  An "odd" value (low bit on) means that
 	// the processor is yielded (either because of an OS yield or a PLIC
@@ -126,12 +128,29 @@ struct lppaca {
 	u8	reserved6[124];		// Reserved                     x04-x7F
 
 //=============================================================================
-// CACHE_LINE_4-5 0x0100 - 0x01FF Contains PMC interrupt data
+// CACHE_LINE_4-5 0x0180 - 0x027F Contains PMC interrupt data
 //=============================================================================
 	u8	pmc_save_area[256];	// PMC interrupt Area           x00-xFF
 } __attribute__((__aligned__(0x400)));
 
 extern struct lppaca lppaca[];
+
+/*
+ * SLB shadow buffer structure as defined in the PAPR.  The save_area
+ * contains adjacent ESID and VSID pairs for each shadowed SLB.  The
+ * ESID is stored in the lower 64bits, then the VSID.
+ */
+struct slb_shadow {
+	u32	persistent;		// Number of persistent SLBs	x00-x03
+	u32	buffer_length;		// Total shadow buffer length	x04-x07
+	u64	reserved;		// Alignment			x08-x0f
+	struct	{
+		u64     esid;
+		u64	vsid;
+	} save_area[SLB_NUM_BOLTED];	//				x10-x40
+} ____cacheline_aligned;
+
+extern struct slb_shadow slb_shadow[];
 
 #endif /* __KERNEL__ */
 #endif /* _ASM_POWERPC_LPPACA_H */

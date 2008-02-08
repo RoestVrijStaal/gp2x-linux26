@@ -102,11 +102,7 @@
 #else /* 32-bit */
 /* Default MSR for kernel mode. */
 #ifndef MSR_KERNEL	/* reg_booke.h also defines this */
-#ifdef CONFIG_APUS_FAST_EXCEPT
-#define MSR_KERNEL	(MSR_ME|MSR_IP|MSR_RI|MSR_IR|MSR_DR)
-#else
 #define MSR_KERNEL	(MSR_ME|MSR_RI|MSR_IR|MSR_DR)
-#endif
 #endif
 
 #define MSR_USER	(MSR_KERNEL|MSR_PR|MSR_EE)
@@ -143,6 +139,7 @@
 
 /* Special Purpose Registers (SPRNs)*/
 #define SPRN_CTR	0x009	/* Count Register */
+#define SPRN_DSCR	0x11
 #define SPRN_CTRLF	0x088
 #define SPRN_CTRLT	0x098
 #define   CTRL_CT	0xc0000000	/* current thread */
@@ -163,7 +160,9 @@
 #define SPRN_TBRU	0x10D	/* Time Base Read Upper Register (user, R/O) */
 #define SPRN_TBWL	0x11C	/* Time Base Lower Register (super, R/W) */
 #define SPRN_TBWU	0x11D	/* Time Base Upper Register (super, R/W) */
+#define SPRN_SPURR	0x134	/* Scaled PURR */
 #define SPRN_HIOR	0x137	/* 970 Hypervisor interrupt offset */
+#define SPRN_LPCR	0x13E	/* LPAR Control Register */
 #define SPRN_DBAT0L	0x219	/* Data BAT 0 Lower Register */
 #define SPRN_DBAT0U	0x218	/* Data BAT 0 Upper Register */
 #define SPRN_DBAT1L	0x21B	/* Data BAT 1 Lower Register */
@@ -389,6 +388,12 @@
 #define SPRN_HSRR0	0x13A	/* Save/Restore Register 0 */
 #define SPRN_HSRR1	0x13B	/* Save/Restore Register 1 */
 
+#define SPRN_TBCTL	0x35f	/* PA6T Timebase control register */
+#define   TBCTL_FREEZE		0x0000000000000000ull /* Freeze all tbs */
+#define   TBCTL_RESTART		0x0000000100000000ull /* Restart all tbs */
+#define   TBCTL_UPDATE_UPPER	0x0000000200000000ull /* Set upper 32 bits */
+#define   TBCTL_UPDATE_LOWER	0x0000000300000000ull /* Set lower 32 bits */
+
 #ifndef SPRN_SVR
 #define SPRN_SVR	0x11E	/* System Version Register */
 #endif
@@ -444,6 +449,8 @@
 #define SPRN_MMCRA	0x312
 #define   MMCRA_SIHV	0x10000000UL /* state of MSR HV when SIAR set */
 #define   MMCRA_SIPR	0x08000000UL /* state of MSR PR when SIAR set */
+#define   MMCRA_SLOT	0x07000000UL /* SLOT bits (37-39) */
+#define   MMCRA_SLOT_SHIFT	24
 #define   MMCRA_SAMPLE_ENABLE 0x00000001UL /* enable sampling */
 #define   POWER6_MMCRA_SIHV   0x0000040000000000ULL
 #define   POWER6_MMCRA_SIPR   0x0000020000000000ULL
@@ -459,6 +466,95 @@
 #define SPRN_PMC8	794
 #define SPRN_SIAR	780
 #define SPRN_SDAR	781
+
+#define SPRN_PA6T_MMCR0 795
+#define   PA6T_MMCR0_EN0	0x0000000000000001UL
+#define   PA6T_MMCR0_EN1	0x0000000000000002UL
+#define   PA6T_MMCR0_EN2	0x0000000000000004UL
+#define   PA6T_MMCR0_EN3	0x0000000000000008UL
+#define   PA6T_MMCR0_EN4	0x0000000000000010UL
+#define   PA6T_MMCR0_EN5	0x0000000000000020UL
+#define   PA6T_MMCR0_SUPEN	0x0000000000000040UL
+#define   PA6T_MMCR0_PREN	0x0000000000000080UL
+#define   PA6T_MMCR0_HYPEN	0x0000000000000100UL
+#define   PA6T_MMCR0_FCM0	0x0000000000000200UL
+#define   PA6T_MMCR0_FCM1	0x0000000000000400UL
+#define   PA6T_MMCR0_INTGEN	0x0000000000000800UL
+#define   PA6T_MMCR0_INTEN0	0x0000000000001000UL
+#define   PA6T_MMCR0_INTEN1	0x0000000000002000UL
+#define   PA6T_MMCR0_INTEN2	0x0000000000004000UL
+#define   PA6T_MMCR0_INTEN3	0x0000000000008000UL
+#define   PA6T_MMCR0_INTEN4	0x0000000000010000UL
+#define   PA6T_MMCR0_INTEN5	0x0000000000020000UL
+#define   PA6T_MMCR0_DISCNT	0x0000000000040000UL
+#define   PA6T_MMCR0_UOP	0x0000000000080000UL
+#define   PA6T_MMCR0_TRG	0x0000000000100000UL
+#define   PA6T_MMCR0_TRGEN	0x0000000000200000UL
+#define   PA6T_MMCR0_TRGREG	0x0000000001600000UL
+#define   PA6T_MMCR0_SIARLOG	0x0000000002000000UL
+#define   PA6T_MMCR0_SDARLOG	0x0000000004000000UL
+#define   PA6T_MMCR0_PROEN	0x0000000008000000UL
+#define   PA6T_MMCR0_PROLOG	0x0000000010000000UL
+#define   PA6T_MMCR0_DAMEN2	0x0000000020000000UL
+#define   PA6T_MMCR0_DAMEN3	0x0000000040000000UL
+#define   PA6T_MMCR0_DAMEN4	0x0000000080000000UL
+#define   PA6T_MMCR0_DAMEN5	0x0000000100000000UL
+#define   PA6T_MMCR0_DAMSEL2	0x0000000200000000UL
+#define   PA6T_MMCR0_DAMSEL3	0x0000000400000000UL
+#define   PA6T_MMCR0_DAMSEL4	0x0000000800000000UL
+#define   PA6T_MMCR0_DAMSEL5	0x0000001000000000UL
+#define   PA6T_MMCR0_HANDDIS	0x0000002000000000UL
+#define   PA6T_MMCR0_PCTEN	0x0000004000000000UL
+#define   PA6T_MMCR0_SOCEN	0x0000008000000000UL
+#define   PA6T_MMCR0_SOCMOD	0x0000010000000000UL
+
+#define SPRN_PA6T_MMCR1 798
+#define   PA6T_MMCR1_ES2	0x00000000000000ffUL
+#define   PA6T_MMCR1_ES3	0x000000000000ff00UL
+#define   PA6T_MMCR1_ES4	0x0000000000ff0000UL
+#define   PA6T_MMCR1_ES5	0x00000000ff000000UL
+
+#define SPRN_PA6T_UPMC0 771	/* User PerfMon Counter 0 */
+#define SPRN_PA6T_UPMC1 772	/* ... */
+#define SPRN_PA6T_UPMC2 773
+#define SPRN_PA6T_UPMC3 774
+#define SPRN_PA6T_UPMC4 775
+#define SPRN_PA6T_UPMC5 776
+#define SPRN_PA6T_UMMCR0 779	/* User Monitor Mode Control Register 0 */
+#define SPRN_PA6T_SIAR	780	/* Sampled Instruction Address */
+#define SPRN_PA6T_UMMCR1 782	/* User Monitor Mode Control Register 1 */
+#define SPRN_PA6T_SIER	785	/* Sampled Instruction Event Register */
+#define SPRN_PA6T_PMC0	787
+#define SPRN_PA6T_PMC1	788
+#define SPRN_PA6T_PMC2	789
+#define SPRN_PA6T_PMC3	790
+#define SPRN_PA6T_PMC4	791
+#define SPRN_PA6T_PMC5	792
+#define SPRN_PA6T_TSR0	793	/* Timestamp Register 0 */
+#define SPRN_PA6T_TSR1	794	/* Timestamp Register 1 */
+#define SPRN_PA6T_TSR2	799	/* Timestamp Register 2 */
+#define SPRN_PA6T_TSR3	784	/* Timestamp Register 3 */
+
+#define SPRN_PA6T_IER	981	/* Icache Error Register */
+#define SPRN_PA6T_DER	982	/* Dcache Error Register */
+#define SPRN_PA6T_BER	862	/* BIU Error Address Register */
+#define SPRN_PA6T_MER	849	/* MMU Error Register */
+
+#define SPRN_PA6T_IMA0	880	/* Instruction Match Array 0 */
+#define SPRN_PA6T_IMA1	881	/* ... */
+#define SPRN_PA6T_IMA2	882
+#define SPRN_PA6T_IMA3	883
+#define SPRN_PA6T_IMA4	884
+#define SPRN_PA6T_IMA5	885
+#define SPRN_PA6T_IMA6	886
+#define SPRN_PA6T_IMA7	887
+#define SPRN_PA6T_IMA8	888
+#define SPRN_PA6T_IMA9	889
+#define SPRN_PA6T_BTCR	978	/* Breakpoint and Tagging Control Register */
+#define SPRN_PA6T_IMAAT	979	/* Instruction Match Array Action Table */
+#define SPRN_PA6T_PCCR	1019	/* Power Counter Control Register */
+#define SPRN_PA6T_RPCCR	1021	/* Retire PC Trace Control Register */
+
 
 #else /* 32-bit */
 #define SPRN_MMCR0	952	/* Monitor Mode Control Register 0 */
@@ -503,7 +599,7 @@
 
 /*
  * An mtfsf instruction with the L bit set. On CPUs that support this a
- * full 64bits of FPSCR is restored and on other CPUs it is ignored.
+ * full 64bits of FPSCR is restored and on other CPUs the L bit is ignored.
  *
  * Until binutils gets the new form of mtfsf, hardwire the instruction.
  */
@@ -591,7 +687,9 @@
 #define PV_630		0x0040
 #define PV_630p	0x0041
 #define PV_970MP	0x0044
+#define PV_970GX	0x0045
 #define PV_BE		0x0070
+#define PV_PA6T		0x0090
 
 /*
  * Number of entries in the SLB. If this ever changes we should handle
@@ -617,10 +715,35 @@
 				: "=r" (rval)); rval;})
 #define mtspr(rn, v)	asm volatile("mtspr " __stringify(rn) ",%0" : : "r" (v))
 
+#ifdef __powerpc64__
+#ifdef CONFIG_PPC_CELL
+#define mftb()		({unsigned long rval;				\
+			asm volatile(					\
+				"90:	mftb %0;\n"			\
+				"97:	cmpwi %0,0;\n"			\
+				"	beq- 90b;\n"			\
+				"99:\n"					\
+				".section __ftr_fixup,\"a\"\n"		\
+				".align 3\n"				\
+				"98:\n"					\
+				"	.llong %1\n"			\
+				"	.llong %1\n"			\
+				"	.llong 97b-98b\n"		\
+				"	.llong 99b-98b\n"		\
+				".previous"				\
+			: "=r" (rval) : "i" (CPU_FTR_CELL_TB_BUG)); rval;})
+#else
 #define mftb()		({unsigned long rval;	\
 			asm volatile("mftb %0" : "=r" (rval)); rval;})
+#endif /* !CONFIG_PPC_CELL */
+
+#else /* __powerpc64__ */
+
 #define mftbl()		({unsigned long rval;	\
 			asm volatile("mftbl %0" : "=r" (rval)); rval;})
+#define mftbu()		({unsigned long rval;	\
+			asm volatile("mftbu %0" : "=r" (rval)); rval;})
+#endif /* !__powerpc64__ */
 
 #define mttbl(v)	asm volatile("mttbl %0":: "r"(v))
 #define mttbu(v)	asm volatile("mttbu %0":: "r"(v))
