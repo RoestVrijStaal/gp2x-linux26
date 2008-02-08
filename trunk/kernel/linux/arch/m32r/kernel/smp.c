@@ -101,7 +101,7 @@ void smp_call_function_interrupt(void);
 
 void smp_send_timer(void);
 void smp_ipi_timer_interrupt(struct pt_regs *);
-void smp_local_timer_interrupt(struct pt_regs *);
+void smp_local_timer_interrupt(void);
 
 void send_IPI_allbutself(int, int);
 static void send_IPI_mask(cpumask_t, int, int);
@@ -202,7 +202,7 @@ void smp_flush_cache_all_interrupt(void)
 }
 
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
-/* TLB flush request Routins                                                 */
+/* TLB flush request Routines                                                */
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
 
 /*==========================================================================*
@@ -231,7 +231,7 @@ void smp_flush_tlb_all(void)
 	local_irq_save(flags);
 	__flush_tlb_all();
 	local_irq_restore(flags);
-	smp_call_function(flush_tlb_all_ipi, 0, 1, 1);
+	smp_call_function(flush_tlb_all_ipi, NULL, 1, 1);
 	preempt_enable();
 }
 
@@ -378,7 +378,7 @@ void smp_flush_tlb_page(struct vm_area_struct *vma, unsigned long va)
  * Name:         flush_tlb_others
  *
  * Description:  This routine requests other CPU to execute flush TLB.
- *               1.Setup parmeters.
+ *               1.Setup parameters.
  *               2.Send 'INVALIDATE_TLB_IPI' to other CPU.
  *                 Request other CPU to execute 'smp_invalidate_interrupt()'.
  *               3.Wait for other CPUs operation finished.
@@ -502,7 +502,7 @@ void smp_invalidate_interrupt(void)
 }
 
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
-/* Stop CPU request Routins                                                 */
+/* Stop CPU request Routines                                                 */
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
 
 /*==========================================================================*
@@ -566,7 +566,7 @@ static void stop_this_cpu(void *dummy)
 }
 
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
-/* Call function Routins                                                     */
+/* Call function Routines                                                    */
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
 
 /*==========================================================================*
@@ -690,7 +690,7 @@ void smp_call_function_interrupt(void)
 }
 
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
-/* Timer Routins                                                             */
+/* Timer Routines                                                            */
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
 
 /*==========================================================================*
@@ -734,9 +734,12 @@ void smp_send_timer(void)
  *==========================================================================*/
 void smp_ipi_timer_interrupt(struct pt_regs *regs)
 {
+	struct pt_regs *old_regs;
+	old_regs = set_irq_regs(regs);
 	irq_enter();
-	smp_local_timer_interrupt(regs);
+	smp_local_timer_interrupt();
 	irq_exit();
+	set_irq_regs(old_regs);
 }
 
 /*==========================================================================*
@@ -762,9 +765,9 @@ void smp_ipi_timer_interrupt(struct pt_regs *regs)
  * ---------- --- --------------------------------------------------------
  * 2003-06-24 hy  use per_cpu structure.
  *==========================================================================*/
-void smp_local_timer_interrupt(struct pt_regs *regs)
+void smp_local_timer_interrupt(void)
 {
-	int user = user_mode(regs);
+	int user = user_mode(get_irq_regs());
 	int cpu_id = smp_processor_id();
 
 	/*
@@ -774,7 +777,7 @@ void smp_local_timer_interrupt(struct pt_regs *regs)
 	 * useful with a profiling multiplier != 1
 	 */
 
-	profile_tick(CPU_PROFILING, regs);
+	profile_tick(CPU_PROFILING);
 
 	if (--per_cpu(prof_counter, cpu_id) <= 0) {
 		/*
@@ -799,7 +802,7 @@ void smp_local_timer_interrupt(struct pt_regs *regs)
 }
 
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
-/* Send IPI Routins                                                          */
+/* Send IPI Routines                                                         */
 /*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*=*/
 
 /*==========================================================================*
@@ -811,7 +814,7 @@ void smp_local_timer_interrupt(struct pt_regs *regs)
  *
  * Arguments:    ipi_num - Number of IPI
  *               try -  0 : Send IPI certainly.
- *                     !0 : The following IPI is not sended when Target CPU
+ *                     !0 : The following IPI is not sent when Target CPU
  *                          has not received the before IPI.
  *
  * Returns:      void (cannot fail)
@@ -841,7 +844,7 @@ void send_IPI_allbutself(int ipi_num, int try)
  * Arguments:    cpu_mask - Bitmap of target CPUs logical ID
  *               ipi_num - Number of IPI
  *               try -  0 : Send IPI certainly.
- *                     !0 : The following IPI is not sended when Target CPU
+ *                     !0 : The following IPI is not sent when Target CPU
  *                          has not received the before IPI.
  *
  * Returns:      void (cannot fail)
@@ -882,7 +885,7 @@ static void send_IPI_mask(cpumask_t cpumask, int ipi_num, int try)
  * Arguments:    cpu_mask - Bitmap of target CPUs physical ID
  *               ipi_num - Number of IPI
  *               try -  0 : Send IPI certainly.
- *                     !0 : The following IPI is not sended when Target CPU
+ *                     !0 : The following IPI is not sent when Target CPU
  *                          has not received the before IPI.
  *
  * Returns:      IPICRi regster value.
