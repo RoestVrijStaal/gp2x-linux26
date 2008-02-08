@@ -64,7 +64,6 @@
 #include <linux/pci.h>
 #include <linux/kernel.h>
 #include <linux/stddef.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/delay.h>
 #include <linux/i2c.h>
@@ -463,13 +462,14 @@ static u32 ali15x3_func(struct i2c_adapter *adapter)
 	    I2C_FUNC_SMBUS_BLOCK_DATA;
 }
 
-static struct i2c_algorithm smbus_algorithm = {
+static const struct i2c_algorithm smbus_algorithm = {
 	.smbus_xfer	= ali15x3_access,
 	.functionality	= ali15x3_func,
 };
 
 static struct i2c_adapter ali15x3_adapter = {
 	.owner		= THIS_MODULE,
+	.id		= I2C_HW_SMBUS_ALI15X3,
 	.class          = I2C_CLASS_HWMON,
 	.algo		= &smbus_algorithm,
 };
@@ -489,10 +489,10 @@ static int __devinit ali15x3_probe(struct pci_dev *dev, const struct pci_device_
 		return -ENODEV;
 	}
 
-	/* set up the driverfs linkage to our parent device */
+	/* set up the sysfs linkage to our parent device */
 	ali15x3_adapter.dev.parent = &dev->dev;
 
-	snprintf(ali15x3_adapter.name, I2C_NAME_SIZE,
+	snprintf(ali15x3_adapter.name, sizeof(ali15x3_adapter.name),
 		"SMBus ALI15X3 adapter at %04x", ali15x3_smba);
 	return i2c_add_adapter(&ali15x3_adapter);
 }
