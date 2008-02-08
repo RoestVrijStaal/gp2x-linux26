@@ -130,11 +130,11 @@ struct arpreq_old {
 
 struct arphdr
 {
-	unsigned short	ar_hrd;		/* format of hardware address	*/
-	unsigned short	ar_pro;		/* format of protocol address	*/
+	__be16		ar_hrd;		/* format of hardware address	*/
+	__be16		ar_pro;		/* format of protocol address	*/
 	unsigned char	ar_hln;		/* length of hardware address	*/
 	unsigned char	ar_pln;		/* length of protocol address	*/
-	unsigned short	ar_op;		/* ARP opcode (command)		*/
+	__be16		ar_op;		/* ARP opcode (command)		*/
 
 #if 0
 	 /*
@@ -147,5 +147,14 @@ struct arphdr
 #endif
 
 };
+
+#ifdef __KERNEL__
+#include <linux/skbuff.h>
+
+static inline struct arphdr *arp_hdr(const struct sk_buff *skb)
+{
+	return (struct arphdr *)skb_network_header(skb);
+}
+#endif
 
 #endif	/* _LINUX_IF_ARP_H */

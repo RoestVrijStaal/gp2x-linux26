@@ -34,9 +34,19 @@
   name:
 #endif
 
+#ifndef WEAK
+#define WEAK(name)	   \
+	.weak name;	   \
+	name:
+#endif
+
 #define KPROBE_ENTRY(name) \
-  .section .kprobes.text, "ax"; \
+  .pushsection .kprobes.text, "ax"; \
   ENTRY(name)
+
+#define KPROBE_END(name) \
+  END(name);		 \
+  .popsection
 
 #ifndef END
 #define END(name) \

@@ -136,16 +136,6 @@ sunrpc_cache_update(struct cache_detail *detail,
 		    struct cache_head *new, struct cache_head *old, int hash);
 
 
-#define cache_for_each(pos, detail, index, member) 						\
-	for (({read_lock(&(detail)->hash_lock); index = (detail)->hash_size;}) ;		\
-	     ({if (index==0)read_unlock(&(detail)->hash_lock); index--;});			\
-		)										\
-		for (pos = container_of((detail)->hash_table[index], typeof(*pos), member);	\
-		     &pos->member;								\
-		     pos = container_of(pos->member.next, typeof(*pos), member))
-
-	     
-
 extern void cache_clean_deferred(void *owner);
 
 static inline struct cache_head  *cache_get(struct cache_head *h)
@@ -161,6 +151,17 @@ static inline void cache_put(struct cache_head *h, struct cache_detail *cd)
 	    h->expiry_time < cd->nextcheck)
 		cd->nextcheck = h->expiry_time;
 	kref_put(&h->ref, cd->cache_put);
+}
+
+static inline int cache_valid(struct cache_head *h)
+{
+	/* If an item has been unhashed pending removal when
+	 * the refcount drops to 0, the expiry_time will be
+	 * set to 0.  We don't want to consider such items
+	 * valid in this context even though CACHE_VALID is
+	 * set.
+	 */
+	return (h->expiry_time != 0 && test_bit(CACHE_VALID, &h->flags));
 }
 
 extern int cache_check(struct cache_detail *detail,

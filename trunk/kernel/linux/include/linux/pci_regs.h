@@ -12,6 +12,11 @@
  *	PCI Local Bus Specification
  *	PCI to PCI Bridge Specification
  *	PCI System Design Guide
+ *
+ * 	For hypertransport information, please consult the following manuals
+ * 	from http://www.hypertransport.org
+ *
+ *	The Hypertransport I/O Link Specification
  */
 
 #ifndef LINUX_PCI_REGS_H
@@ -142,7 +147,7 @@
 #define PCI_BRIDGE_CONTROL	0x3e
 #define  PCI_BRIDGE_CTL_PARITY	0x01	/* Enable parity detection on secondary interface */
 #define  PCI_BRIDGE_CTL_SERR	0x02	/* The same for SERR forwarding */
-#define  PCI_BRIDGE_CTL_NO_ISA	0x04	/* Disable bridging of ISA ports */
+#define  PCI_BRIDGE_CTL_ISA	0x04	/* Enable ISA mode */
 #define  PCI_BRIDGE_CTL_VGA	0x08	/* Forward VGA addresses */
 #define  PCI_BRIDGE_CTL_MASTER_ABORT	0x20  /* Report master aborts */
 #define  PCI_BRIDGE_CTL_BUS_RESET	0x40	/* Secondary bus reset */
@@ -196,9 +201,13 @@
 #define  PCI_CAP_ID_MSI		0x05	/* Message Signalled Interrupts */
 #define  PCI_CAP_ID_CHSWP	0x06	/* CompactPCI HotSwap */
 #define  PCI_CAP_ID_PCIX	0x07	/* PCI-X */
-#define  PCI_CAP_ID_HT_IRQCONF	0x08	/* HyperTransport IRQ Configuration */
-#define  PCI_CAP_ID_VNDR	0x09	/* Vendor specific capability */
+#define  PCI_CAP_ID_HT		0x08	/* HyperTransport */
+#define  PCI_CAP_ID_VNDR	0x09	/* Vendor specific */
+#define  PCI_CAP_ID_DBG		0x0A	/* Debug port */
+#define  PCI_CAP_ID_CCRC	0x0B	/* CompactPCI Central Resource Control */
 #define  PCI_CAP_ID_SHPC 	0x0C	/* PCI Standard Hot-Plug Controller */
+#define  PCI_CAP_ID_SSVID	0x0D	/* Bridge subsystem vendor/device ID */
+#define  PCI_CAP_ID_AGP3	0x0E	/* AGP Target PCI-PCI bridge */
 #define  PCI_CAP_ID_EXP 	0x10	/* PCI Express */
 #define  PCI_CAP_ID_MSIX	0x11	/* MSI-X */
 #define PCI_CAP_LIST_NEXT	1	/* Next capability in the list */
@@ -287,6 +296,14 @@
 #define PCI_MSI_DATA_64		12	/* 16 bits of data for 64-bit devices */
 #define PCI_MSI_MASK_BIT	16	/* Mask bits register */
 
+/* MSI-X registers (these are at offset PCI_MSIX_FLAGS) */
+#define PCI_MSIX_FLAGS		2
+#define  PCI_MSIX_FLAGS_QSIZE	0x7FF
+#define  PCI_MSIX_FLAGS_ENABLE	(1 << 15)
+#define  PCI_MSIX_FLAGS_MASKALL	(1 << 14)
+#define PCI_MSIX_FLAGS_BIRMASK	(7 << 0)
+#define PCI_MSIX_FLAGS_BITMASK	(1 << 0)
+
 /* CompactPCI Hotswap Register */
 
 #define PCI_CHSWP_CSR		2	/* Control and Status Register */
@@ -303,7 +320,20 @@
 #define PCI_X_CMD		2	/* Modes & Features */
 #define  PCI_X_CMD_DPERR_E	0x0001	/* Data Parity Error Recovery Enable */
 #define  PCI_X_CMD_ERO		0x0002	/* Enable Relaxed Ordering */
+#define  PCI_X_CMD_READ_512	0x0000	/* 512 byte maximum read byte count */
+#define  PCI_X_CMD_READ_1K	0x0004	/* 1Kbyte maximum read byte count */
+#define  PCI_X_CMD_READ_2K	0x0008	/* 2Kbyte maximum read byte count */
+#define  PCI_X_CMD_READ_4K	0x000c	/* 4Kbyte maximum read byte count */
 #define  PCI_X_CMD_MAX_READ	0x000c	/* Max Memory Read Byte Count */
+				/* Max # of outstanding split transactions */
+#define  PCI_X_CMD_SPLIT_1	0x0000	/* Max 1 */
+#define  PCI_X_CMD_SPLIT_2	0x0010	/* Max 2 */
+#define  PCI_X_CMD_SPLIT_3	0x0020	/* Max 3 */
+#define  PCI_X_CMD_SPLIT_4	0x0030	/* Max 4 */
+#define  PCI_X_CMD_SPLIT_8	0x0040	/* Max 8 */
+#define  PCI_X_CMD_SPLIT_12	0x0050	/* Max 12 */
+#define  PCI_X_CMD_SPLIT_16	0x0060	/* Max 16 */
+#define  PCI_X_CMD_SPLIT_32	0x0070	/* Max 32 */
 #define  PCI_X_CMD_MAX_SPLIT	0x0070	/* Max Outstanding Split Transactions */
 #define  PCI_X_CMD_VERSION(x) 	(((x) >> 12) & 3) /* Version */
 #define PCI_X_STATUS		4	/* PCI-X capabilities */
@@ -366,6 +396,7 @@
 #define  PCI_EXP_DEVSTA_TRPND	0x20	/* Transactions Pending */
 #define PCI_EXP_LNKCAP		12	/* Link Capabilities */
 #define PCI_EXP_LNKCTL		16	/* Link Control */
+#define  PCI_EXP_LNKCTL_CLKREQ_EN 0x100	/* Enable clkreq */
 #define PCI_EXP_LNKSTA		18	/* Link Status */
 #define PCI_EXP_SLTCAP		20	/* Slot Capabilities */
 #define PCI_EXP_SLTCTL		24	/* Slot Control */
@@ -462,5 +493,38 @@
 #define  PCI_PWR_DATA_RAIL(x)	(((x) >> 18) & 7)   /* Power Rail */
 #define PCI_PWR_CAP		12	/* Capability */
 #define  PCI_PWR_CAP_BUDGET(x)	((x) & 1)	/* Included in system budget */
+
+/*
+ * Hypertransport sub capability types
+ *
+ * Unfortunately there are both 3 bit and 5 bit capability types defined
+ * in the HT spec, catering for that is a little messy. You probably don't
+ * want to use these directly, just use pci_find_ht_capability() and it
+ * will do the right thing for you.
+ */
+#define HT_3BIT_CAP_MASK	0xE0
+#define HT_CAPTYPE_SLAVE	0x00	/* Slave/Primary link configuration */
+#define HT_CAPTYPE_HOST		0x20	/* Host/Secondary link configuration */
+
+#define HT_5BIT_CAP_MASK	0xF8
+#define HT_CAPTYPE_IRQ		0x80	/* IRQ Configuration */
+#define HT_CAPTYPE_REMAPPING_40	0xA0	/* 40 bit address remapping */
+#define HT_CAPTYPE_REMAPPING_64 0xA2	/* 64 bit address remapping */
+#define HT_CAPTYPE_UNITID_CLUMP	0x90	/* Unit ID clumping */
+#define HT_CAPTYPE_EXTCONF	0x98	/* Extended Configuration Space Access */
+#define HT_CAPTYPE_MSI_MAPPING	0xA8	/* MSI Mapping Capability */
+#define  HT_MSI_FLAGS		0x02		/* Offset to flags */
+#define  HT_MSI_FLAGS_ENABLE	0x1		/* Mapping enable */
+#define  HT_MSI_FLAGS_FIXED	0x2		/* Fixed mapping only */
+#define  HT_MSI_FIXED_ADDR	0x00000000FEE00000ULL	/* Fixed addr */
+#define  HT_MSI_ADDR_LO		0x04		/* Offset to low addr bits */
+#define  HT_MSI_ADDR_LO_MASK	0xFFF00000	/* Low address bit mask */
+#define  HT_MSI_ADDR_HI		0x08		/* Offset to high addr bits */
+#define HT_CAPTYPE_DIRECT_ROUTE	0xB0	/* Direct routing configuration */
+#define HT_CAPTYPE_VCSET	0xB8	/* Virtual Channel configuration */
+#define HT_CAPTYPE_ERROR_RETRY	0xC0	/* Retry on error configuration */
+#define HT_CAPTYPE_GEN3		0xD0	/* Generation 3 hypertransport configuration */
+#define HT_CAPTYPE_PM		0xE0	/* Hypertransport powermanagement configuration */
+
 
 #endif /* LINUX_PCI_REGS_H */

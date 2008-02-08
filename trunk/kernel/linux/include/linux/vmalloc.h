@@ -23,13 +23,14 @@ struct vm_area_struct;
 #endif
 
 struct vm_struct {
+	/* keep next,addr,size together to speedup lookups */
+	struct vm_struct	*next;
 	void			*addr;
 	unsigned long		size;
 	unsigned long		flags;
 	struct page		**pages;
 	unsigned int		nr_pages;
 	unsigned long		phys_addr;
-	struct vm_struct	*next;
 };
 
 /*
@@ -44,8 +45,6 @@ extern void *vmalloc_32_user(unsigned long size);
 extern void *__vmalloc(unsigned long size, gfp_t gfp_mask, pgprot_t prot);
 extern void *__vmalloc_area(struct vm_struct *area, gfp_t gfp_mask,
 				pgprot_t prot);
-extern void *__vmalloc_node(unsigned long size, gfp_t gfp_mask,
-				pgprot_t prot, int node);
 extern void vfree(void *addr);
 
 extern void *vmap(struct page **pages, unsigned int count,
@@ -54,20 +53,33 @@ extern void vunmap(void *addr);
 
 extern int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
 							unsigned long pgoff);
+void vmalloc_sync_all(void);
  
 /*
  *	Lowlevel-APIs (not for driver use!)
  */
+
+static inline size_t get_vm_area_size(const struct vm_struct *area)
+{
+	/* return actual size without guard page */
+	return area->size - PAGE_SIZE;
+}
+
 extern struct vm_struct *get_vm_area(unsigned long size, unsigned long flags);
 extern struct vm_struct *__get_vm_area(unsigned long size, unsigned long flags,
 					unsigned long start, unsigned long end);
 extern struct vm_struct *get_vm_area_node(unsigned long size,
-					unsigned long flags, int node);
+					  unsigned long flags, int node,
+					  gfp_t gfp_mask);
 extern struct vm_struct *remove_vm_area(void *addr);
-extern struct vm_struct *__remove_vm_area(void *addr);
+
 extern int map_vm_area(struct vm_struct *area, pgprot_t prot,
 			struct page ***pages);
-extern void unmap_vm_area(struct vm_struct *area);
+extern void unmap_kernel_range(unsigned long addr, unsigned long size);
+
+/* Allocate/destroy a 'vmalloc' VM area. */
+extern struct vm_struct *alloc_vm_area(size_t size);
+extern void free_vm_area(struct vm_struct *area);
 
 /*
  *	Internals.  Dont't use..

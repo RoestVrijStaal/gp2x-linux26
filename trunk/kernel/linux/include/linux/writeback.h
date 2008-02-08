@@ -1,8 +1,11 @@
 /*
- * include/linux/writeback.h.
+ * include/linux/writeback.h
  */
 #ifndef WRITEBACK_H
 #define WRITEBACK_H
+
+#include <linux/sched.h>
+#include <linux/fs.h>
 
 struct backing_dev_info;
 
@@ -65,7 +68,6 @@ struct writeback_control {
  * fs/fs-writeback.c
  */	
 void writeback_inodes(struct writeback_control *wbc);
-void wake_up_inode(struct inode *inode);
 int inode_wait(void *);
 void sync_inodes_sb(struct super_block *, int wait);
 void sync_inodes(int wait);
@@ -77,6 +79,13 @@ static inline void wait_on_inode(struct inode *inode)
 	wait_on_bit(&inode->i_state, __I_LOCK, inode_wait,
 							TASK_UNINTERRUPTIBLE);
 }
+static inline void inode_sync_wait(struct inode *inode)
+{
+	might_sleep();
+	wait_on_bit(&inode->i_state, __I_SYNC, inode_wait,
+							TASK_UNINTERRUPTIBLE);
+}
+
 
 /*
  * mm/page-writeback.c
@@ -84,7 +93,7 @@ static inline void wait_on_inode(struct inode *inode)
 int wakeup_pdflush(long nr_pages);
 void laptop_io_completion(void);
 void laptop_sync_completion(void);
-void throttle_vm_writeout(void);
+void throttle_vm_writeout(gfp_t gfp_mask);
 
 /* These are exported to sysctl. */
 extern int dirty_background_ratio;
@@ -93,6 +102,10 @@ extern int dirty_writeback_interval;
 extern int dirty_expire_interval;
 extern int block_dump;
 extern int laptop_mode;
+
+extern int dirty_ratio_handler(struct ctl_table *table, int write,
+		struct file *filp, void __user *buffer, size_t *lenp,
+		loff_t *ppos);
 
 struct ctl_table;
 struct file;
@@ -109,12 +122,22 @@ balance_dirty_pages_ratelimited(struct address_space *mapping)
 	balance_dirty_pages_ratelimited_nr(mapping, 1);
 }
 
+typedef int (*writepage_t)(struct page *page, struct writeback_control *wbc,
+				void *data);
+
 int pdflush_operation(void (*fn)(unsigned long), unsigned long arg0);
+int generic_writepages(struct address_space *mapping,
+		       struct writeback_control *wbc);
+int write_cache_pages(struct address_space *mapping,
+		      struct writeback_control *wbc, writepage_t writepage,
+		      void *data);
 int do_writepages(struct address_space *mapping, struct writeback_control *wbc);
 int sync_page_range(struct inode *inode, struct address_space *mapping,
 			loff_t pos, loff_t count);
 int sync_page_range_nolock(struct inode *inode, struct address_space *mapping,
 			   loff_t pos, loff_t count);
+void set_page_dirty_balance(struct page *page, int page_mkwrite);
+void writeback_set_ratelimit(void);
 
 /* pdflush.c */
 extern int nr_pdflush_threads;	/* Global so it can be exported to sysctl

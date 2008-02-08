@@ -23,8 +23,9 @@
 
 struct poll_table_struct;
 struct inode;
+struct net;
 
-#define NPROTO		32		/* should be enough for now..	*/
+#define NPROTO		34		/* should be enough for now..	*/
 
 #define SYS_SOCKET	1		/* sys_socket(2)		*/
 #define SYS_BIND	2		/* sys_bind(2)			*/
@@ -56,6 +57,7 @@ typedef enum {
 
 #ifdef __KERNEL__
 #include <linux/stringify.h>
+#include <linux/random.h>
 
 #define SOCK_ASYNC_NOSPACE	0
 #define SOCK_ASYNC_WAITDATA	1
@@ -92,6 +94,12 @@ enum sock_type {
 #define SOCK_MAX (SOCK_PACKET + 1)
 
 #endif /* ARCH_HAS_SOCKET_TYPES */
+
+enum sock_shutdown_cmd {
+	SHUT_RD		= 0,
+	SHUT_WR		= 1,
+	SHUT_RDWR	= 2,
+};
 
 /**
  *  struct socket - general BSD socket
@@ -168,12 +176,7 @@ struct proto_ops {
 
 struct net_proto_family {
 	int		family;
-	int		(*create)(struct socket *sock, int protocol);
-	/* These are counters for the number of different methods of
-	   each we support */
-	short		authentication;
-	short		encryption;
-	short		encrypt_net;
+	int		(*create)(struct net *net, struct socket *sock, int protocol);
 	struct module	*owner;
 };
 
@@ -181,8 +184,8 @@ struct iovec;
 struct kvec;
 
 extern int	     sock_wake_async(struct socket *sk, int how, int band);
-extern int	     sock_register(struct net_proto_family *fam);
-extern int	     sock_unregister(int family);
+extern int	     sock_register(const struct net_proto_family *fam);
+extern void	     sock_unregister(int family);
 extern int	     sock_create(int family, int type, int proto,
 				 struct socket **res);
 extern int	     sock_create_kern(int family, int type, int proto,
@@ -198,15 +201,36 @@ extern int 	     sock_map_fd(struct socket *sock);
 extern struct socket *sockfd_lookup(int fd, int *err);
 #define		     sockfd_put(sock) fput(sock->file)
 extern int	     net_ratelimit(void);
-extern unsigned long net_random(void);
-extern void	     net_srandom(unsigned long);
-extern void	     net_random_init(void);
+
+#define net_random()		random32()
+#define net_srandom(seed)	srandom32((__force u32)seed)
 
 extern int   	     kernel_sendmsg(struct socket *sock, struct msghdr *msg,
 				    struct kvec *vec, size_t num, size_t len);
 extern int   	     kernel_recvmsg(struct socket *sock, struct msghdr *msg,
 				    struct kvec *vec, size_t num,
 				    size_t len, int flags);
+
+extern int kernel_bind(struct socket *sock, struct sockaddr *addr,
+		       int addrlen);
+extern int kernel_listen(struct socket *sock, int backlog);
+extern int kernel_accept(struct socket *sock, struct socket **newsock,
+			 int flags);
+extern int kernel_connect(struct socket *sock, struct sockaddr *addr,
+			  int addrlen, int flags);
+extern int kernel_getsockname(struct socket *sock, struct sockaddr *addr,
+			      int *addrlen);
+extern int kernel_getpeername(struct socket *sock, struct sockaddr *addr,
+			      int *addrlen);
+extern int kernel_getsockopt(struct socket *sock, int level, int optname,
+			     char *optval, int *optlen);
+extern int kernel_setsockopt(struct socket *sock, int level, int optname,
+			     char *optval, int optlen);
+extern int kernel_sendpage(struct socket *sock, struct page *page, int offset,
+			   size_t size, int flags);
+extern int kernel_sock_ioctl(struct socket *sock, int cmd, unsigned long arg);
+extern int kernel_sock_shutdown(struct socket *sock,
+				enum sock_shutdown_cmd how);
 
 #ifndef CONFIG_SMP
 #define SOCKOPS_WRAPPED(name) name
@@ -296,6 +320,10 @@ static const struct proto_ops name##_ops = {			\
 
 #define MODULE_ALIAS_NET_PF_PROTO(pf, proto) \
 	MODULE_ALIAS("net-pf-" __stringify(pf) "-proto-" __stringify(proto))
+
+#define MODULE_ALIAS_NET_PF_PROTO_TYPE(pf, proto, type) \
+	MODULE_ALIAS("net-pf-" __stringify(pf) "-proto-" __stringify(proto) \
+		     "-type-" __stringify(type))
 
 #ifdef CONFIG_SYSCTL
 #include <linux/sysctl.h>

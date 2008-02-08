@@ -79,6 +79,15 @@ struct task_struct;
 
 extern void init_waitqueue_head(wait_queue_head_t *q);
 
+#ifdef CONFIG_LOCKDEP
+# define __WAIT_QUEUE_HEAD_INIT_ONSTACK(name) \
+	({ init_waitqueue_head(&name); name; })
+# define DECLARE_WAIT_QUEUE_HEAD_ONSTACK(name) \
+	wait_queue_head_t name = __WAIT_QUEUE_HEAD_INIT_ONSTACK(name)
+#else
+# define DECLARE_WAIT_QUEUE_HEAD_ONSTACK(name) DECLARE_WAIT_QUEUE_HEAD(name)
+#endif
+
 static inline void init_waitqueue_entry(wait_queue_t *q, struct task_struct *p)
 {
 	q->flags = 0;
@@ -357,15 +366,15 @@ static inline void remove_wait_queue_locked(wait_queue_head_t *q,
 
 /*
  * These are the old interfaces to sleep waiting for an event.
- * They are racy.  DO NOT use them, use the wait_event* interfaces above.  
- * We plan to remove these interfaces during 2.7.
+ * They are racy.  DO NOT use them, use the wait_event* interfaces above.
+ * We plan to remove these interfaces.
  */
-extern void FASTCALL(sleep_on(wait_queue_head_t *q));
-extern long FASTCALL(sleep_on_timeout(wait_queue_head_t *q,
-				      signed long timeout));
-extern void FASTCALL(interruptible_sleep_on(wait_queue_head_t *q));
-extern long FASTCALL(interruptible_sleep_on_timeout(wait_queue_head_t *q,
-						    signed long timeout));
+extern void sleep_on(wait_queue_head_t *q);
+extern long sleep_on_timeout(wait_queue_head_t *q,
+				      signed long timeout);
+extern void interruptible_sleep_on(wait_queue_head_t *q);
+extern long interruptible_sleep_on_timeout(wait_queue_head_t *q,
+					   signed long timeout);
 
 /*
  * Waitqueues which are removed from the waitqueue_head at wakeup time

@@ -35,7 +35,7 @@ struct ext3_reserve_window {
 };
 
 struct ext3_reserve_window_node {
-	struct rb_node	 	rsv_node;
+	struct rb_node		rsv_node;
 	__u32			rsv_goal_size;
 	__u32			rsv_alloc_hit;
 	struct ext3_reserve_window	rsv_window;
@@ -54,7 +54,7 @@ struct ext3_block_alloc_info {
 	/*
 	 * Was i_next_alloc_goal in ext3_inode_info
 	 * is the *physical* companion to i_next_alloc_block.
-	 * it the the physical block number of the block which was most-recentl
+	 * it the physical block number of the block which was most-recentl
 	 * allocated to this file.  This give us the goal (target) for the next
 	 * allocation when we detect linearly ascending requests.
 	 */

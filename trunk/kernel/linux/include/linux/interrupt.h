@@ -40,6 +40,11 @@
  * IRQF_SHARED - allow sharing the irq among several devices
  * IRQF_PROBE_SHARED - set by callers when they expect sharing mismatches to occur
  * IRQF_TIMER - Flag to mark this interrupt as timer interrupt
+ * IRQF_PERCPU - Interrupt is per cpu
+ * IRQF_NOBALANCING - Flag to exclude this interrupt from irq balancing
+ * IRQF_IRQPOLL - Interrupt is used for polling (only the interrupt that is
+ *                registered first in an shared interrupt is considered for
+ *                performance reasons)
  */
 #define IRQF_DISABLED		0x00000020
 #define IRQF_SAMPLE_RANDOM	0x00000040
@@ -47,25 +52,13 @@
 #define IRQF_PROBE_SHARED	0x00000100
 #define IRQF_TIMER		0x00000200
 #define IRQF_PERCPU		0x00000400
+#define IRQF_NOBALANCING	0x00000800
+#define IRQF_IRQPOLL		0x00001000
 
-/*
- * Migration helpers. Scheduled for removal in 1/2007
- * Do not use for new code !
- */
-#define SA_INTERRUPT		IRQF_DISABLED
-#define SA_SAMPLE_RANDOM	IRQF_SAMPLE_RANDOM
-#define SA_SHIRQ		IRQF_SHARED
-#define SA_PROBEIRQ		IRQF_PROBE_SHARED
-#define SA_PERCPU		IRQF_PERCPU
-
-#define SA_TRIGGER_LOW		IRQF_TRIGGER_LOW
-#define SA_TRIGGER_HIGH		IRQF_TRIGGER_HIGH
-#define SA_TRIGGER_FALLING	IRQF_TRIGGER_FALLING
-#define SA_TRIGGER_RISING	IRQF_TRIGGER_RISING
-#define SA_TRIGGER_MASK		IRQF_TRIGGER_MASK
+typedef irqreturn_t (*irq_handler_t)(int, void *);
 
 struct irqaction {
-	irqreturn_t (*handler)(int, void *, struct pt_regs *);
+	irq_handler_t handler;
 	unsigned long flags;
 	cpumask_t mask;
 	const char *name;
@@ -75,11 +68,17 @@ struct irqaction {
 	struct proc_dir_entry *dir;
 };
 
-extern irqreturn_t no_action(int cpl, void *dev_id, struct pt_regs *regs);
-extern int request_irq(unsigned int,
-		       irqreturn_t (*handler)(int, void *, struct pt_regs *),
+extern irqreturn_t no_action(int cpl, void *dev_id);
+extern int __must_check request_irq(unsigned int, irq_handler_t handler,
 		       unsigned long, const char *, void *);
 extern void free_irq(unsigned int, void *);
+
+struct device;
+
+extern int __must_check devm_request_irq(struct device *dev, unsigned int irq,
+			    irq_handler_t handler, unsigned long irqflags,
+			    const char *devname, void *dev_id);
+extern void devm_free_irq(struct device *dev, unsigned int irq, void *dev_id);
 
 /*
  * On lockdep we dont want to enable hardirqs in hardirq
@@ -99,11 +98,11 @@ extern void free_irq(unsigned int, void *);
 # define local_irq_enable_in_hardirq()	local_irq_enable()
 #endif
 
-#ifdef CONFIG_GENERIC_HARDIRQS
 extern void disable_irq_nosync(unsigned int irq);
 extern void disable_irq(unsigned int irq);
 extern void enable_irq(unsigned int irq);
 
+#ifdef CONFIG_GENERIC_HARDIRQS
 /*
  * Special lockdep variants of irq disabling/enabling.
  * These should be used for locking constructs that
@@ -123,6 +122,14 @@ static inline void disable_irq_nosync_lockdep(unsigned int irq)
 #endif
 }
 
+static inline void disable_irq_nosync_lockdep_irqsave(unsigned int irq, unsigned long *flags)
+{
+	disable_irq_nosync(irq);
+#ifdef CONFIG_LOCKDEP
+	local_irq_save(*flags);
+#endif
+}
+
 static inline void disable_irq_lockdep(unsigned int irq)
 {
 	disable_irq(irq);
@@ -135,6 +142,14 @@ static inline void enable_irq_lockdep(unsigned int irq)
 {
 #ifdef CONFIG_LOCKDEP
 	local_irq_enable();
+#endif
+	enable_irq(irq);
+}
+
+static inline void enable_irq_lockdep_irqrestore(unsigned int irq, unsigned long *flags)
+{
+#ifdef CONFIG_LOCKDEP
+	local_irq_restore(*flags);
 #endif
 	enable_irq(irq);
 }
@@ -158,12 +173,25 @@ static inline int disable_irq_wake(unsigned int irq)
  * validator need to define the methods below in their asm/irq.h
  * files, under an #ifdef CONFIG_LOCKDEP section.
  */
-# ifndef CONFIG_LOCKDEP
+#ifndef CONFIG_LOCKDEP
 #  define disable_irq_nosync_lockdep(irq)	disable_irq_nosync(irq)
+#  define disable_irq_nosync_lockdep_irqsave(irq, flags) \
+						disable_irq_nosync(irq)
 #  define disable_irq_lockdep(irq)		disable_irq(irq)
 #  define enable_irq_lockdep(irq)		enable_irq(irq)
+#  define enable_irq_lockdep_irqrestore(irq, flags) \
+						enable_irq(irq)
 # endif
 
+static inline int enable_irq_wake(unsigned int irq)
+{
+	return 0;
+}
+
+static inline int disable_irq_wake(unsigned int irq)
+{
+	return 0;
+}
 #endif /* CONFIG_GENERIC_HARDIRQS */
 
 #ifndef __ARCH_SET_SOFTIRQ_PENDING
@@ -200,11 +228,15 @@ static inline void __deprecated save_and_cli(unsigned long *x)
 #define save_and_cli(x)	save_and_cli(&x)
 #endif /* CONFIG_SMP */
 
-extern void local_bh_disable(void);
-extern void __local_bh_enable(void);
-extern void _local_bh_enable(void);
-extern void local_bh_enable(void);
-extern void local_bh_enable_ip(unsigned long ip);
+/* Some architectures might implement lazy enabling/disabling of
+ * interrupts. In some cases, such as stop_machine, we might want
+ * to ensure that after a local_irq_disable(), interrupts have
+ * really been disabled in hardware. Such architectures need to
+ * implement the following hook.
+ */
+#ifndef hard_irq_disable
+#define hard_irq_disable()	do { } while(0)
+#endif
 
 /* PLEASE, avoid to allocate new softirqs, if you need not _really_ high
    frequency threaded job scheduling. For almost all the purposes
@@ -219,7 +251,11 @@ enum
 	NET_TX_SOFTIRQ,
 	NET_RX_SOFTIRQ,
 	BLOCK_SOFTIRQ,
-	TASKLET_SOFTIRQ
+	TASKLET_SOFTIRQ,
+	SCHED_SOFTIRQ,
+#ifdef CONFIG_HIGH_RES_TIMERS
+	HRTIMER_SOFTIRQ,
+#endif
 };
 
 /* softirq mask and active fields moved to irq_cpustat_t in
@@ -396,6 +432,15 @@ static inline unsigned int probe_irq_mask(unsigned long val)
 extern unsigned long probe_irq_on(void);	/* returns 0 on failure */
 extern int probe_irq_off(unsigned long);	/* returns 0 or negative on failure */
 extern unsigned int probe_irq_mask(unsigned long);	/* returns mask of ISA interrupts */
+#endif
+
+#ifdef CONFIG_PROC_FS
+/* Initialize /proc/irq/ */
+extern void init_irq_proc(void);
+#else
+static inline void init_irq_proc(void)
+{
+}
 #endif
 
 #endif

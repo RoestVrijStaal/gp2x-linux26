@@ -20,6 +20,12 @@
 
 #include <linux/spinlock.h>
 #include <linux/device.h>
+#include <linux/ethtool.h>
+#include <linux/mii.h>
+#include <linux/timer.h>
+#include <linux/workqueue.h>
+
+#include <asm/atomic.h>
 
 #define PHY_BASIC_FEATURES	(SUPPORTED_10baseT_Half | \
 				 SUPPORTED_10baseT_Full | \
@@ -43,15 +49,29 @@
 #define PHY_HAS_INTERRUPT	0x00000001
 #define PHY_HAS_MAGICANEG	0x00000002
 
+/* Interface Mode definitions */
+typedef enum {
+	PHY_INTERFACE_MODE_MII,
+	PHY_INTERFACE_MODE_GMII,
+	PHY_INTERFACE_MODE_SGMII,
+	PHY_INTERFACE_MODE_TBI,
+	PHY_INTERFACE_MODE_RMII,
+	PHY_INTERFACE_MODE_RGMII,
+	PHY_INTERFACE_MODE_RGMII_ID,
+	PHY_INTERFACE_MODE_RGMII_RXID,
+	PHY_INTERFACE_MODE_RGMII_TXID,
+	PHY_INTERFACE_MODE_RTBI
+} phy_interface_t;
+
 #define MII_BUS_MAX 4
 
 
-#define PHY_INIT_TIMEOUT 100000
+#define PHY_INIT_TIMEOUT	100000
 #define PHY_STATE_TIME		1
 #define PHY_FORCE_TIMEOUT	10
 #define PHY_AN_TIMEOUT		10
 
-#define PHY_MAX_ADDR 32
+#define PHY_MAX_ADDR	32
 
 /* Used when trying to connect to a specific phy (mii bus id:phy device id) */
 #define PHY_ID_FMT "%x:%02x"
@@ -83,8 +103,8 @@ struct mii_bus {
 	int *irq;
 };
 
-#define PHY_INTERRUPT_DISABLED 0x0
-#define PHY_INTERRUPT_ENABLED 0x80000000
+#define PHY_INTERRUPT_DISABLED	0x0
+#define PHY_INTERRUPT_ENABLED	0x80000000
 
 /* PHY state machine states:
  *
@@ -226,6 +246,8 @@ struct phy_device {
 
 	u32 dev_flags;
 
+	phy_interface_t interface;
+
 	/* Bus address of the PHY (0-32) */
 	int addr;
 
@@ -263,6 +285,7 @@ struct phy_device {
 	/* Interrupt and Polling infrastructure */
 	struct work_struct phy_queue;
 	struct timer_list phy_timer;
+	atomic_t irq_disable;
 
 	spinlock_t lock;
 
@@ -341,9 +364,10 @@ struct phy_device* get_phy_device(struct mii_bus *bus, int addr);
 int phy_clear_interrupt(struct phy_device *phydev);
 int phy_config_interrupt(struct phy_device *phydev, u32 interrupts);
 struct phy_device * phy_attach(struct net_device *dev,
-		const char *phy_id, u32 flags);
+		const char *phy_id, u32 flags, phy_interface_t interface);
 struct phy_device * phy_connect(struct net_device *dev, const char *phy_id,
-		void (*handler)(struct net_device *), u32 flags);
+		void (*handler)(struct net_device *), u32 flags,
+		phy_interface_t interface);
 void phy_disconnect(struct phy_device *phydev);
 void phy_detach(struct phy_device *phydev);
 void phy_start(struct phy_device *phydev);
@@ -379,6 +403,7 @@ int phy_mii_ioctl(struct phy_device *phydev,
 int phy_start_interrupts(struct phy_device *phydev);
 void phy_print_status(struct phy_device *phydev);
 struct phy_device* phy_device_create(struct mii_bus *bus, int addr, int phy_id);
+void phy_device_free(struct phy_device *phydev);
 
 extern struct bus_type mdio_bus_type;
 #endif /* __PHY_H */

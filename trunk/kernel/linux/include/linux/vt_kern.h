@@ -9,6 +9,7 @@
 #include <linux/vt.h>
 #include <linux/kd.h>
 #include <linux/tty.h>
+#include <linux/mutex.h>
 #include <linux/console_struct.h>
 #include <linux/mm.h>
 
@@ -33,7 +34,8 @@ extern int fg_console, last_console, want_console;
 int vc_allocate(unsigned int console);
 int vc_cons_allocated(unsigned int console);
 int vc_resize(struct vc_data *vc, unsigned int cols, unsigned int lines);
-void vc_disallocate(unsigned int console);
+int vc_lock_resize(struct vc_data *vc, unsigned int cols, unsigned int lines);
+void vc_deallocate(unsigned int console);
 void reset_palette(struct vc_data *vc);
 void do_blank_screen(int entering_gfx);
 void do_unblank_screen(int leaving_gfx);
@@ -73,6 +75,8 @@ int con_copy_unimap(struct vc_data *dst_vc, struct vc_data *src_vc);
 int vt_waitactive(int vt);
 void change_console(struct vc_data *new_vc);
 void reset_vc(struct vc_data *vc);
+extern int unbind_con_driver(const struct consw *csw, int first, int last,
+			     int deflt);
 
 /*
  * vc_screen.c shares this temporary buffer with the console write code so that
@@ -81,6 +85,15 @@ void reset_vc(struct vc_data *vc);
 
 #define CON_BUF_SIZE (CONFIG_BASE_SMALL ? 256 : PAGE_SIZE)
 extern char con_buf[CON_BUF_SIZE];
-extern struct semaphore con_buf_sem;
+extern struct mutex con_buf_mtx;
+extern char vt_dont_switch;
+extern int default_utf8;
+
+struct vt_spawn_console {
+	spinlock_t lock;
+	struct pid *pid;
+	int sig;
+};
+extern struct vt_spawn_console vt_spawn_con;
 
 #endif /* _VT_KERN_H */

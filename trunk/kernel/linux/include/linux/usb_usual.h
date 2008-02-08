@@ -46,7 +46,12 @@
 	US_FLAG(MAX_SECTORS_64,	0x00000400)			\
 		/* Sets max_sectors to 64    */			\
 	US_FLAG(IGNORE_DEVICE,	0x00000800)			\
-		/* Don't claim device */
+		/* Don't claim device */			\
+	US_FLAG(CAPACITY_HEURISTICS,	0x00001000)		\
+		/* sometimes sizes is too big */		\
+	US_FLAG(MAX_SECTORS_MIN,0x00002000)			\
+		/* Sets max_sectors to arch min */
+
 
 #define US_FLAG(name, value)	US_FL_##name = value ,
 enum { US_DO_ALL_FLAGS };
@@ -107,6 +112,9 @@ enum { US_DO_ALL_FLAGS };
 #endif
 #ifdef CONFIG_USB_STORAGE_ALAUDA
 #define US_PR_ALAUDA    0xf4		/* Alauda chipsets */
+#endif
+#ifdef CONFIG_USB_STORAGE_KARMA
+#define US_PR_KARMA     0xf5		/* Rio Karma */
 #endif
 
 #define US_PR_DEVICE	0xff		/* Use device's value */

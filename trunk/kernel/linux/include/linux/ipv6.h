@@ -27,8 +27,9 @@ struct in6_ifreq {
 	int		ifr6_ifindex; 
 };
 
-#define IPV6_SRCRT_STRICT	0x01	/* this hop must be a neighbor	*/
-#define IPV6_SRCRT_TYPE_0	0	/* IPv6 type 0 Routing Header	*/
+#define IPV6_SRCRT_STRICT	0x01	/* Deprecated; will be removed */
+#define IPV6_SRCRT_TYPE_0	0	/* Deprecated; will be removed */
+#define IPV6_SRCRT_TYPE_2	2	/* IPv6 type 2 Routing Header	*/
 
 /*
  *	routing header
@@ -73,26 +74,27 @@ struct rt0_hdr {
 #define rt0_type		rt_hdr.type
 };
 
-struct ipv6_auth_hdr {
-	__u8  nexthdr;
-	__u8  hdrlen;           /* This one is measured in 32 bit units! */
-	__u16 reserved;
-	__u32 spi;
-	__u32 seq_no;           /* Sequence number */
-	__u8  auth_data[0];     /* Length variable but >=4. Mind the 64 bit alignment! */
+/*
+ *	routing header type 2
+ */
+
+struct rt2_hdr {
+	struct ipv6_rt_hdr	rt_hdr;
+	__u32			reserved;
+	struct in6_addr		addr;
+
+#define rt2_type		rt_hdr.type
 };
 
-struct ipv6_esp_hdr {
-	__u32 spi;
-	__u32 seq_no;           /* Sequence number */
-	__u8  enc_data[0];      /* Length variable but >=8. Mind the 64 bit alignment! */
-};
+/*
+ *	home address option in destination options header
+ */
 
-struct ipv6_comp_hdr {
-	__u8 nexthdr;
-	__u8 flags;
-	__u16 cpi;
-};
+struct ipv6_destopt_hao {
+	__u8			type;
+	__u8			length;
+	struct in6_addr		addr;
+} __attribute__ ((__packed__));
 
 /*
  *	IPv6 fixed header
@@ -113,7 +115,7 @@ struct ipv6hdr {
 #endif
 	__u8			flow_lbl[3];
 
-	__u16			payload_len;
+	__be16			payload_len;
 	__u8			nexthdr;
 	__u8			hop_limit;
 
@@ -153,6 +155,11 @@ struct ipv6_devconf {
 	__s32		accept_ra_rt_info_max_plen;
 #endif
 #endif
+	__s32		proxy_ndp;
+	__s32		accept_source_route;
+#ifdef CONFIG_IPV6_OPTIMISTIC_DAD
+	__s32		optimistic_dad;
+#endif
 	void		*sysctl;
 };
 
@@ -180,6 +187,9 @@ enum {
 	DEVCONF_ACCEPT_RA_RTR_PREF,
 	DEVCONF_RTR_PROBE_INTERVAL,
 	DEVCONF_ACCEPT_RA_RT_INFO_MAX_PLEN,
+	DEVCONF_PROXY_NDP,
+	DEVCONF_OPTIMISTIC_DAD,
+	DEVCONF_ACCEPT_SOURCE_ROUTE,
 	DEVCONF_MAX
 };
 
@@ -188,8 +198,17 @@ enum {
 #include <linux/tcp.h>
 #include <linux/udp.h>
 
-#include <net/if_inet6.h>       /* struct ipv6_mc_socklist */
 #include <net/inet_sock.h>
+
+static inline struct ipv6hdr *ipv6_hdr(const struct sk_buff *skb)
+{
+	return (struct ipv6hdr *)skb_network_header(skb);
+}
+
+static inline struct ipv6hdr *ipipv6_hdr(const struct sk_buff *skb)
+{
+	return (struct ipv6hdr *)skb_transport_header(skb);
+}
 
 /* 
    This structure contains results of exthdrs parsing
@@ -206,6 +225,9 @@ struct inet6_skb_parm {
 	__u16			lastopt;
 	__u32			nhoff;
 	__u16			flags;
+#if defined(CONFIG_IPV6_MIP6) || defined(CONFIG_IPV6_MIP6_MODULE)
+	__u16			dsthao;
+#endif
 
 #define IP6SKB_XFRM_TRANSFORMED	1
 };
@@ -229,6 +251,10 @@ struct tcp6_request_sock {
 	struct inet6_request_sock tcp6rsk_inet6;
 };
 
+struct ipv6_mc_socklist;
+struct ipv6_ac_socklist;
+struct ipv6_fl_socklist;
+
 /**
  * struct ipv6_pinfo - ipv6 private area
  *
@@ -242,8 +268,11 @@ struct ipv6_pinfo {
 	struct in6_addr 	rcv_saddr;
 	struct in6_addr		daddr;
 	struct in6_addr		*daddr_cache;
+#ifdef CONFIG_IPV6_SUBTREES
+	struct in6_addr		*saddr_cache;
+#endif
 
-	__u32			flow_label;
+	__be32			flow_label;
 	__u32			frag_size;
 	__s16			hop_limit;
 	__s16			mcast_hops;
@@ -252,8 +281,8 @@ struct ipv6_pinfo {
 	/* pktoption flags */
 	union {
 		struct {
-			__u16	srcrt:2,
-				osrcrt:2,
+			__u16	srcrt:1,
+				osrcrt:1,
 			        rxinfo:1,
 			        rxoinfo:1,
 				rxhlim:1,
@@ -430,7 +459,7 @@ static inline struct raw6_sock *raw6_sk(const struct sock *sk)
 
 #define INET6_MATCH(__sk, __hash, __saddr, __daddr, __ports, __dif)\
 	(((__sk)->sk_hash == (__hash))				&& \
-	 ((*((__u32 *)&(inet_sk(__sk)->dport))) == (__ports))  	&& \
+	 ((*((__portpair *)&(inet_sk(__sk)->dport))) == (__ports))  	&& \
 	 ((__sk)->sk_family		== AF_INET6)		&& \
 	 ipv6_addr_equal(&inet6_sk(__sk)->daddr, (__saddr))	&& \
 	 ipv6_addr_equal(&inet6_sk(__sk)->rcv_saddr, (__daddr))	&& \

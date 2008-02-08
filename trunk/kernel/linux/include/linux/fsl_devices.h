@@ -19,6 +19,7 @@
 #define _FSL_DEVICE_H_
 
 #include <linux/types.h>
+#include <linux/phy.h>
 
 /*
  * Some conventions on how we handle peripherals on Freescale chips
@@ -46,18 +47,18 @@
 
 struct gianfar_platform_data {
 	/* device specific information */
-	u32 device_flags;
-
+	u32	device_flags;
 	/* board specific information */
-	u32 board_flags;
-	u32 bus_id;
-	u32 phy_id;
-	u8 mac_addr[6];
+	u32	board_flags;
+	u32	bus_id;
+	u32	phy_id;
+	u8	mac_addr[6];
+	phy_interface_t interface;
 };
 
 struct gianfar_mdio_data {
 	/* board specific information */
-	int irq[32];
+	int	irq[32];
 };
 
 /* Flags related to gianfar device features */
@@ -76,13 +77,12 @@ struct gianfar_mdio_data {
 
 struct fsl_i2c_platform_data {
 	/* device specific information */
-	u32 device_flags;
+	u32	device_flags;
 };
 
 /* Flags related to I2C device features */
 #define FSL_I2C_DEV_SEPARATE_DFSRR	0x00000001
 #define FSL_I2C_DEV_CLOCK_5200		0x00000002
-
 
 enum fsl_usb2_operating_modes {
 	FSL_USB2_MPH_HOST,
@@ -101,9 +101,9 @@ enum fsl_usb2_phy_modes {
 
 struct fsl_usb2_platform_data {
 	/* board specific information */
-	enum fsl_usb2_operating_modes operating_mode;
-	enum fsl_usb2_phy_modes phy_mode;
-	unsigned int port_enables;
+	enum fsl_usb2_operating_modes	operating_mode;
+	enum fsl_usb2_phy_modes		phy_mode;
+	unsigned int			port_enables;
 };
 
 /* Flags in fsl_usb2_mph_platform_data */
@@ -113,7 +113,7 @@ struct fsl_usb2_platform_data {
 struct fsl_spi_platform_data {
 	u32 	initial_spmode;	/* initial SPMODE value */
 	u16	bus_num;
-
+	bool	qe_mode;
 	/* board specific information */
 	u16	max_chipselect;
 	void	(*activate_cs)(u8 cs, u8 polarity);
@@ -121,5 +121,10 @@ struct fsl_spi_platform_data {
 	u32	sysclk;
 };
 
-#endif				/* _FSL_DEVICE_H_ */
-#endif				/* __KERNEL__ */
+struct mpc8xx_pcmcia_ops {
+	void(*hw_ctrl)(int slot, int enable);
+	int(*voltage_set)(int slot, int vcc, int vpp);
+};
+
+#endif /* _FSL_DEVICE_H_ */
+#endif /* __KERNEL__ */
