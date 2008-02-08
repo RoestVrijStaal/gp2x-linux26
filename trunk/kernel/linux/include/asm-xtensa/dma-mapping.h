@@ -1,5 +1,5 @@
 /*
- * include/asm-xtensa/dma_mapping.h
+ * include/asm-xtensa/dma-mapping.h
  *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file "COPYING" in the main directory of this archive
@@ -11,10 +11,10 @@
 #ifndef _XTENSA_DMA_MAPPING_H
 #define _XTENSA_DMA_MAPPING_H
 
-#include <asm/scatterlist.h>
 #include <asm/cache.h>
 #include <asm/io.h>
 #include <linux/mm.h>
+#include <linux/scatterlist.h>
 
 /*
  * DMA-consistent mapping functions.
@@ -58,11 +58,10 @@ dma_map_sg(struct device *dev, struct scatterlist *sg, int nents,
 	BUG_ON(direction == DMA_NONE);
 
 	for (i = 0; i < nents; i++, sg++ ) {
-		BUG_ON(!sg->page);
+		BUG_ON(!sg_page(sg));
 
-		sg->dma_address = page_to_phys(sg->page) + sg->offset;
-		consistent_sync(page_address(sg->page) + sg->offset,
-				sg->length, direction);
+		sg->dma_address = sg_phys(sg);
+		consistent_sync(sg_virt(sg), sg->length, direction);
 	}
 
 	return nents;
@@ -128,8 +127,7 @@ dma_sync_sg_for_cpu(struct device *dev, struct scatterlist *sg, int nelems,
 {
 	int i;
 	for (i = 0; i < nelems; i++, sg++)
-		consistent_sync(page_address(sg->page) + sg->offset,
-				sg->length, dir);
+		consistent_sync(sg_virt(sg), sg->length, dir);
 }
 
 static inline void
@@ -138,8 +136,7 @@ dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg, int nelems,
 {
 	int i;
 	for (i = 0; i < nelems; i++, sg++)
-		consistent_sync(page_address(sg->page) + sg->offset,
-				sg->length, dir);
+		consistent_sync(sg_virt(sg), sg->length, dir);
 }
 static inline int
 dma_mapping_error(dma_addr_t dma_addr)
@@ -170,10 +167,10 @@ dma_get_cache_alignment(void)
 	return L1_CACHE_BYTES;
 }
 
-#define dma_is_consistent(d)	(1)
+#define dma_is_consistent(d, h)	(1)
 
 static inline void
-dma_cache_sync(void *vaddr, size_t size,
+dma_cache_sync(struct device *dev, void *vaddr, size_t size,
 	       enum dma_data_direction direction)
 {
 	consistent_sync(vaddr, size, direction);

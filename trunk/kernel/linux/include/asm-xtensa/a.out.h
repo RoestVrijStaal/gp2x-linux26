@@ -1,5 +1,5 @@
 /*
- * include/asm-xtensa/addrspace.h
+ * include/asm-xtensa/a.out.h
  *
  * Dummy a.out file. Xtensa does not support the a.out format, but the kernel
  * seems to depend on it.
@@ -17,6 +17,7 @@
 /* Note: the kernel needs the a.out definitions, even if only ELF is used. */
 
 #define STACK_TOP	TASK_SIZE
+#define STACK_TOP_MAX	STACK_TOP
 
 struct exec
 {
