@@ -27,8 +27,16 @@
 struct mtd_info;
 /* Scan and identify a NAND device */
 extern int nand_scan (struct mtd_info *mtd, int max_chips);
+/* Separate phases of nand_scan(), allowing board driver to intervene
+ * and override command or ECC setup according to flash type */
+extern int nand_scan_ident(struct mtd_info *mtd, int max_chips);
+extern int nand_scan_tail(struct mtd_info *mtd);
+
 /* Free resources held by the NAND device */
 extern void nand_release (struct mtd_info *mtd);
+
+/* Internal helper for board drivers which need to override command function */
+extern void nand_wait_ready(struct mtd_info *mtd);
 
 /* The maximum number of NAND chips in an array */
 #define NAND_MAX_CHIPS		8
@@ -158,6 +166,9 @@ typedef enum {
  * for all large page devices, as they do not support
  * autoincrement.*/
 #define NAND_NO_READRDY		0x00000100
+/* Chip does not allow subpage writes */
+#define NAND_NO_SUBPAGE_WRITE	0x00000200
+
 
 /* Options valid for Samsung large page devices */
 #define NAND_SAMSUNG_LP_OPTIONS \
@@ -178,11 +189,16 @@ typedef enum {
 #define NAND_USE_FLASH_BBT	0x00010000
 /* This option skips the bbt scan during initialization. */
 #define NAND_SKIP_BBTSCAN	0x00020000
-
+/* This option is defined if the board driver allocates its own buffers
+   (e.g. because it needs them DMA-coherent */
+#define NAND_OWN_BUFFERS	0x00040000
 /* Options set by nand scan */
 /* Nand scan has allocated controller struct */
 #define NAND_CONTROLLER_ALLOC	0x80000000
 
+/* Cell info constants */
+#define NAND_CI_CHIPNR_MSK	0x03
+#define NAND_CI_CELLTYPE_MSK	0x0C
 
 /*
  * nand_state_t - chip states
@@ -228,6 +244,8 @@ struct nand_hw_control {
  *		be provided if an hardware ECC is available
  * @calculate:	function for ecc calculation or readback from ecc hardware
  * @correct:	function for ecc correction, matching to ecc generator (sw/hw)
+ * @read_page_raw:	function to read a raw page without ECC
+ * @write_page_raw:	function to write a raw page without ECC
  * @read_page:	function to read a page according to the ecc generator requirements
  * @write_page:	function to write a page according to the ecc generator requirements
  * @read_oob:	function to read chip OOB data
@@ -249,6 +267,12 @@ struct nand_ecc_ctrl {
 	int			(*correct)(struct mtd_info *mtd, uint8_t *dat,
 					   uint8_t *read_ecc,
 					   uint8_t *calc_ecc);
+	int			(*read_page_raw)(struct mtd_info *mtd,
+						 struct nand_chip *chip,
+						 uint8_t *buf);
+	void			(*write_page_raw)(struct mtd_info *mtd,
+						  struct nand_chip *chip,
+						  const uint8_t *buf);
 	int			(*read_page)(struct mtd_info *mtd,
 					     struct nand_chip *chip,
 					     uint8_t *buf);
@@ -268,9 +292,7 @@ struct nand_ecc_ctrl {
  * struct nand_buffers - buffer structure for read/write
  * @ecccalc:	buffer for calculated ecc
  * @ecccode:	buffer for ecc read from flash
- * @oobwbuf:	buffer for write oob data
  * @databuf:	buffer for data - dynamically sized
- * @oobrbuf:	buffer to read oob data
  *
  * Do not change the order of buffers. databuf and oobrbuf must be in
  * consecutive order.
@@ -278,9 +300,7 @@ struct nand_ecc_ctrl {
 struct nand_buffers {
 	uint8_t	ecccalc[NAND_MAX_OOBSIZE];
 	uint8_t	ecccode[NAND_MAX_OOBSIZE];
-	uint8_t	oobwbuf[NAND_MAX_OOBSIZE];
-	uint8_t databuf[NAND_MAX_PAGESIZE];
-	uint8_t	oobrbuf[NAND_MAX_OOBSIZE];
+	uint8_t databuf[NAND_MAX_PAGESIZE + NAND_MAX_OOBSIZE];
 };
 
 /**
@@ -323,10 +343,12 @@ struct nand_buffers {
  * @options:		[BOARDSPECIFIC] various chip options. They can partly be set to inform nand_scan about
  *			special functionality. See the defines for further explanation
  * @badblockpos:	[INTERN] position of the bad block marker in the oob area
+ * @cellinfo:		[INTERN] MLC/multichip data from chip ident
  * @numchips:		[INTERN] number of physical chips
  * @chipsize:		[INTERN] the size of one chip for multichip arrays
  * @pagemask:		[INTERN] page number mask = number of (pages / chip) - 1
  * @pagebuf:		[INTERN] holds the pagenumber which is currently in data_buf
+ * @subpagesize:	[INTERN] holds the subpagesize
  * @ecclayout:		[REPLACEABLE] the default ecc placement scheme
  * @bbt:		[INTERN] bad block table pointer
  * @bbt_td:		[REPLACEABLE] bad block table descriptor for flash lookup
@@ -337,6 +359,7 @@ struct nand_buffers {
  * @priv:		[OPTIONAL] pointer to private chip date
  * @errstat:		[OPTIONAL] hardware specific function to perform additional error status checks
  *			(determine if errors are correctable)
+ * @write_page:		[REPLACEABLE] High-level page write function
  */
 
 struct nand_chip {
@@ -359,6 +382,8 @@ struct nand_chip {
 	void		(*erase_cmd)(struct mtd_info *mtd, int page);
 	int		(*scan_bbt)(struct mtd_info *mtd);
 	int		(*errstat)(struct mtd_info *mtd, struct nand_chip *this, int state, int status, int page);
+	int		(*write_page)(struct mtd_info *mtd, struct nand_chip *chip,
+				      const uint8_t *buf, int page, int cached, int raw);
 
 	int		chip_delay;
 	unsigned int	options;
@@ -371,6 +396,8 @@ struct nand_chip {
 	unsigned long	chipsize;
 	int		pagemask;
 	int		pagebuf;
+	int		subpagesize;
+	uint8_t		cellinfo;
 	int		badblockpos;
 
 	nand_state_t	state;
@@ -380,7 +407,7 @@ struct nand_chip {
 	struct nand_ecclayout	*ecclayout;
 
 	struct nand_ecc_ctrl ecc;
-	struct nand_buffers buffers;
+	struct nand_buffers *buffers;
 	struct nand_hw_control hwcontrol;
 
 	struct mtd_oob_ops ops;
@@ -404,6 +431,8 @@ struct nand_chip {
 #define NAND_MFR_RENESAS	0x07
 #define NAND_MFR_STMICRO	0x20
 #define NAND_MFR_HYNIX		0xad
+#define NAND_MFR_MICRON		0x2c
+#define NAND_MFR_AMD		0x01
 
 /**
  * struct nand_flash_dev - NAND Flash Device ID Structure
@@ -532,6 +561,7 @@ extern int nand_do_read(struct mtd_info *mtd, loff_t from, size_t len,
  * @chip_delay:		R/B delay value in us
  * @options:		Option flags, e.g. 16bit buswidth
  * @ecclayout:		ecc layout info structure
+ * @part_probe_types:	NULL-terminated array of probe types
  * @priv:		hardware controller specific settings
  */
 struct platform_nand_chip {
@@ -542,6 +572,7 @@ struct platform_nand_chip {
 	struct nand_ecclayout	*ecclayout;
 	int			chip_delay;
 	unsigned int		options;
+	const char		**part_probe_types;
 	void			*priv;
 };
 
@@ -550,6 +581,8 @@ struct platform_nand_chip {
  * @hwcontrol:		platform specific hardware control structure
  * @dev_ready:		platform specific function to read ready/busy pin
  * @select_chip:	platform specific chip select function
+ * @cmd_ctrl:		platform specific function for controlling
+ *			ALE/CLE/nCE. Also used to write command and address
  * @priv:		private data to transport driver specific settings
  *
  * All fields are optional and depend on the hardware driver requirements
@@ -558,7 +591,19 @@ struct platform_nand_ctrl {
 	void		(*hwcontrol)(struct mtd_info *mtd, int cmd);
 	int		(*dev_ready)(struct mtd_info *mtd);
 	void		(*select_chip)(struct mtd_info *mtd, int chip);
+	void		(*cmd_ctrl)(struct mtd_info *mtd, int dat,
+				    unsigned int ctrl);
 	void		*priv;
+};
+
+/**
+ * struct platform_nand_data - container structure for platform-specific data
+ * @chip:		chip level chip structure
+ * @ctrl:		controller level device structure
+ */
+struct platform_nand_data {
+	struct platform_nand_chip	chip;
+	struct platform_nand_ctrl	ctrl;
 };
 
 /* Some helpers to access the data structures */
