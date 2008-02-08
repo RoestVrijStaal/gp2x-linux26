@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2006 Intel Corporation.  All rights reserved.
+ * Copyright (c) 2007 Cisco Systems.  All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -30,24 +30,54 @@
  * SOFTWARE.
  */
 
-#if !defined(IB_USER_MARSHALL_H)
-#define IB_USER_MARSHALL_H
+#ifndef IB_UMEM_H
+#define IB_UMEM_H
 
-#include <rdma/ib_verbs.h>
-#include <rdma/ib_sa.h>
-#include <rdma/ib_user_verbs.h>
-#include <rdma/ib_user_sa.h>
+#include <linux/list.h>
+#include <linux/scatterlist.h>
+#include <linux/workqueue.h>
 
-void ib_copy_qp_attr_to_user(struct ib_uverbs_qp_attr *dst,
-			     struct ib_qp_attr *src);
+struct ib_ucontext;
 
-void ib_copy_ah_attr_to_user(struct ib_uverbs_ah_attr *dst,
-			     struct ib_ah_attr *src);
+struct ib_umem {
+	struct ib_ucontext     *context;
+	size_t			length;
+	int			offset;
+	int			page_size;
+	int                     writable;
+	int                     hugetlb;
+	struct list_head	chunk_list;
+	struct work_struct	work;
+	struct mm_struct       *mm;
+	unsigned long		diff;
+};
 
-void ib_copy_path_rec_to_user(struct ib_user_path_rec *dst,
-			      struct ib_sa_path_rec *src);
+struct ib_umem_chunk {
+	struct list_head	list;
+	int                     nents;
+	int                     nmap;
+	struct scatterlist      page_list[0];
+};
 
-void ib_copy_path_rec_from_user(struct ib_sa_path_rec *dst,
-				struct ib_user_path_rec *src);
+#ifdef CONFIG_INFINIBAND_USER_MEM
 
-#endif /* IB_USER_MARSHALL_H */
+struct ib_umem *ib_umem_get(struct ib_ucontext *context, unsigned long addr,
+			    size_t size, int access);
+void ib_umem_release(struct ib_umem *umem);
+int ib_umem_page_count(struct ib_umem *umem);
+
+#else /* CONFIG_INFINIBAND_USER_MEM */
+
+#include <linux/err.h>
+
+static inline struct ib_umem *ib_umem_get(struct ib_ucontext *context,
+					  unsigned long addr, size_t size,
+					  int access) {
+	return ERR_PTR(-EINVAL);
+}
+static inline void ib_umem_release(struct ib_umem *umem) { }
+static inline int ib_umem_page_count(struct ib_umem *umem) { return 0; }
+
+#endif /* CONFIG_INFINIBAND_USER_MEM */
+
+#endif /* IB_UMEM_H */
