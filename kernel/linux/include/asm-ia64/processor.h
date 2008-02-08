@@ -19,13 +19,8 @@
 #include <asm/ptrace.h>
 #include <asm/ustack.h>
 
+#define IA64_NUM_PHYS_STACK_REG	96
 #define IA64_NUM_DBG_REGS	8
-/*
- * Limits for PMC and PMD are set to less than maximum architected values
- * but should be sufficient for a while
- */
-#define IA64_NUM_PMC_REGS	64
-#define IA64_NUM_PMD_REGS	64
 
 #define DEFAULT_MAP_BASE	__IA64_UL_CONST(0x2000000000000000)
 #define DEFAULT_TASK_SIZE	__IA64_UL_CONST(0xa000000000000000)
@@ -163,6 +158,7 @@ struct cpuinfo_ia64 {
 	__u8 family;
 	__u8 archrev;
 	char vendor[16];
+	char *model_name;
 
 #ifdef CONFIG_NUMA
 	struct ia64_node_data *node_data;
@@ -215,7 +211,7 @@ struct desc_struct {
 	unsigned int a, b;
 };
 
-#define desc_empty(desc)		(!((desc)->a + (desc)->b))
+#define desc_empty(desc)		(!((desc)->a | (desc)->b))
 #define desc_equal(desc1, desc2)	(((desc1)->a == (desc2)->a) && ((desc1)->b == (desc2)->b))
 
 #define GDT_ENTRY_TLS_ENTRIES	3
@@ -224,7 +220,7 @@ struct desc_struct {
 
 #define TLS_SIZE (GDT_ENTRY_TLS_ENTRIES * 8)
 
-struct partial_page_list;
+struct ia64_partial_page_list;
 #endif
 
 struct thread_struct {
@@ -246,7 +242,7 @@ struct thread_struct {
 	__u64 fdr;			/* IA32 fp except. data reg */
 	__u64 old_k1;			/* old value of ar.k1 */
 	__u64 old_iob;			/* old IOBase value */
-	struct partial_page_list *ppl;	/* partial page list for 4K page size issue */
+	struct ia64_partial_page_list *ppl; /* partial page list for 4K page size issue */
         /* cached TLS descriptors. */
 	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
 
@@ -262,13 +258,9 @@ struct thread_struct {
 # define INIT_THREAD_IA32
 #endif /* CONFIG_IA32_SUPPORT */
 #ifdef CONFIG_PERFMON
-	__u64 pmcs[IA64_NUM_PMC_REGS];
-	__u64 pmds[IA64_NUM_PMD_REGS];
 	void *pfm_context;		     /* pointer to detailed PMU context */
 	unsigned long pfm_needs_checking;    /* when >0, pending perfmon work on kernel exit */
-# define INIT_THREAD_PM		.pmcs =			{0UL, },  \
-				.pmds =			{0UL, },  \
-				.pfm_context =		NULL,     \
+# define INIT_THREAD_PM		.pfm_context =		NULL,     \
 				.pfm_needs_checking =	0UL,
 #else
 # define INIT_THREAD_PM
@@ -303,9 +295,9 @@ struct thread_struct {
 	regs->ar_bspstore = current->thread.rbs_bot;						\
 	regs->ar_fpsr = FPSR_DEFAULT;								\
 	regs->loadrs = 0;									\
-	regs->r8 = current->mm->dumpable;	/* set "don't zap registers" flag */		\
+	regs->r8 = get_dumpable(current->mm);	/* set "don't zap registers" flag */		\
 	regs->r12 = new_sp - 16;	/* allocate 16 byte scratch area */			\
-	if (unlikely(!current->mm->dumpable)) {							\
+	if (unlikely(!get_dumpable(current->mm))) {							\
 		/*										\
 		 * Zap scratch regs to avoid leaking bits between processes with different	\
 		 * uid/privileges.								\

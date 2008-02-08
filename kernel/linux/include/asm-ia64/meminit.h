@@ -15,11 +15,13 @@
  * 	- initrd (optional)
  * 	- command line string
  * 	- kernel code & data
+ * 	- crash dumping code reserved region
  * 	- Kernel memory map built from EFI memory map
+ * 	- ELF core header
  *
  * More could be added if necessary
  */
-#define IA64_MAX_RSVD_REGIONS 6
+#define IA64_MAX_RSVD_REGIONS 8
 
 struct rsvd_region {
 	unsigned long start;	/* virtual address of beginning of element */
@@ -33,7 +35,11 @@ extern void find_memory (void);
 extern void reserve_memory (void);
 extern void find_initrd (void);
 extern int filter_rsvd_memory (unsigned long start, unsigned long end, void *arg);
-extern void efi_memmap_init(unsigned long *, unsigned long *);
+extern unsigned long efi_memmap_init(unsigned long *s, unsigned long *e);
+extern int find_max_min_low_pfn (unsigned long , unsigned long, void *);
+
+extern unsigned long vmcore_find_descriptor_size(unsigned long address);
+extern int reserve_elfcorehdr(unsigned long *start, unsigned long *end);
 
 /*
  * For rounding an address to the next IA64_GRANULE_SIZE or order
@@ -49,6 +55,8 @@ extern void efi_memmap_init(unsigned long *, unsigned long *);
 #endif
 
 #define IGNORE_PFN0	1	/* XXX fix me: ignore pfn 0 until TLB miss handler is updated... */
+
+extern int register_active_ranges(u64 start, u64 end, void *arg);
 
 #ifdef CONFIG_VIRTUAL_MEM_MAP
 # define LARGE_GAP	0x40000000 /* Use virtual mem map if hole is > than this */

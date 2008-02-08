@@ -32,7 +32,7 @@
  */
 #define IO_SPACE_LIMIT		0xffffffffffffffffUL
 
-#define MAX_IO_SPACES_BITS		4
+#define MAX_IO_SPACES_BITS		8
 #define MAX_IO_SPACES			(1UL << MAX_IO_SPACES_BITS)
 #define IO_SPACE_BITS			24
 #define IO_SPACE_SIZE			(1UL << IO_SPACE_BITS)
@@ -417,20 +417,16 @@ __writeq (unsigned long val, volatile void __iomem *addr)
 # define outl_p		outl
 #endif
 
+# ifdef __KERNEL__
+
 extern void __iomem * ioremap(unsigned long offset, unsigned long size);
 extern void __iomem * ioremap_nocache (unsigned long offset, unsigned long size);
-
-static inline void
-iounmap (volatile void __iomem *addr)
-{
-}
+extern void iounmap (volatile void __iomem *addr);
 
 /* Use normal IO mappings for DMI */
 #define dmi_ioremap ioremap
 #define dmi_iounmap(x,l) iounmap(x)
 #define dmi_alloc(l) kmalloc(l, GFP_ATOMIC)
-
-# ifdef __KERNEL__
 
 /*
  * String version of IO memory access ops:
@@ -438,10 +434,6 @@ iounmap (volatile void __iomem *addr)
 extern void memcpy_fromio(void *dst, const volatile void __iomem *src, long n);
 extern void memcpy_toio(volatile void __iomem *dst, const void *src, long n);
 extern void memset_io(volatile void __iomem *s, int c, long n);
-
-#define dma_cache_inv(_start,_size)             do { } while (0)
-#define dma_cache_wback(_start,_size)           do { } while (0)
-#define dma_cache_wback_inv(_start,_size)       do { } while (0)
 
 # endif /* __KERNEL__ */
 
