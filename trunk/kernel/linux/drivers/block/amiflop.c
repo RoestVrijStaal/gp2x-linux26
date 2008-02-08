@@ -209,7 +209,7 @@ static int fd_device[4] = { 0, 0, 0, 0 };
 
 /* Milliseconds timer */
 
-static irqreturn_t ms_isr(int irq, void *dummy, struct pt_regs *fp)
+static irqreturn_t ms_isr(int irq, void *dummy)
 {
 	ms_busy = -1;
 	wake_up(&ms_wait);
@@ -560,7 +560,7 @@ static unsigned long fd_get_drive_id(int drive)
 	return (id);
 }
 
-static irqreturn_t fd_block_done(int irq, void *dummy, struct pt_regs *fp)
+static irqreturn_t fd_block_done(int irq, void *dummy)
 {
 	if (block_flag)
 		custom.dsklen = 0x4000;
@@ -1363,7 +1363,7 @@ static void redo_fd_request(void)
 #ifdef DEBUG
 		printk("fd: sector %ld + %d requested for %s\n",
 		       CURRENT->sector,cnt,
-		       (CURRENT->cmd==READ)?"read":"write");
+		       (rq_data_dir(CURRENT) == READ) ? "read" : "write");
 #endif
 		block = CURRENT->sector + cnt;
 		if ((int)block > floppy->blocks) {
@@ -1422,7 +1422,7 @@ static void redo_fd_request(void)
 	goto repeat;
 }
 
-static void do_fd_request(request_queue_t * q)
+static void do_fd_request(struct request_queue * q)
 {
 	redo_fd_request();
 }
@@ -1480,7 +1480,7 @@ static int fd_ioctl(struct inode *inode, struct file *filp,
 		break;
 	case FDFMTEND:
 		floppy_off(drive);
-		invalidate_bdev(inode->i_bdev, 0);
+		invalidate_bdev(inode->i_bdev);
 		break;
 	case FDGETPRM:
 		memset((void *)&getprm, 0, sizeof (getprm));
@@ -1709,9 +1709,12 @@ static struct kobject *floppy_find(dev_t dev, int *part, void *data)
 	return get_disk(unit[drive].gendisk);
 }
 
-int __init amiga_floppy_init(void)
+static int __init amiga_floppy_init(void)
 {
 	int i, ret;
+
+	if (!MACH_IS_AMIGA)
+		return -ENXIO;
 
 	if (!AMIGAHW_PRESENT(AMI_FLOPPY))
 		return -ENXIO;
@@ -1809,14 +1812,8 @@ out_blkdev:
 	return ret;
 }
 
+module_init(amiga_floppy_init);
 #ifdef MODULE
-
-int init_module(void)
-{
-	if (!MACH_IS_AMIGA)
-		return -ENXIO;
-	return amiga_floppy_init();
-}
 
 #if 0 /* not safe to unload */
 void cleanup_module(void)
