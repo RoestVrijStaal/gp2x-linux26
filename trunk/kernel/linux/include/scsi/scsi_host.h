@@ -7,6 +7,7 @@
 #include <linux/workqueue.h>
 #include <linux/mutex.h>
 
+struct request_queue;
 struct block_device;
 struct completion;
 struct module;
@@ -16,6 +17,7 @@ struct scsi_target;
 struct Scsi_Host;
 struct scsi_host_cmd_pool;
 struct scsi_transport_template;
+struct blk_queue_tags;
 
 
 /*
@@ -30,9 +32,15 @@ struct scsi_transport_template;
 #define SG_NONE 0
 #define SG_ALL 0xff
 
+#define MODE_UNKNOWN 0x00
+#define MODE_INITIATOR 0x01
+#define MODE_TARGET 0x02
 
 #define DISABLE_CLUSTERING 0
 #define ENABLE_CLUSTERING 1
+
+#define DISABLE_SG_CHAINING 0
+#define ENABLE_SG_CHAINING 1
 
 enum scsi_eh_timer_return {
 	EH_NOT_HANDLED,
@@ -121,6 +129,27 @@ struct scsi_host_template {
 	 */
 	int (* queuecommand)(struct scsi_cmnd *,
 			     void (*done)(struct scsi_cmnd *));
+
+	/*
+	 * The transfer functions are used to queue a scsi command to
+	 * the LLD. When the driver is finished processing the command
+	 * the done callback is invoked.
+	 *
+	 * This is called to inform the LLD to transfer
+	 * cmd->request_bufflen bytes. The cmd->use_sg speciefies the
+	 * number of scatterlist entried in the command and
+	 * cmd->request_buffer contains the scatterlist.
+	 *
+	 * return values: see queuecommand
+	 *
+	 * If the LLD accepts the cmd, it should set the result to an
+	 * appropriate value when completed before calling the done function.
+	 *
+	 * STATUS: REQUIRED FOR TARGET DRIVERS
+	 */
+	/* TODO: rename */
+	int (* transfer_response)(struct scsi_cmnd *,
+				  void (*done)(struct scsi_cmnd *));
 
 	/*
 	 * This is an error handling strategy routine.  You don't need to
@@ -240,6 +269,24 @@ struct scsi_host_template {
 	void (* target_destroy)(struct scsi_target *);
 
 	/*
+	 * If a host has the ability to discover targets on its own instead
+	 * of scanning the entire bus, it can fill in this function and
+	 * call scsi_scan_host().  This function will be called periodically
+	 * until it returns 1 with the scsi_host and the elapsed time of
+	 * the scan in jiffies.
+	 *
+	 * Status: OPTIONAL
+	 */
+	int (* scan_finished)(struct Scsi_Host *, unsigned long);
+
+	/*
+	 * If the host wants to be called before the scan starts, but
+	 * after the midlayer has set up ready for the scan, it can fill
+	 * in this function.
+	 */
+	void (* scan_start)(struct Scsi_Host *);
+
+	/*
 	 * fill in this function to allow the queue depth of this host
 	 * to be changeable (on a per device basis).  returns either
 	 * the current queue depth setting (may be different from what
@@ -282,15 +329,22 @@ struct scsi_host_template {
 	int (*proc_info)(struct Scsi_Host *, char *, char **, off_t, int, int);
 
 	/*
-	 * suspend support
+	 * This is an optional routine that allows the transport to become
+	 * involved when a scsi io timer fires. The return value tells the
+	 * timer routine how to finish the io timeout handling:
+	 * EH_HANDLED:		I fixed the error, please complete the command
+	 * EH_RESET_TIMER:	I need more time, reset the timer and
+	 *			begin counting again
+	 * EH_NOT_HANDLED	Begin normal error recovery
+	 *
+	 * Status: OPTIONAL
 	 */
-	int (*resume)(struct scsi_device *);
-	int (*suspend)(struct scsi_device *, pm_message_t state);
+	enum scsi_eh_timer_return (* eh_timed_out)(struct scsi_cmnd *);
 
 	/*
 	 * Name of proc directory
 	 */
-	char *proc_name;
+	const char *proc_name;
 
 	/*
 	 * Used to store the procfs directory if a driver implements the
@@ -357,6 +411,11 @@ struct scsi_host_template {
 	unsigned char present;
 
 	/*
+	 * This specifies the mode that a LLD supports.
+	 */
+	unsigned supported_mode:2;
+
+	/*
 	 * true if this host adapter uses unchecked DMA onto an ISA bus.
 	 */
 	unsigned unchecked_isa_dma:1;
@@ -385,6 +444,15 @@ struct scsi_host_template {
 	 * ordered write support
 	 */
 	unsigned ordered_tag:1;
+
+	/*
+	 * true if the low-level driver can support sg chaining. this
+	 * will be removed eventually when all the drivers are
+	 * converted to support sg chaining.
+	 *
+	 * Status: OBSOLETE
+	 */
+	unsigned use_sg_chaining:1;
 
 	/*
 	 * Countdown for host blocking with no commands outstanding
@@ -466,6 +534,12 @@ struct Scsi_Host {
 	struct scsi_transport_template *transportt;
 
 	/*
+	 * area to keep a shared tag map (if needed, will be
+	 * NULL if not)
+	 */
+	struct blk_queue_tag	*bqt;
+
+	/*
 	 * The following two fields are protected with host_lock;
 	 * however, eh routines can safely access during eh processing
 	 * without acquiring the lock.
@@ -518,11 +592,13 @@ struct Scsi_Host {
 	 * Used to assign serial numbers to the cmds.
 	 * Protected by the host lock.
 	 */
-	unsigned long cmd_serial_number, cmd_pid; 
+	unsigned long cmd_serial_number;
 	
+	unsigned active_mode:2;
 	unsigned unchecked_isa_dma:1;
 	unsigned use_clustering:1;
 	unsigned use_blk_tcq:1;
+	unsigned use_sg_chaining:1;
 
 	/*
 	 * Host has requested that no further requests come through for the
@@ -545,6 +621,9 @@ struct Scsi_Host {
 	/* task mgmt function in progress */
 	unsigned tmf_in_progress:1;
 
+	/* Asynchronous scan in progress */
+	unsigned async_scan:1;
+
 	/*
 	 * Optional work queue to be utilized by the transport
 	 */
@@ -560,6 +639,12 @@ struct Scsi_Host {
 	 * Value host_blocked counts down from
 	 */
 	unsigned int max_host_blocked;
+
+	/*
+	 * q used for scsi_tgt msgs, async events or any other requests that
+	 * need to be processed in userspace
+	 */
+	struct request_queue *uspace_req_q;
 
 	/* legacy crap */
 	unsigned long base;
@@ -605,6 +690,10 @@ struct Scsi_Host {
 #define shost_printk(prefix, shost, fmt, a...)	\
 	dev_printk(prefix, &(shost)->shost_gendev, fmt, ##a)
 
+static inline void *shost_priv(struct Scsi_Host *shost)
+{
+	return (void *)shost->hostdata;
+}
 
 int scsi_is_host_device(const struct device *);
 
@@ -641,11 +730,6 @@ extern const char *scsi_host_state_name(enum scsi_host_state);
 
 extern u64 scsi_calculate_bounce_limit(struct Scsi_Host *);
 
-static inline void scsi_assign_lock(struct Scsi_Host *shost, spinlock_t *lock)
-{
-	shost->host_lock = lock;
-}
-
 static inline struct device *scsi_get_device(struct Scsi_Host *shost)
 {
         return shost->shost_gendev.parent;
@@ -664,6 +748,9 @@ extern void scsi_unblock_requests(struct Scsi_Host *);
 extern void scsi_block_requests(struct Scsi_Host *);
 
 struct class_container;
+
+extern struct request_queue *__scsi_alloc_queue(struct Scsi_Host *shost,
+						void (*) (struct request_queue *));
 /*
  * These two functions are used to allocate and free a pseudo device
  * which will connect to the host adapter itself rather than any
