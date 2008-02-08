@@ -1,8 +1,6 @@
 #ifndef _ASM_M32R_PGTABLE_2LEVEL_H
 #define _ASM_M32R_PGTABLE_2LEVEL_H
-
 #ifdef __KERNEL__
-
 
 /*
  * traditional M32R two-level paging structure:
@@ -44,7 +42,7 @@ static inline int pgd_present(pgd_t pgd)	{ return 1; }
  */
 #define set_pte(pteptr, pteval) (*(pteptr) = pteval)
 #define set_pte_at(mm,addr,ptep,pteval) set_pte(ptep,pteval)
-#define set_pte_atomic(pteptr, pteval)	set_pte(pteptr, pteval)
+
 /*
  * (pmds are folded into pgds so this doesnt get actually called,
  * but the define is needed for a generic inline function.)
@@ -52,8 +50,12 @@ static inline int pgd_present(pgd_t pgd)	{ return 1; }
 #define set_pmd(pmdptr, pmdval) (*(pmdptr) = pmdval)
 #define set_pgd(pgdptr, pgdval) (*(pgdptr) = pgdval)
 
-#define pgd_page(pgd) \
+#define pgd_page_vaddr(pgd) \
 ((unsigned long) __va(pgd_val(pgd) & PAGE_MASK))
+
+#ifndef CONFIG_DISCONTIGMEM
+#define pgd_page(pgd)	(mem_map + ((pgd_val(pgd) >> PAGE_SHIFT) - PFN_BASE))
+#endif /* !CONFIG_DISCONTIGMEM */
 
 static inline pmd_t *pmd_offset(pgd_t * dir, unsigned long address)
 {
@@ -69,9 +71,8 @@ static inline pmd_t *pmd_offset(pgd_t * dir, unsigned long address)
 #define pfn_pmd(pfn, prot)	__pmd(((pfn) << PAGE_SHIFT) | pgprot_val(prot))
 
 #define PTE_FILE_MAX_BITS	29
-#define pte_to_pgoff(pte)	(((pte_val(pte) >> 2) & 0xef) | (((pte_val(pte) >> 10)) << 7))
-#define pgoff_to_pte(off)	((pte_t) { (((off) & 0xef) << 2) | (((off) >> 7) << 10) | _PAGE_FILE })
+#define pte_to_pgoff(pte)	(((pte_val(pte) >> 2) & 0x7f) | (((pte_val(pte) >> 10)) << 7))
+#define pgoff_to_pte(off)	((pte_t) { (((off) & 0x7f) << 2) | (((off) >> 7) << 10) | _PAGE_FILE })
 
 #endif /* __KERNEL__ */
-
 #endif /* _ASM_M32R_PGTABLE_2LEVEL_H */
