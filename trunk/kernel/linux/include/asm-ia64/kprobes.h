@@ -29,7 +29,8 @@
 #include <linux/percpu.h>
 #include <asm/break.h>
 
-#define MAX_INSN_SIZE   16
+#define __ARCH_WANT_KPROBES_INSN_SLOT
+#define MAX_INSN_SIZE   1
 #define BREAK_INST	(long)(__IA64_BREAK_KPROBE << 6)
 
 typedef union cmp_inst {
@@ -70,19 +71,19 @@ struct prev_kprobe {
 
 #define	MAX_PARAM_RSE_SIZE	(0x60+0x60/0x3f)
 /* per-cpu kprobe control block */
+#define ARCH_PREV_KPROBE_SZ 2
 struct kprobe_ctlblk {
 	unsigned long kprobe_status;
 	struct pt_regs jprobe_saved_regs;
 	unsigned long jprobes_saved_stacked_regs[MAX_PARAM_RSE_SIZE];
 	unsigned long *bsp;
 	unsigned long cfm;
-	struct prev_kprobe prev_kprobe;
+	atomic_t prev_kprobe_index;
+	struct prev_kprobe prev_kprobe[ARCH_PREV_KPROBE_SZ];
 };
 
-#define JPROBE_ENTRY(pentry)	(kprobe_opcode_t *)pentry
-
 #define ARCH_SUPPORTS_KRETPROBES
-#define  ARCH_INACTIVE_KPROBE_COUNT 1
+#define kretprobe_blacklist_size 0
 
 #define SLOT0_OPCODE_SHIFT	(37)
 #define SLOT1_p1_OPCODE_SHIFT	(37 - (64-46))
@@ -94,7 +95,7 @@ struct kprobe_ctlblk {
 #define IP_RELATIVE_PREDICT_OPCODE	(7)
 #define LONG_BRANCH_OPCODE		(0xC)
 #define LONG_CALL_OPCODE		(0xD)
-#define arch_remove_kprobe(p)		do {} while (0)
+#define flush_insn_slot(p)		do { } while (0)
 
 typedef struct kprobe_opcode {
 	bundle_t bundle;
@@ -108,14 +109,16 @@ struct fnptr {
 /* Architecture specific copy of original instruction*/
 struct arch_specific_insn {
 	/* copy of the instruction to be emulated */
-	kprobe_opcode_t insn;
+	kprobe_opcode_t *insn;
  #define INST_FLAG_FIX_RELATIVE_IP_ADDR		1
  #define INST_FLAG_FIX_BRANCH_REG		2
  #define INST_FLAG_BREAK_INST			4
  	unsigned long inst_flag;
  	unsigned short target_br_reg;
+	unsigned short slot;
 };
 
+extern int kprobes_fault_handler(struct pt_regs *regs, int trapnr);
 extern int kprobe_exceptions_notify(struct notifier_block *self,
 				    unsigned long val, void *data);
 
@@ -125,6 +128,6 @@ static inline void jprobe_return(void)
 }
 extern void invalidate_stacked_regs(void);
 extern void flush_register_stack(void);
-extern void flush_insn_slot(struct kprobe *p);
+extern void arch_remove_kprobe(struct kprobe *p);
 
 #endif				/* _ASM_KPROBES_H */
