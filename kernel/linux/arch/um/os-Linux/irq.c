@@ -11,14 +11,18 @@
 #include <sys/poll.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include "user_util.h"
 #include "kern_util.h"
 #include "user.h"
 #include "process.h"
 #include "sigio.h"
 #include "irq_user.h"
 #include "os.h"
+#include "um_malloc.h"
 
+/*
+ * Locked by irq_lock in arch/um/kernel/irq.c.  Changed by os_create_pollfd
+ * and os_free_irq_by_cb, which are called under irq_lock.
+ */
 static struct pollfd *pollfds = NULL;
 static int pollfds_num = 0;
 static int pollfds_size = 0;
@@ -57,7 +61,7 @@ int os_create_pollfd(int fd, int events, void *tmp_pfd, int size_tmpfds)
 	if (pollfds_num == pollfds_size) {
 		if (size_tmpfds <= pollfds_size * sizeof(pollfds[0])) {
 			/* return min size needed for new pollfds area */
-			return((pollfds_size + 1) * sizeof(pollfds[0]));
+			return (pollfds_size + 1) * sizeof(pollfds[0]);
 		}
 
 		if (pollfds != NULL) {
@@ -132,7 +136,7 @@ void os_set_pollfd(int i, int fd)
 
 void os_set_ioignore(void)
 {
-	set_handler(SIGIO, SIG_IGN, 0, -1);
+	signal(SIGIO, SIG_IGN);
 }
 
 void init_irq_signals(int on_sigstack)
@@ -141,11 +145,7 @@ void init_irq_signals(int on_sigstack)
 
 	flags = on_sigstack ? SA_ONSTACK : 0;
 
-	set_handler(SIGVTALRM, (__sighandler_t) alarm_handler,
-		    flags | SA_RESTART, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, -1);
-	set_handler(SIGALRM, (__sighandler_t) alarm_handler,
-		    flags | SA_RESTART, SIGUSR1, SIGIO, SIGWINCH, SIGALRM, -1);
 	set_handler(SIGIO, (__sighandler_t) sig_handler, flags | SA_RESTART,
-		    SIGUSR1, SIGIO, SIGWINCH, SIGALRM, SIGVTALRM, -1);
+		    SIGUSR1, SIGIO, SIGWINCH, SIGVTALRM, -1);
 	signal(SIGWINCH, SIG_IGN);
 }
