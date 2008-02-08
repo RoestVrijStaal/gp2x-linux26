@@ -34,7 +34,7 @@
 #define SCDRV_TIMEOUT	1000
 
 static irqreturn_t
-scdrv_interrupt(int irq, void *subch_data, struct pt_regs *regs)
+scdrv_interrupt(int irq, void *subch_data)
 {
 	struct subch_data_s *sd = subch_data;
 	unsigned long flags;
@@ -441,8 +441,7 @@ scdrv_init(void)
 				continue;
 			}
 
-			class_device_create(snsc_class, NULL, dev, NULL,
-						"%s", devname);
+			device_create(snsc_class, NULL, dev, "%s", devname);
 
 			ia64_sn_irtr_intr_enable(scd->scd_nasid,
 						 0 /*ignored */ ,

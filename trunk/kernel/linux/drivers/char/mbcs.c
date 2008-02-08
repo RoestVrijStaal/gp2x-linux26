@@ -38,14 +38,14 @@
 #else
 #define DBG(fmt...)
 #endif
-int mbcs_major;
+static int mbcs_major;
 
-LIST_HEAD(soft_list);
+static LIST_HEAD(soft_list);
 
 /*
  * file operations
  */
-struct file_operations mbcs_ops = {
+static const struct file_operations mbcs_ops = {
 	.open = mbcs_open,
 	.llseek = mbcs_sram_llseek,
 	.read = mbcs_sram_read,
@@ -376,7 +376,7 @@ dmaread_exit:
 	return rv;
 }
 
-int mbcs_open(struct inode *ip, struct file *fp)
+static int mbcs_open(struct inode *ip, struct file *fp)
 {
 	struct mbcs_soft *soft;
 	int minor;
@@ -393,7 +393,7 @@ int mbcs_open(struct inode *ip, struct file *fp)
 	return -ENODEV;
 }
 
-ssize_t mbcs_sram_read(struct file * fp, char __user *buf, size_t len, loff_t * off)
+static ssize_t mbcs_sram_read(struct file * fp, char __user *buf, size_t len, loff_t * off)
 {
 	struct cx_dev *cx_dev = fp->private_data;
 	struct mbcs_soft *soft = cx_dev->soft;
@@ -417,7 +417,7 @@ ssize_t mbcs_sram_read(struct file * fp, char __user *buf, size_t len, loff_t * 
 	return rv;
 }
 
-ssize_t
+static ssize_t
 mbcs_sram_write(struct file * fp, const char __user *buf, size_t len, loff_t * off)
 {
 	struct cx_dev *cx_dev = fp->private_data;
@@ -442,20 +442,20 @@ mbcs_sram_write(struct file * fp, const char __user *buf, size_t len, loff_t * o
 	return rv;
 }
 
-loff_t mbcs_sram_llseek(struct file * filp, loff_t off, int whence)
+static loff_t mbcs_sram_llseek(struct file * filp, loff_t off, int whence)
 {
 	loff_t newpos;
 
 	switch (whence) {
-	case 0:		/* SEEK_SET */
+	case SEEK_SET:
 		newpos = off;
 		break;
 
-	case 1:		/* SEEK_CUR */
+	case SEEK_CUR:
 		newpos = filp->f_pos + off;
 		break;
 
-	case 2:		/* SEEK_END */
+	case SEEK_END:
 		newpos = MBCS_SRAM_SIZE + off;
 		break;
 
@@ -490,7 +490,7 @@ static void mbcs_gscr_pioaddr_set(struct mbcs_soft *soft)
 	soft->gscr_addr = mbcs_pioaddr(soft, MBCS_GSCR_START);
 }
 
-int mbcs_gscr_mmap(struct file *fp, struct vm_area_struct *vma)
+static int mbcs_gscr_mmap(struct file *fp, struct vm_area_struct *vma)
 {
 	struct cx_dev *cx_dev = fp->private_data;
 	struct mbcs_soft *soft = cx_dev->soft;
@@ -515,11 +515,10 @@ int mbcs_gscr_mmap(struct file *fp, struct vm_area_struct *vma)
  * mbcs_completion_intr_handler - Primary completion handler.
  * @irq: irq
  * @arg: soft struct for device
- * @ep: regs
  *
  */
 static irqreturn_t
-mbcs_completion_intr_handler(int irq, void *arg, struct pt_regs *ep)
+mbcs_completion_intr_handler(int irq, void *arg)
 {
 	struct mbcs_soft *soft = (struct mbcs_soft *)arg;
 	void *mmr_base;
@@ -793,7 +792,7 @@ static int mbcs_remove(struct cx_dev *dev)
 	return 0;
 }
 
-const struct cx_device_id __devinitdata mbcs_id_table[] = {
+static const struct cx_device_id __devinitdata mbcs_id_table[] = {
 	{
 	 .part_num = MBCS_PART_NUM,
 	 .mfg_num = MBCS_MFG_NUM,
@@ -807,7 +806,7 @@ const struct cx_device_id __devinitdata mbcs_id_table[] = {
 
 MODULE_DEVICE_TABLE(cx, mbcs_id_table);
 
-struct cx_drv mbcs_driver = {
+static struct cx_drv mbcs_driver = {
 	.name = DEVICE_NAME,
 	.id_table = mbcs_id_table,
 	.probe = mbcs_probe,
@@ -816,12 +815,7 @@ struct cx_drv mbcs_driver = {
 
 static void __exit mbcs_exit(void)
 {
-	int rv;
-
-	rv = unregister_chrdev(mbcs_major, DEVICE_NAME);
-	if (rv < 0)
-		DBG(KERN_ALERT "Error in unregister_chrdev: %d\n", rv);
-
+	unregister_chrdev(mbcs_major, DEVICE_NAME);
 	cx_driver_unregister(&mbcs_driver);
 }
 
