@@ -3,7 +3,7 @@
 
 /*
  *  Header file for MPU-401 and compatible cards
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *
  *
  *   This program is free software; you can redistribute it and/or modify
@@ -106,10 +106,8 @@ struct snd_mpu401 {
 
  */
 
-irqreturn_t snd_mpu401_uart_interrupt(int irq, void *dev_id,
-				      struct pt_regs *regs);
-irqreturn_t snd_mpu401_uart_interrupt_tx(int irq, void *dev_id,
-					 struct pt_regs *regs);
+irqreturn_t snd_mpu401_uart_interrupt(int irq, void *dev_id);
+irqreturn_t snd_mpu401_uart_interrupt_tx(int irq, void *dev_id);
 
 int snd_mpu401_uart_new(struct snd_card *card,
 			int device,

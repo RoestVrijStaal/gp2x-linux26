@@ -1,10 +1,7 @@
-#ifndef __SOUND_DRIVER_H
-#define __SOUND_DRIVER_H
-
 /*
- *  Main header file for the ALSA driver
- *  Copyright (c) 1994-2000 by Jaroslav Kysela <perex@perex.cz>
+ *   ALSA Driver for the PT2258 volume controller.
  *
+ *	Copyright (c) 2006  Jochen Voss <voss@seehuhn.de>
  *
  *   This program is free software; you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -20,32 +17,21 @@
  *   along with this program; if not, write to the Free Software
  *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  *
- */
+ */      
 
-#ifdef ALSA_BUILD
-#include "config.h"
-#endif
+#ifndef __SOUND_PT2258_H
+#define __SOUND_PT2258_H
 
+struct snd_pt2258 {
+	struct snd_card *card;
+	struct snd_i2c_bus *i2c_bus;
+	struct snd_i2c_device *i2c_dev;
 
-/* number of supported soundcards */
-#ifdef CONFIG_SND_DYNAMIC_MINORS
-#define SNDRV_CARDS 32
-#else
-#define SNDRV_CARDS 8		/* don't change - minor numbers */
-#endif
+	unsigned char volume[6];
+	int mute;
+};
 
-#ifndef CONFIG_SND_MAJOR	/* standard configuration */
-#define CONFIG_SND_MAJOR	116
-#endif
+extern int snd_pt2258_reset(struct snd_pt2258 *pt);
+extern int snd_pt2258_build_controls(struct snd_pt2258 *pt);
 
-#ifndef CONFIG_SND_DEBUG
-#undef CONFIG_SND_DEBUG_MEMORY
-#endif
-
-#ifdef ALSA_BUILD
-#include "adriver.h"
-#endif
-
-#include <linux/module.h>
-
-#endif /* __SOUND_DRIVER_H */
+#endif /* __SOUND_PT2258_H */
