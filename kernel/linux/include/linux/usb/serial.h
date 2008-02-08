@@ -54,6 +54,8 @@
  * @write_wait: a wait_queue_head_t used by the port.
  * @work: work queue entry for the line discipline waking up.
  * @open_count: number of times this port has been opened.
+ * @throttled: nonzero if the read urb is inactive to throttle the device
+ * @throttle_req: nonzero if the tty wants to throttle us
  *
  * This structure is used by the usb-serial core and drivers for the specific
  * ports of a device.
@@ -88,6 +90,8 @@ struct usb_serial_port {
 	wait_queue_head_t	write_wait;
 	struct work_struct	work;
 	int			open_count;
+	char			throttled;
+	char			throttle_req;
 	struct device		dev;
 };
 #define to_usb_serial_port(d) container_of(d, struct usb_serial_port, dev)
@@ -137,7 +141,7 @@ struct usb_serial {
 };
 #define to_usb_serial(d) container_of(d, struct usb_serial, kref)
 
-#define NUM_DONT_CARE	(-1)
+#define NUM_DONT_CARE	99
 
 /* get and set the serial private data pointer helper functions */
 static inline void *usb_get_serial_data (struct usb_serial *serial)
@@ -156,12 +160,18 @@ static inline void usb_set_serial_data (struct usb_serial *serial, void *data)
  *	in the syslog messages when a device is inserted or removed.
  * @id_table: pointer to a list of usb_device_id structures that define all
  *	of the devices this structure can support.
- * @num_interrupt_in: the number of interrupt in endpoints this device will
- *	have.
- * @num_interrupt_out: the number of interrupt out endpoints this device will
- *	have.
- * @num_bulk_in: the number of bulk in endpoints this device will have.
- * @num_bulk_out: the number of bulk out endpoints this device will have.
+ * @num_interrupt_in: If a device doesn't have this many interrupt-in
+ *	endpoints, it won't be sent to the driver's attach() method.
+ *	(But it might still be sent to the probe() method.)
+ * @num_interrupt_out: If a device doesn't have this many interrupt-out
+ *	endpoints, it won't be sent to the driver's attach() method.
+ *	(But it might still be sent to the probe() method.)
+ * @num_bulk_in: If a device doesn't have this many bulk-in
+ *	endpoints, it won't be sent to the driver's attach() method.
+ *	(But it might still be sent to the probe() method.)
+ * @num_bulk_out: If a device doesn't have this many bulk-out
+ *	endpoints, it won't be sent to the driver's attach() method.
+ *	(But it might still be sent to the probe() method.)
  * @num_ports: the number of different ports this device will have.
  * @calc_num_ports: pointer to a function to determine how many ports this
  *	device has dynamically.  It will be called after the probe()
@@ -179,6 +189,9 @@ static inline void usb_set_serial_data (struct usb_serial *serial, void *data)
  *	memory structure allocation at this point in time.
  * @shutdown: pointer to the driver's shutdown function.  This will be
  *	called when the device is removed from the system.
+ * @usb_driver: pointer to the struct usb_driver that controls this
+ *	device.  This is necessary to allow dynamic ids to be added to
+ *	the driver from sysfs.
  *
  * This structure is defines a USB Serial driver.  It provides all of
  * the information that the USB serial core code needs.  If the function
@@ -202,6 +215,8 @@ struct usb_serial_driver {
 
 	struct list_head	driver_list;
 	struct device_driver	driver;
+	struct usb_driver	*usb_driver;
+	struct usb_dynids	dynids;
 
 	int (*probe) (struct usb_serial *serial, const struct usb_device_id *id);
 	int (*attach) (struct usb_serial *serial);
@@ -212,13 +227,16 @@ struct usb_serial_driver {
 	int (*port_probe) (struct usb_serial_port *port);
 	int (*port_remove) (struct usb_serial_port *port);
 
+	int (*suspend) (struct usb_serial *serial, pm_message_t message);
+	int (*resume) (struct usb_serial *serial);
+
 	/* serial function calls */
 	int  (*open)		(struct usb_serial_port *port, struct file * filp);
 	void (*close)		(struct usb_serial_port *port, struct file * filp);
 	int  (*write)		(struct usb_serial_port *port, const unsigned char *buf, int count);
 	int  (*write_room)	(struct usb_serial_port *port);
 	int  (*ioctl)		(struct usb_serial_port *port, struct file * file, unsigned int cmd, unsigned long arg);
-	void (*set_termios)	(struct usb_serial_port *port, struct termios * old);
+	void (*set_termios)	(struct usb_serial_port *port, struct ktermios * old);
 	void (*break_ctl)	(struct usb_serial_port *port, int break_state);
 	int  (*chars_in_buffer)	(struct usb_serial_port *port);
 	void (*throttle)	(struct usb_serial_port *port);
@@ -226,10 +244,10 @@ struct usb_serial_driver {
 	int  (*tiocmget)	(struct usb_serial_port *port, struct file *file);
 	int  (*tiocmset)	(struct usb_serial_port *port, struct file *file, unsigned int set, unsigned int clear);
 
-	void (*read_int_callback)(struct urb *urb, struct pt_regs *regs);
-	void (*write_int_callback)(struct urb *urb, struct pt_regs *regs);
-	void (*read_bulk_callback)(struct urb *urb, struct pt_regs *regs);
-	void (*write_bulk_callback)(struct urb *urb, struct pt_regs *regs);
+	void (*read_int_callback)(struct urb *urb);
+	void (*write_int_callback)(struct urb *urb);
+	void (*read_bulk_callback)(struct urb *urb);
+	void (*write_bulk_callback)(struct urb *urb);
 };
 #define to_usb_serial_driver(d) container_of(d, struct usb_serial_driver, driver)
 
@@ -239,6 +257,9 @@ extern void usb_serial_port_softint(struct usb_serial_port *port);
 
 extern int usb_serial_probe(struct usb_interface *iface, const struct usb_device_id *id);
 extern void usb_serial_disconnect(struct usb_interface *iface);
+
+extern int usb_serial_suspend(struct usb_interface *intf, pm_message_t message);
+extern int usb_serial_resume(struct usb_interface *intf);
 
 extern int ezusb_writememory (struct usb_serial *serial, int address, unsigned char *data, int length, __u8 bRequest);
 extern int ezusb_set_reset (struct usb_serial *serial, unsigned char reset_bit);
@@ -260,10 +281,13 @@ extern void usb_serial_put(struct usb_serial *serial);
 extern int usb_serial_generic_open (struct usb_serial_port *port, struct file *filp);
 extern int usb_serial_generic_write (struct usb_serial_port *port, const unsigned char *buf, int count);
 extern void usb_serial_generic_close (struct usb_serial_port *port, struct file *filp);
+extern int usb_serial_generic_resume (struct usb_serial *serial);
 extern int usb_serial_generic_write_room (struct usb_serial_port *port);
 extern int usb_serial_generic_chars_in_buffer (struct usb_serial_port *port);
-extern void usb_serial_generic_read_bulk_callback (struct urb *urb, struct pt_regs *regs);
-extern void usb_serial_generic_write_bulk_callback (struct urb *urb, struct pt_regs *regs);
+extern void usb_serial_generic_read_bulk_callback (struct urb *urb);
+extern void usb_serial_generic_write_bulk_callback (struct urb *urb);
+extern void usb_serial_generic_throttle (struct usb_serial_port *port);
+extern void usb_serial_generic_unthrottle (struct usb_serial_port *port);
 extern void usb_serial_generic_shutdown (struct usb_serial *serial);
 extern int usb_serial_generic_register (int debug);
 extern void usb_serial_generic_deregister (void);
