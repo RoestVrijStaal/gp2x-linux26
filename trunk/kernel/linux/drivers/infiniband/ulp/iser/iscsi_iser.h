@@ -82,8 +82,12 @@
 		       __func__ , ## arg);		\
 	} while (0)
 
+#define SHIFT_4K	12
+#define SIZE_4K	(1UL << SHIFT_4K)
+#define MASK_4K	(~(SIZE_4K-1))
+
 					/* support upto 512KB in one RDMA */
-#define ISCSI_ISER_SG_TABLESIZE         (0x80000 >> PAGE_SHIFT)
+#define ISCSI_ISER_SG_TABLESIZE         (0x80000 >> SHIFT_4K)
 #define ISCSI_ISER_MAX_LUN		256
 #define ISCSI_ISER_MAX_CMD_LEN		16
 
@@ -94,7 +98,7 @@
 #define ISER_MAX_TX_MISC_PDUS		6 /* NOOP_OUT(2), TEXT(1),         *
 					   * SCSI_TMFUNC(2), LOGOUT(1) */
 
-#define ISER_QP_MAX_RECV_DTOS		(ISCSI_XMIT_CMDS_MAX + \
+#define ISER_QP_MAX_RECV_DTOS		(ISCSI_DEF_XMIT_CMDS_MAX + \
 					ISER_MAX_RX_MISC_PDUS    +  \
 					ISER_MAX_TX_MISC_PDUS)
 
@@ -106,7 +110,7 @@
 
 #define ISER_INFLIGHT_DATAOUTS		8
 
-#define ISER_QP_MAX_REQ_DTOS		(ISCSI_XMIT_CMDS_MAX *    \
+#define ISER_QP_MAX_REQ_DTOS		(ISCSI_DEF_XMIT_CMDS_MAX *    \
 					(1 + ISER_INFLIGHT_DATAOUTS) + \
 					ISER_MAX_TX_MISC_PDUS        + \
 					ISER_MAX_RX_MISC_PDUS)
@@ -171,13 +175,14 @@ struct iser_mem_reg {
 	u64  va;
 	u64  len;
 	void *mem_h;
+	int  is_fmr;
 };
 
 struct iser_regd_buf {
 	struct iser_mem_reg     reg;        /* memory registration info        */
 	void                    *virt_addr;
 	struct iser_device      *device;    /* device->device for dma_unmap    */
-	dma_addr_t              dma_addr;   /* if non zero, addr for dma_unmap */
+	u64                     dma_addr;   /* if non zero, addr for dma_unmap */
 	enum dma_data_direction direction;  /* direction for dma_unmap	       */
 	unsigned int            data_size;
 	atomic_t                ref_count;  /* refcount, freed when dec to 0   */
@@ -187,7 +192,7 @@ struct iser_regd_buf {
 
 struct iser_dto {
 	struct iscsi_iser_cmd_task *ctask;
-	struct iscsi_iser_conn     *conn;
+	struct iser_conn *ib_conn;
 	int                        notify_enable;
 
 	/* vector of registered buffers */
@@ -240,7 +245,6 @@ struct iser_conn {
 	wait_queue_head_t	     wait;          /* waitq for conn/disconn  */
 	atomic_t                     post_recv_buf_count; /* posted rx count   */
 	atomic_t                     post_send_buf_count; /* posted tx count   */
-	struct work_struct           comperror_work; /* conn term sleepable ctx*/
 	char 			     name[ISER_OBJECT_NAME_SIZE];
 	struct iser_page_vec         *page_vec;     /* represents SG to fmr maps*
 						     * maps serialized as tx is*/
@@ -257,7 +261,6 @@ struct iscsi_iser_conn {
 struct iscsi_iser_cmd_task {
 	struct iser_desc             desc;
 	struct iscsi_iser_conn	     *iser_conn;
-	int			     rdma_data_count;/* RDMA bytes           */
 	enum iser_task_status 	     status;
 	int                          command_sent;  /* set if command  sent  */
 	int                          dir[ISER_DIRS_NUM];      /* set if dir use*/
@@ -279,7 +282,7 @@ struct iser_global {
 	struct mutex      connlist_mutex;
 	struct list_head  connlist;		/* all iSER IB connections */
 
-	kmem_cache_t *desc_cache;
+	struct kmem_cache *desc_cache;
 };
 
 extern struct iser_global ig;
@@ -307,8 +310,6 @@ int  iser_conn_init(struct iser_conn **ib_conn);
 
 void iser_conn_terminate(struct iser_conn *ib_conn);
 
-void iser_conn_release(struct iser_conn *ib_conn);
-
 void iser_rcv_completion(struct iser_desc *desc,
 			 unsigned long    dto_xfer_len);
 
@@ -325,9 +326,6 @@ int  iser_regd_buff_release(struct iser_regd_buf *regd_buf);
 void iser_reg_single(struct iser_device      *device,
 		     struct iser_regd_buf    *regd_buf,
 		     enum dma_data_direction direction);
-
-int  iser_start_rdma_unaligned_sg(struct iscsi_iser_cmd_task    *ctask,
-				  enum iser_data_dir            cmd_dir);
 
 void iser_finalize_rdma_unaligned_sg(struct iscsi_iser_cmd_task *ctask,
 				     enum iser_data_dir         cmd_dir);
@@ -351,4 +349,11 @@ int  iser_post_send(struct iser_desc *tx_desc);
 
 int iser_conn_state_comp(struct iser_conn *ib_conn,
 			 enum iser_ib_conn_state comp);
+
+int iser_dma_map_task_data(struct iscsi_iser_cmd_task *iser_ctask,
+			    struct iser_data_buf       *data,
+			    enum   iser_data_dir       iser_dir,
+			    enum   dma_data_direction  dma_dir);
+
+void iser_dma_unmap_task_data(struct iscsi_iser_cmd_task *iser_ctask);
 #endif

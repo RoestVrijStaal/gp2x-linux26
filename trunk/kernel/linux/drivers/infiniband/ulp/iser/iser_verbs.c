@@ -32,10 +32,8 @@
  *
  * $Id: iser_verbs.c 7051 2006-05-10 12:29:11Z ogerlitz $
  */
-#include <asm/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/smp_lock.h>
 #include <linux/delay.h>
 #include <linux/version.h>
 
@@ -48,7 +46,6 @@
 
 static void iser_cq_tasklet_fn(unsigned long data);
 static void iser_cq_callback(struct ib_cq *cq, void *cq_context);
-static void iser_comp_error_worker(void *data);
 
 static void iser_cq_event_callback(struct ib_event *cause, void *context)
 {
@@ -77,7 +74,7 @@ static int iser_create_device_ib_res(struct iser_device *device)
 				  iser_cq_callback,
 				  iser_cq_event_callback,
 				  (void *)device,
-				  ISER_MAX_CQ_LEN);
+				  ISER_MAX_CQ_LEN, 0);
 	if (IS_ERR(device->cq))
 		goto cq_err;
 
@@ -88,8 +85,9 @@ static int iser_create_device_ib_res(struct iser_device *device)
 		     iser_cq_tasklet_fn,
 		     (unsigned long)device);
 
-	device->mr = ib_get_dma_mr(device->pd,
-				   IB_ACCESS_LOCAL_WRITE);
+	device->mr = ib_get_dma_mr(device->pd, IB_ACCESS_LOCAL_WRITE |
+				   IB_ACCESS_REMOTE_WRITE |
+				   IB_ACCESS_REMOTE_READ);
 	if (IS_ERR(device->mr))
 		goto dma_mr_err;
 
@@ -150,14 +148,14 @@ static int iser_create_ib_conn_res(struct iser_conn *ib_conn)
 	}
 	ib_conn->page_vec->pages = (u64 *) (ib_conn->page_vec + 1);
 
-	params.page_shift        = PAGE_SHIFT;
+	params.page_shift        = SHIFT_4K;
 	/* when the first/last SG element are not start/end *
 	 * page aligned, the map whould be of N+1 pages     */
 	params.max_pages_per_fmr = ISCSI_ISER_SG_TABLESIZE + 1;
 	/* make the pool size twice the max number of SCSI commands *
 	 * the ML is expected to queue, watermark for unmap at 50%  */
-	params.pool_size	 = ISCSI_XMIT_CMDS_MAX * 2;
-	params.dirty_watermark	 = ISCSI_XMIT_CMDS_MAX;
+	params.pool_size	 = ISCSI_DEF_XMIT_CMDS_MAX * 2;
+	params.dirty_watermark	 = ISCSI_DEF_XMIT_CMDS_MAX;
 	params.cache		 = 0;
 	params.flush_function	 = NULL;
 	params.access		 = (IB_ACCESS_LOCAL_WRITE  |
@@ -309,6 +307,29 @@ static int iser_conn_state_comp_exch(struct iser_conn *ib_conn,
 		ib_conn->state = exch;
 	spin_unlock_bh(&ib_conn->lock);
 	return ret;
+}
+
+/**
+ * Frees all conn objects and deallocs conn descriptor
+ */
+static void iser_conn_release(struct iser_conn *ib_conn)
+{
+	struct iser_device  *device = ib_conn->device;
+
+	BUG_ON(ib_conn->state != ISER_CONN_DOWN);
+
+	mutex_lock(&ig.connlist_mutex);
+	list_del(&ib_conn->conn_list);
+	mutex_unlock(&ig.connlist_mutex);
+
+	iser_free_ib_conn_res(ib_conn);
+	ib_conn->device = NULL;
+	/* on EVENT_ADDR_ERROR there's no device yet for this conn */
+	if (device != NULL)
+		iser_device_try_release(device);
+	if (ib_conn->iser_conn)
+		ib_conn->iser_conn->ib_conn = NULL;
+	kfree(ib_conn);
 }
 
 /**
@@ -479,8 +500,6 @@ int iser_conn_init(struct iser_conn **ibconn)
 	init_waitqueue_head(&ib_conn->wait);
 	atomic_set(&ib_conn->post_recv_buf_count, 0);
 	atomic_set(&ib_conn->post_send_buf_count, 0);
-	INIT_WORK(&ib_conn->comperror_work, iser_comp_error_worker,
-		  ib_conn);
 	INIT_LIST_HEAD(&ib_conn->conn_list);
 	spin_lock_init(&ib_conn->lock);
 
@@ -553,28 +572,6 @@ connect_failure:
 }
 
 /**
- * Frees all conn objects and deallocs conn descriptor
- */
-void iser_conn_release(struct iser_conn *ib_conn)
-{
-	struct iser_device  *device = ib_conn->device;
-
-	BUG_ON(ib_conn->state != ISER_CONN_DOWN);
-
-	mutex_lock(&ig.connlist_mutex);
-	list_del(&ib_conn->conn_list);
-	mutex_unlock(&ig.connlist_mutex);
-
-	iser_free_ib_conn_res(ib_conn);
-	ib_conn->device = NULL;
-	/* on EVENT_ADDR_ERROR there's no device yet for this conn */
-	if (device != NULL)
-		iser_device_try_release(device);
-	kfree(ib_conn);
-}
-
-
-/**
  * iser_reg_page_vec - Register physical memory
  *
  * returns: 0 on success, errno code on failure
@@ -604,8 +601,9 @@ int iser_reg_page_vec(struct iser_conn     *ib_conn,
 
 	mem_reg->lkey  = mem->fmr->lkey;
 	mem_reg->rkey  = mem->fmr->rkey;
-	mem_reg->len   = page_vec->length * PAGE_SIZE;
+	mem_reg->len   = page_vec->length * SIZE_4K;
 	mem_reg->va    = io_addr;
+	mem_reg->is_fmr = 1;
 	mem_reg->mem_h = (void *)mem;
 
 	mem_reg->va   += page_vec->offset;
@@ -692,7 +690,7 @@ int iser_post_recv(struct iser_desc *rx_desc)
 	struct iser_dto   *recv_dto = &rx_desc->dto;
 
 	/* Retrieve conn */
-	ib_conn = recv_dto->conn->ib_conn;
+	ib_conn = recv_dto->ib_conn;
 
 	iser_dto_to_iov(recv_dto, iov, 2);
 
@@ -725,7 +723,7 @@ int iser_post_send(struct iser_desc *tx_desc)
 	struct iser_conn  *ib_conn;
 	struct iser_dto   *dto = &tx_desc->dto;
 
-	ib_conn = dto->conn->ib_conn;
+	ib_conn = dto->ib_conn;
 
 	iser_dto_to_iov(dto, iov, MAX_REGD_BUF_VECTOR_LEN);
 
@@ -750,29 +748,10 @@ int iser_post_send(struct iser_desc *tx_desc)
 	return ret_val;
 }
 
-static void iser_comp_error_worker(void *data)
-{
-	struct iser_conn *ib_conn = data;
-
-	/* getting here when the state is UP means that the conn is being *
-	 * terminated asynchronously from the iSCSI layer's perspective.  */
-	if (iser_conn_state_comp_exch(ib_conn, ISER_CONN_UP,
-				      ISER_CONN_TERMINATING))
-		iscsi_conn_failure(ib_conn->iser_conn->iscsi_conn,
-					ISCSI_ERR_CONN_FAILED);
-
-	/* complete the termination process if disconnect event was delivered *
-	 * note there are no more non completed posts to the QP               */
-	if (ib_conn->disc_evt_flag) {
-		ib_conn->state = ISER_CONN_DOWN;
-		wake_up_interruptible(&ib_conn->wait);
-	}
-}
-
 static void iser_handle_comp_error(struct iser_desc *desc)
 {
 	struct iser_dto  *dto     = &desc->dto;
-	struct iser_conn *ib_conn = dto->conn->ib_conn;
+	struct iser_conn *ib_conn = dto->ib_conn;
 
 	iser_dto_buffs_release(dto);
 
@@ -787,8 +766,22 @@ static void iser_handle_comp_error(struct iser_desc *desc)
 	}
 
 	if (atomic_read(&ib_conn->post_recv_buf_count) == 0 &&
-	    atomic_read(&ib_conn->post_send_buf_count) == 0)
-		schedule_work(&ib_conn->comperror_work);
+	    atomic_read(&ib_conn->post_send_buf_count) == 0) {
+		/* getting here when the state is UP means that the conn is *
+		 * being terminated asynchronously from the iSCSI layer's   *
+		 * perspective.                                             */
+		if (iser_conn_state_comp_exch(ib_conn, ISER_CONN_UP,
+		    ISER_CONN_TERMINATING))
+			iscsi_conn_failure(ib_conn->iser_conn->iscsi_conn,
+					   ISCSI_ERR_CONN_FAILED);
+
+		/* complete the termination process if disconnect event was delivered *
+		 * note there are no more non completed posts to the QP               */
+		if (ib_conn->disc_evt_flag) {
+			ib_conn->state = ISER_CONN_DOWN;
+			wake_up_interruptible(&ib_conn->wait);
+		}
+	}
 }
 
 static void iser_cq_tasklet_fn(unsigned long data)

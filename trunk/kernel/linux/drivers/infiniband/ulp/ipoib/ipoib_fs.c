@@ -141,12 +141,12 @@ static int ipoib_mcg_open(struct inode *inode, struct file *file)
 		return ret;
 
 	seq = file->private_data;
-	seq->private = inode->u.generic_ip;
+	seq->private = inode->i_private;
 
 	return 0;
 }
 
-static struct file_operations ipoib_mcg_fops = {
+static const struct file_operations ipoib_mcg_fops = {
 	.owner   = THIS_MODULE,
 	.open    = ipoib_mcg_open,
 	.read    = seq_read,
@@ -247,12 +247,12 @@ static int ipoib_path_open(struct inode *inode, struct file *file)
 		return ret;
 
 	seq = file->private_data;
-	seq->private = inode->u.generic_ip;
+	seq->private = inode->i_private;
 
 	return 0;
 }
 
-static struct file_operations ipoib_path_fops = {
+static const struct file_operations ipoib_path_fops = {
 	.owner   = THIS_MODULE,
 	.open    = ipoib_path_open,
 	.read    = seq_read,
