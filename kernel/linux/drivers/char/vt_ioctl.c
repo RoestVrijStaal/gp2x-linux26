@@ -23,6 +23,7 @@
 #include <linux/major.h>
 #include <linux/fs.h>
 #include <linux/console.h>
+#include <linux/consolemap.h>
 #include <linux/signal.h>
 #include <linux/timex.h>
 
@@ -34,7 +35,7 @@
 #include <linux/kbd_diacr.h>
 #include <linux/selection.h>
 
-static char vt_dont_switch;
+char vt_dont_switch;
 extern struct tty_driver *console_driver;
 
 #define VT_IS_IN_USE(i)	(console_driver->ttys[i] && console_driver->ttys[i]->count)
@@ -96,7 +97,7 @@ do_kdsk_ioctl(int cmd, struct kbentry __user *user_kbe, int perm, struct kbd_str
 		if (!perm)
 			return -EPERM;
 		if (!i && v == K_NOSUCHMAP) {
-			/* disallocate map */
+			/* deallocate map */
 			key_map = key_maps[s];
 			if (s && key_map) {
 			    key_maps[s] = NULL;
@@ -129,7 +130,7 @@ do_kdsk_ioctl(int cmd, struct kbentry __user *user_kbe, int perm, struct kbd_str
 			    !capable(CAP_SYS_RESOURCE))
 				return -EPERM;
 
-			key_map = (ushort *) kmalloc(sizeof(plain_map),
+			key_map = kmalloc(sizeof(plain_map),
 						     GFP_KERNEL);
 			if (!key_map)
 				return -ENOMEM;
@@ -259,7 +260,7 @@ do_kdgkb_ioctl(int cmd, struct kbsentry __user *user_kdgkb, int perm)
 		    sz = 256;
 		    while (sz < funcbufsize - funcbufleft + delta)
 		      sz <<= 1;
-		    fnw = (char *) kmalloc(sz, GFP_KERNEL);
+		    fnw = kmalloc(sz, GFP_KERNEL);
 		    if(!fnw) {
 		      ret = -ENOMEM;
 		      goto reterr;
@@ -582,10 +583,27 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 	case KDGKBDIACR:
 	{
 		struct kbdiacrs __user *a = up;
+		struct kbdiacr diacr;
+		int i;
 
 		if (put_user(accent_table_size, &a->kb_cnt))
 			return -EFAULT;
-		if (copy_to_user(a->kbdiacr, accent_table, accent_table_size*sizeof(struct kbdiacr)))
+		for (i = 0; i < accent_table_size; i++) {
+			diacr.diacr = conv_uni_to_8bit(accent_table[i].diacr);
+			diacr.base = conv_uni_to_8bit(accent_table[i].base);
+			diacr.result = conv_uni_to_8bit(accent_table[i].result);
+			if (copy_to_user(a->kbdiacr + i, &diacr, sizeof(struct kbdiacr)))
+				return -EFAULT;
+		}
+		return 0;
+	}
+	case KDGKBDIACRUC:
+	{
+		struct kbdiacrsuc __user *a = up;
+
+		if (put_user(accent_table_size, &a->kb_cnt))
+			return -EFAULT;
+		if (copy_to_user(a->kbdiacruc, accent_table, accent_table_size*sizeof(struct kbdiacruc)))
 			return -EFAULT;
 		return 0;
 	}
@@ -593,6 +611,30 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 	case KDSKBDIACR:
 	{
 		struct kbdiacrs __user *a = up;
+		struct kbdiacr diacr;
+		unsigned int ct;
+		int i;
+
+		if (!perm)
+			return -EPERM;
+		if (get_user(ct,&a->kb_cnt))
+			return -EFAULT;
+		if (ct >= MAX_DIACR)
+			return -EINVAL;
+		accent_table_size = ct;
+		for (i = 0; i < ct; i++) {
+			if (copy_from_user(&diacr, a->kbdiacr + i, sizeof(struct kbdiacr)))
+				return -EFAULT;
+			accent_table[i].diacr = conv_8bit_to_uni(diacr.diacr);
+			accent_table[i].base = conv_8bit_to_uni(diacr.base);
+			accent_table[i].result = conv_8bit_to_uni(diacr.result);
+		}
+		return 0;
+	}
+
+	case KDSKBDIACRUC:
+	{
+		struct kbdiacrsuc __user *a = up;
 		unsigned int ct;
 
 		if (!perm)
@@ -602,7 +644,7 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		if (ct >= MAX_DIACR)
 			return -EINVAL;
 		accent_table_size = ct;
-		if (copy_from_user(accent_table, a->kbdiacr, ct*sizeof(struct kbdiacr)))
+		if (copy_from_user(accent_table, a->kbdiacruc, ct*sizeof(struct kbdiacruc)))
 			return -EFAULT;
 		return 0;
 	}
@@ -645,13 +687,16 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 	 */
 	case KDSIGACCEPT:
 	{
-		extern int spawnpid, spawnsig;
 		if (!perm || !capable(CAP_KILL))
 		  return -EPERM;
 		if (!valid_signal(arg) || arg < 1 || arg == SIGKILL)
 		  return -EINVAL;
-		spawnpid = current->pid;
-		spawnsig = arg;
+
+		spin_lock_irq(&vt_spawn_con.lock);
+		put_pid(vt_spawn_con.pid);
+		vt_spawn_con.pid = get_pid(task_pid(current));
+		vt_spawn_con.sig = arg;
+		spin_unlock_irq(&vt_spawn_con.lock);
 		return 0;
 	}
 
@@ -669,7 +714,8 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		vc->vt_mode = tmp;
 		/* the frsig is ignored, so we set it to 0 */
 		vc->vt_mode.frsig = 0;
-		vc->vt_pid = current->pid;
+		put_pid(vc->vt_pid);
+		vc->vt_pid = get_pid(task_pid(current));
 		/* no switch is required -- saw@shade.msu.ru */
 		vc->vt_newvt = -1;
 		release_console_sem();
@@ -766,6 +812,7 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		/*
 		 * Switching-from response
 		 */
+		acquire_console_sem();
 		if (vc->vt_newvt >= 0) {
 			if (arg == 0)
 				/*
@@ -780,7 +827,6 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 				 * complete the switch.
 				 */
 				int newvt;
-				acquire_console_sem();
 				newvt = vc->vt_newvt;
 				vc->vt_newvt = -1;
 				i = vc_allocate(newvt);
@@ -794,7 +840,6 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 				 * other console switches..
 				 */
 				complete_change_console(vc_cons[newvt].d);
-				release_console_sem();
 			}
 		}
 
@@ -806,9 +851,12 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 			/*
 			 * If it's just an ACK, ignore it
 			 */
-			if (arg != VT_ACKACQ)
+			if (arg != VT_ACKACQ) {
+				release_console_sem();
 				return -EINVAL;
+			}
 		}
+		release_console_sem();
 
 		return 0;
 
@@ -819,20 +867,20 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 		if (arg > MAX_NR_CONSOLES)
 			return -ENXIO;
 		if (arg == 0) {
-		    /* disallocate all unused consoles, but leave 0 */
+		    /* deallocate all unused consoles, but leave 0 */
 			acquire_console_sem();
 			for (i=1; i<MAX_NR_CONSOLES; i++)
 				if (! VT_BUSY(i))
-					vc_disallocate(i);
+					vc_deallocate(i);
 			release_console_sem();
 		} else {
-			/* disallocate a single console, if possible */
+			/* deallocate a single console, if possible */
 			arg--;
 			if (VT_BUSY(arg))
 				return -EBUSY;
 			if (arg) {			      /* leave 0 */
 				acquire_console_sem();
-				vc_disallocate(arg);
+				vc_deallocate(arg);
 				release_console_sem();
 			}
 		}
@@ -841,17 +889,24 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 	case VT_RESIZE:
 	{
 		struct vt_sizes __user *vtsizes = up;
+		struct vc_data *vc;
+
 		ushort ll,cc;
 		if (!perm)
 			return -EPERM;
 		if (get_user(ll, &vtsizes->v_rows) ||
 		    get_user(cc, &vtsizes->v_cols))
 			return -EFAULT;
+
 		for (i = 0; i < MAX_NR_CONSOLES; i++) {
-			acquire_console_sem();
-			vc_resize(vc_cons[i].d, cc, ll);
-			release_console_sem();
+			vc = vc_cons[i].d;
+
+			if (vc) {
+				vc->vc_resize_user = 1;
+				vc_lock_resize(vc_cons[i].d, cc, ll);
+			}
 		}
+
 		return 0;
 	}
 
@@ -897,6 +952,7 @@ int vt_ioctl(struct tty_struct *tty, struct file * file,
 				vc_cons[i].d->vc_scan_lines = vlin;
 			if (clin)
 				vc_cons[i].d->vc_font.height = clin;
+			vc_cons[i].d->vc_resize_user = 1;
 			vc_resize(vc_cons[i].d, cc, ll);
 			release_console_sem();
 		}
@@ -1029,7 +1085,7 @@ static DECLARE_WAIT_QUEUE_HEAD(vt_activate_queue);
 
 /*
  * Sleeps until a vt is activated, or the task is interrupted. Returns
- * 0 if activation, -EINTR if interrupted.
+ * 0 if activation, -EINTR if interrupted by a signal handler.
  */
 int vt_waitactive(int vt)
 {
@@ -1038,17 +1094,29 @@ int vt_waitactive(int vt)
 
 	add_wait_queue(&vt_activate_queue, &wait);
 	for (;;) {
-		set_current_state(TASK_INTERRUPTIBLE);
 		retval = 0;
-		if (vt == fg_console)
+
+		/*
+		 * Synchronize with redraw_screen(). By acquiring the console
+		 * semaphore we make sure that the console switch is completed
+		 * before we return. If we didn't wait for the semaphore, we
+		 * could return at a point where fg_console has already been
+		 * updated, but the console switch hasn't been completed.
+		 */
+		acquire_console_sem();
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (vt == fg_console) {
+			release_console_sem();
 			break;
-		retval = -EINTR;
+		}
+		release_console_sem();
+		retval = -ERESTARTNOHAND;
 		if (signal_pending(current))
 			break;
 		schedule();
 	}
 	remove_wait_queue(&vt_activate_queue, &wait);
-	current->state = TASK_RUNNING;
+	__set_current_state(TASK_RUNNING);
 	return retval;
 }
 
@@ -1057,16 +1125,39 @@ int vt_waitactive(int vt)
 void reset_vc(struct vc_data *vc)
 {
 	vc->vc_mode = KD_TEXT;
-	kbd_table[vc->vc_num].kbdmode = VC_XLATE;
+	kbd_table[vc->vc_num].kbdmode = default_utf8 ? VC_UNICODE : VC_XLATE;
 	vc->vt_mode.mode = VT_AUTO;
 	vc->vt_mode.waitv = 0;
 	vc->vt_mode.relsig = 0;
 	vc->vt_mode.acqsig = 0;
 	vc->vt_mode.frsig = 0;
-	vc->vt_pid = -1;
+	put_pid(vc->vt_pid);
+	vc->vt_pid = NULL;
 	vc->vt_newvt = -1;
 	if (!in_interrupt())    /* Via keyboard.c:SAK() - akpm */
 		reset_palette(vc);
+}
+
+void vc_SAK(struct work_struct *work)
+{
+	struct vc *vc_con =
+		container_of(work, struct vc, SAK_work);
+	struct vc_data *vc;
+	struct tty_struct *tty;
+
+	acquire_console_sem();
+	vc = vc_con->d;
+	if (vc) {
+		tty = vc->vc_tty;
+		/*
+		 * SAK should also work in all raw modes and reset
+		 * them properly.
+		 */
+		if (tty)
+			__do_SAK(tty);
+		reset_vc(vc);
+	}
+	release_console_sem();
 }
 
 /*
@@ -1087,7 +1178,7 @@ static void complete_change_console(struct vc_data *vc)
 	switch_screen(vc);
 
 	/*
-	 * This can't appear below a successful kill_proc().  If it did,
+	 * This can't appear below a successful kill_pid().  If it did,
 	 * then the *blank_screen operation could occur while X, having
 	 * received acqsig, is waking up on another processor.  This
 	 * condition can lead to overlapping accesses to the VGA range
@@ -1110,11 +1201,11 @@ static void complete_change_console(struct vc_data *vc)
 	 */
 	if (vc->vt_mode.mode == VT_PROCESS) {
 		/*
-		 * Send the signal as privileged - kill_proc() will
+		 * Send the signal as privileged - kill_pid() will
 		 * tell us if the process has gone or something else
 		 * is awry
 		 */
-		if (kill_proc(vc->vt_pid, vc->vt_mode.acqsig, 1) != 0) {
+		if (kill_pid(vc->vt_pid, vc->vt_mode.acqsig, 1) != 0) {
 		/*
 		 * The controlling process has died, so we revert back to
 		 * normal operation. In this case, we'll also change back
@@ -1170,17 +1261,20 @@ void change_console(struct vc_data *new_vc)
 	vc = vc_cons[fg_console].d;
 	if (vc->vt_mode.mode == VT_PROCESS) {
 		/*
-		 * Send the signal as privileged - kill_proc() will
+		 * Send the signal as privileged - kill_pid() will
 		 * tell us if the process has gone or something else
-		 * is awry
+		 * is awry.
+		 *
+		 * We need to set vt_newvt *before* sending the signal or we
+		 * have a race.
 		 */
-		if (kill_proc(vc->vt_pid, vc->vt_mode.relsig, 1) == 0) {
+		vc->vt_newvt = new_vc->vc_num;
+		if (kill_pid(vc->vt_pid, vc->vt_mode.relsig, 1) == 0) {
 			/*
 			 * It worked. Mark the vt to switch to and
 			 * return. The process needs to send us a
 			 * VT_RELDISP ioctl to complete the switch.
 			 */
-			vc->vt_newvt = new_vc->vc_num;
 			return;
 		}
 

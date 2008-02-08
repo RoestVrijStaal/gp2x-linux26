@@ -14,7 +14,6 @@
 #include <linux/module.h>	/* For EXPORT_SYMBOL */
 
 #include <linux/errno.h>
-#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
@@ -218,13 +217,13 @@ out:
 	return retval;
 }
 
-static void pty_set_termios(struct tty_struct *tty, struct termios *old_termios)
+static void pty_set_termios(struct tty_struct *tty, struct ktermios *old_termios)
 {
         tty->termios->c_cflag &= ~(CSIZE | PARENB);
         tty->termios->c_cflag |= (CS8 | CREAD);
 }
 
-static struct tty_operations pty_ops = {
+static const struct tty_operations pty_ops = {
 	.open = pty_open,
 	.close = pty_close,
 	.write = pty_write,
@@ -249,14 +248,19 @@ static int pty_bsd_ioctl(struct tty_struct *tty, struct file *file,
 	return -ENOIOCTLCMD;
 }
 
+static int legacy_count = CONFIG_LEGACY_PTY_COUNT;
+module_param(legacy_count, int, 0);
+
 static void __init legacy_pty_init(void)
 {
+	if (legacy_count <= 0)
+		return;
 
-	pty_driver = alloc_tty_driver(NR_PTYS);
+	pty_driver = alloc_tty_driver(legacy_count);
 	if (!pty_driver)
 		panic("Couldn't allocate pty driver");
 
-	pty_slave_driver = alloc_tty_driver(NR_PTYS);
+	pty_slave_driver = alloc_tty_driver(legacy_count);
 	if (!pty_slave_driver)
 		panic("Couldn't allocate pty slave driver");
 
@@ -272,6 +276,8 @@ static void __init legacy_pty_init(void)
 	pty_driver->init_termios.c_oflag = 0;
 	pty_driver->init_termios.c_cflag = B38400 | CS8 | CREAD;
 	pty_driver->init_termios.c_lflag = 0;
+	pty_driver->init_termios.c_ispeed = 38400;
+	pty_driver->init_termios.c_ospeed = 38400;
 	pty_driver->flags = TTY_DRIVER_RESET_TERMIOS | TTY_DRIVER_REAL_RAW;
 	pty_driver->other = pty_slave_driver;
 	tty_set_operations(pty_driver, &pty_ops);
@@ -286,6 +292,8 @@ static void __init legacy_pty_init(void)
 	pty_slave_driver->subtype = PTY_TYPE_SLAVE;
 	pty_slave_driver->init_termios = tty_std_termios;
 	pty_slave_driver->init_termios.c_cflag = B38400 | CS8 | CREAD;
+	pty_slave_driver->init_termios.c_ispeed = 38400;
+	pty_slave_driver->init_termios.c_ospeed = 38400;
 	pty_slave_driver->flags = TTY_DRIVER_RESET_TERMIOS |
 					TTY_DRIVER_REAL_RAW;
 	pty_slave_driver->other = pty_driver;
@@ -310,7 +318,7 @@ int pty_limit = NR_UNIX98_PTY_DEFAULT;
 static int pty_limit_min = 0;
 static int pty_limit_max = NR_UNIX98_PTY_MAX;
 
-ctl_table pty_table[] = {
+static struct ctl_table pty_table[] = {
 	{
 		.ctl_name	= PTY_MAX,
 		.procname	= "max",
@@ -331,6 +339,27 @@ ctl_table pty_table[] = {
 		.ctl_name	= 0
 	}
 };
+
+static struct ctl_table pty_kern_table[] = {
+	{
+		.ctl_name	= KERN_PTY,
+		.procname	= "pty",
+		.mode		= 0555,
+		.child		= pty_table,
+	},
+	{}
+};
+
+static struct ctl_table pty_root_table[] = {
+	{
+		.ctl_name	= CTL_KERN,
+		.procname	= "kernel",
+		.mode		= 0555,
+		.child		= pty_kern_table,
+	},
+	{}
+};
+
 
 static int pty_unix98_ioctl(struct tty_struct *tty, struct file *file,
 			    unsigned int cmd, unsigned long arg)
@@ -366,6 +395,8 @@ static void __init unix98_pty_init(void)
 	ptm_driver->init_termios.c_oflag = 0;
 	ptm_driver->init_termios.c_cflag = B38400 | CS8 | CREAD;
 	ptm_driver->init_termios.c_lflag = 0;
+	ptm_driver->init_termios.c_ispeed = 38400;
+	ptm_driver->init_termios.c_ospeed = 38400;
 	ptm_driver->flags = TTY_DRIVER_RESET_TERMIOS | TTY_DRIVER_REAL_RAW |
 		TTY_DRIVER_DYNAMIC_DEV | TTY_DRIVER_DEVPTS_MEM;
 	ptm_driver->other = pts_driver;
@@ -381,6 +412,8 @@ static void __init unix98_pty_init(void)
 	pts_driver->subtype = PTY_TYPE_SLAVE;
 	pts_driver->init_termios = tty_std_termios;
 	pts_driver->init_termios.c_cflag = B38400 | CS8 | CREAD;
+	pts_driver->init_termios.c_ispeed = 38400;
+	pts_driver->init_termios.c_ospeed = 38400;
 	pts_driver->flags = TTY_DRIVER_RESET_TERMIOS | TTY_DRIVER_REAL_RAW |
 		TTY_DRIVER_DYNAMIC_DEV | TTY_DRIVER_DEVPTS_MEM;
 	pts_driver->other = ptm_driver;
@@ -392,6 +425,7 @@ static void __init unix98_pty_init(void)
 		panic("Couldn't register Unix98 pts driver");
 
 	pty_table[1].data = &ptm_driver->refcount;
+	register_sysctl_table(pty_root_table);
 }
 #else
 static inline void unix98_pty_init(void) { }

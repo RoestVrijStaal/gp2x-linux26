@@ -17,7 +17,6 @@
 #include <linux/kdev_t.h>
 #include <asm/io.h>
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
 #include <linux/errno.h>
@@ -81,10 +80,10 @@ static int scc_ioctl(struct tty_struct * tty, struct file * filp,
                      unsigned int cmd, unsigned long arg);
 static void scc_throttle(struct tty_struct *tty);
 static void scc_unthrottle(struct tty_struct *tty);
-static irqreturn_t scc_tx_int(int irq, void *data, struct pt_regs *fp);
-static irqreturn_t scc_rx_int(int irq, void *data, struct pt_regs *fp);
-static irqreturn_t scc_stat_int(int irq, void *data, struct pt_regs *fp);
-static irqreturn_t scc_spcond_int(int irq, void *data, struct pt_regs *fp);
+static irqreturn_t scc_tx_int(int irq, void *data);
+static irqreturn_t scc_rx_int(int irq, void *data);
+static irqreturn_t scc_stat_int(int irq, void *data);
+static irqreturn_t scc_spcond_int(int irq, void *data);
 static void scc_setsignals(struct scc_port *port, int dtr, int rts);
 static void scc_break_ctl(struct tty_struct *tty, int break_state);
 
@@ -113,7 +112,7 @@ static struct real_driver scc_real_driver = {
 };
 
 
-static struct tty_operations scc_ops = {
+static const struct tty_operations scc_ops = {
 	.open	= scc_open,
 	.close = gs_close,
 	.write = gs_write,
@@ -153,6 +152,8 @@ static int scc_init_drivers(void)
 	scc_driver->init_termios = tty_std_termios;
 	scc_driver->init_termios.c_cflag =
 	  B9600 | CS8 | CREAD | HUPCL | CLOCAL;
+	scc_driver->init_termios.c_ispeed = 9600;
+	scc_driver->init_termios.c_ospeed = 9600;
 	scc_driver->flags = TTY_DRIVER_REAL_RAW;
 	tty_set_operations(scc_driver, &scc_ops);
 
@@ -419,7 +420,7 @@ module_init(vme_scc_init);
  * Interrupt handlers
  *--------------------------------------------------------------------------*/
 
-static irqreturn_t scc_rx_int(int irq, void *data, struct pt_regs *fp)
+static irqreturn_t scc_rx_int(int irq, void *data)
 {
 	unsigned char	ch;
 	struct scc_port *port = data;
@@ -440,7 +441,7 @@ static irqreturn_t scc_rx_int(int irq, void *data, struct pt_regs *fp)
 	 */
 	if (SCCread(INT_PENDING_REG) &
 	    (port->channel == CHANNEL_A ? IPR_A_RX : IPR_B_RX)) {
-		scc_spcond_int (irq, data, fp);
+		scc_spcond_int (irq, data);
 		return IRQ_HANDLED;
 	}
 
@@ -451,7 +452,7 @@ static irqreturn_t scc_rx_int(int irq, void *data, struct pt_regs *fp)
 }
 
 
-static irqreturn_t scc_spcond_int(int irq, void *data, struct pt_regs *fp)
+static irqreturn_t scc_spcond_int(int irq, void *data)
 {
 	struct scc_port *port = data;
 	struct tty_struct *tty = port->gs.tty;
@@ -496,7 +497,7 @@ static irqreturn_t scc_spcond_int(int irq, void *data, struct pt_regs *fp)
 }
 
 
-static irqreturn_t scc_tx_int(int irq, void *data, struct pt_regs *fp)
+static irqreturn_t scc_tx_int(int irq, void *data)
 {
 	struct scc_port *port = data;
 	SCC_ACCESS_INIT(port);
@@ -538,7 +539,7 @@ static irqreturn_t scc_tx_int(int irq, void *data, struct pt_regs *fp)
 }
 
 
-static irqreturn_t scc_stat_int(int irq, void *data, struct pt_regs *fp)
+static irqreturn_t scc_stat_int(int irq, void *data)
 {
 	struct scc_port *port = data;
 	unsigned channel = port->channel;
@@ -593,7 +594,7 @@ static void scc_enable_tx_interrupts(void *ptr)
 	local_irq_save(flags);
 	SCCmod(INT_AND_DMA_REG, 0xff, IDR_TX_INT_ENAB);
 	/* restart the transmitter */
-	scc_tx_int (0, port, 0);
+	scc_tx_int (0, port);
 	local_irq_restore(flags);
 }
 
@@ -1012,18 +1013,10 @@ static struct tty_driver *scc_console_device(struct console *c, int *index)
 	return scc_driver;
 }
 
-
-static int __init scc_console_setup(struct console *co, char *options)
-{
-	return 0;
-}
-
-
 static struct console sercons = {
 	.name		= "ttyS",
 	.write		= scc_console_write,
 	.device		= scc_console_device,
-	.setup		= scc_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
 };

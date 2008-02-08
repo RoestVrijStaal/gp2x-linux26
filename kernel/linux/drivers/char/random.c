@@ -645,16 +645,18 @@ void add_input_randomness(unsigned int type, unsigned int code,
 	add_timer_randomness(&input_timer_state,
 			     (type << 4) ^ code ^ (code >> 4) ^ value);
 }
+EXPORT_SYMBOL_GPL(add_input_randomness);
 
 void add_interrupt_randomness(int irq)
 {
-	if (irq >= NR_IRQS || irq_timer_state[irq] == 0)
+	if (irq >= NR_IRQS || irq_timer_state[irq] == NULL)
 		return;
 
 	DEBUG_ENT("irq event %d\n", irq);
 	add_timer_randomness(irq_timer_state[irq], 0x100 + irq);
 }
 
+#ifdef CONFIG_BLOCK
 void add_disk_randomness(struct gendisk *disk)
 {
 	if (!disk || !disk->random)
@@ -667,6 +669,7 @@ void add_disk_randomness(struct gendisk *disk)
 }
 
 EXPORT_SYMBOL(add_disk_randomness);
+#endif
 
 #define EXTRACT_SIZE 10
 
@@ -690,9 +693,14 @@ static void xfer_secondary_pool(struct entropy_store *r, size_t nbytes)
 
 	if (r->pull && r->entropy_count < nbytes * 8 &&
 	    r->entropy_count < r->poolinfo->POOLBITS) {
-		int bytes = max_t(int, random_read_wakeup_thresh / 8,
-				min_t(int, nbytes, sizeof(tmp)));
+		/* If we're limited, always leave two wakeup worth's BITS */
 		int rsvd = r->limit ? 0 : random_read_wakeup_thresh/4;
+		int bytes = nbytes;
+
+		/* pull at least as many as BYTES as wakeup BITS */
+		bytes = max_t(int, bytes, random_read_wakeup_thresh / 8);
+		/* but never more than the buffer size */
+		bytes = min_t(int, bytes, sizeof(tmp));
 
 		DEBUG_ENT("going to reseed %s with %d bits "
 			  "(%d of %d requested)\n",
@@ -757,7 +765,7 @@ static size_t account(struct entropy_store *r, size_t nbytes, int min,
 
 static void extract_buf(struct entropy_store *r, __u8 *out)
 {
-	int i, x;
+	int i;
 	__u32 data[16], buf[5 + SHA_WORKSPACE_WORDS];
 
 	sha_init(buf);
@@ -769,9 +777,11 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
 	 * attempts to find previous ouputs), unless the hash
 	 * function can be inverted.
 	 */
-	for (i = 0, x = 0; i < r->poolinfo->poolwords; i += 16, x+=2) {
-		sha_transform(buf, (__u8 *)r->pool+i, buf + 5);
-		add_entropy_words(r, &buf[x % 5], 1);
+	for (i = 0; i < r->poolinfo->poolwords; i += 16) {
+		/* hash blocks of 16 words = 512 bits */
+		sha_transform(buf, (__u8 *)(r->pool + i), buf + 5);
+		/* feed back portion of the resulting hash */
+		add_entropy_words(r, &buf[i % 5], 1);
 	}
 
 	/*
@@ -779,7 +789,7 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
 	 * portion of the pool while mixing, and hash one
 	 * final time.
 	 */
-	__add_entropy_words(r, &buf[x % 5], 1, data);
+	__add_entropy_words(r, &buf[i % 5], 1, data);
 	sha_transform(buf, (__u8 *)data, buf + 5);
 
 	/*
@@ -789,7 +799,7 @@ static void extract_buf(struct entropy_store *r, __u8 *out)
 
 	buf[0] ^= buf[3];
 	buf[1] ^= buf[4];
-	buf[0] ^= rol32(buf[3], 16);
+	buf[2] ^= rol32(buf[2], 16);
 	memcpy(out, buf, EXTRACT_SIZE);
 	memset(buf, 0, sizeof(buf));
 }
@@ -878,17 +888,17 @@ EXPORT_SYMBOL(get_random_bytes);
  */
 static void init_std_data(struct entropy_store *r)
 {
-	struct timeval tv;
+	ktime_t now;
 	unsigned long flags;
 
 	spin_lock_irqsave(&r->lock, flags);
 	r->entropy_count = 0;
 	spin_unlock_irqrestore(&r->lock, flags);
 
-	do_gettimeofday(&tv);
-	add_entropy_words(r, (__u32 *)&tv, sizeof(tv)/4);
-	add_entropy_words(r, (__u32 *)&system_utsname,
-			  sizeof(system_utsname)/4);
+	now = ktime_get_real();
+	add_entropy_words(r, (__u32 *)&now, sizeof(now)/4);
+	add_entropy_words(r, (__u32 *)utsname(),
+			  sizeof(*(utsname()))/4);
 }
 
 static int __init rand_initialize(void)
@@ -908,30 +918,28 @@ void rand_initialize_irq(int irq)
 		return;
 
 	/*
-	 * If kmalloc returns null, we just won't use that entropy
+	 * If kzalloc returns null, we just won't use that entropy
 	 * source.
 	 */
-	state = kmalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
-	if (state) {
-		memset(state, 0, sizeof(struct timer_rand_state));
+	state = kzalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
+	if (state)
 		irq_timer_state[irq] = state;
-	}
 }
 
+#ifdef CONFIG_BLOCK
 void rand_initialize_disk(struct gendisk *disk)
 {
 	struct timer_rand_state *state;
 
 	/*
-	 * If kmalloc returns null, we just won't use that entropy
+	 * If kzalloc returns null, we just won't use that entropy
 	 * source.
 	 */
-	state = kmalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
-	if (state) {
-		memset(state, 0, sizeof(struct timer_rand_state));
+	state = kzalloc(sizeof(struct timer_rand_state), GFP_KERNEL);
+	if (state)
 		disk->random = state;
-	}
 }
+#endif
 
 static ssize_t
 random_read(struct file * file, char __user * buf, size_t nbytes, loff_t *ppos)
@@ -1017,37 +1025,44 @@ random_poll(struct file *file, poll_table * wait)
 	return mask;
 }
 
+static int
+write_pool(struct entropy_store *r, const char __user *buffer, size_t count)
+{
+	size_t bytes;
+	__u32 buf[16];
+	const char __user *p = buffer;
+
+	while (count > 0) {
+		bytes = min(count, sizeof(buf));
+		if (copy_from_user(&buf, p, bytes))
+			return -EFAULT;
+
+		count -= bytes;
+		p += bytes;
+
+		add_entropy_words(r, buf, (bytes + 3) / 4);
+	}
+
+	return 0;
+}
+
 static ssize_t
 random_write(struct file * file, const char __user * buffer,
 	     size_t count, loff_t *ppos)
 {
-	int ret = 0;
-	size_t bytes;
-	__u32 buf[16];
-	const char __user *p = buffer;
-	size_t c = count;
+	size_t ret;
+	struct inode *inode = file->f_path.dentry->d_inode;
 
-	while (c > 0) {
-		bytes = min(c, sizeof(buf));
+	ret = write_pool(&blocking_pool, buffer, count);
+	if (ret)
+		return ret;
+	ret = write_pool(&nonblocking_pool, buffer, count);
+	if (ret)
+		return ret;
 
-		bytes -= copy_from_user(&buf, p, bytes);
-		if (!bytes) {
-			ret = -EFAULT;
-			break;
-		}
-		c -= bytes;
-		p += bytes;
-
-		add_entropy_words(&input_pool, buf, (bytes + 3) / 4);
-	}
-	if (p == buffer) {
-		return (ssize_t)ret;
-	} else {
-		struct inode *inode = file->f_dentry->d_inode;
-	        inode->i_mtime = current_fs_time(inode->i_sb);
-		mark_inode_dirty(inode);
-		return (ssize_t)(p - buffer);
-	}
+	inode->i_mtime = current_fs_time(inode->i_sb);
+	mark_inode_dirty(inode);
+	return (ssize_t)count;
 }
 
 static int
@@ -1086,8 +1101,8 @@ random_ioctl(struct inode * inode, struct file * file,
 			return -EINVAL;
 		if (get_user(size, p++))
 			return -EFAULT;
-		retval = random_write(file, (const char __user *) p,
-				      size, &file->f_pos);
+		retval = write_pool(&input_pool, (const char __user *)p,
+				    size);
 		if (retval < 0)
 			return retval;
 		credit_entropy_store(&input_pool, ent_count);
@@ -1112,14 +1127,14 @@ random_ioctl(struct inode * inode, struct file * file,
 	}
 }
 
-struct file_operations random_fops = {
+const struct file_operations random_fops = {
 	.read  = random_read,
 	.write = random_write,
 	.poll  = random_poll,
 	.ioctl = random_ioctl,
 };
 
-struct file_operations urandom_fops = {
+const struct file_operations urandom_fops = {
 	.read  = urandom_read,
 	.write = random_write,
 	.ioctl = random_ioctl,
@@ -1198,7 +1213,7 @@ static int proc_do_uuid(ctl_table *table, int write, struct file *filp,
 
 static int uuid_strategy(ctl_table *table, int __user *name, int nlen,
 			 void __user *oldval, size_t __user *oldlenp,
-			 void __user *newval, size_t newlen, void **context)
+			 void __user *newval, size_t newlen)
 {
 	unsigned char tmp_uuid[16], *uuid;
 	unsigned int len;
@@ -1417,9 +1432,9 @@ static struct keydata {
 
 static unsigned int ip_cnt;
 
-static void rekey_seq_generator(void *private_);
+static void rekey_seq_generator(struct work_struct *work);
 
-static DECLARE_WORK(rekey_work, rekey_seq_generator, NULL);
+static DECLARE_DELAYED_WORK(rekey_work, rekey_seq_generator);
 
 /*
  * Lock avoidance:
@@ -1433,7 +1448,7 @@ static DECLARE_WORK(rekey_work, rekey_seq_generator, NULL);
  * happen, and even if that happens only a not perfectly compliant
  * ISN is generated, nothing fatal.
  */
-static void rekey_seq_generator(void *private_)
+static void rekey_seq_generator(struct work_struct *work)
 {
 	struct keydata *keyptr = &ip_keydata[1 ^ (ip_cnt & 1)];
 
@@ -1461,10 +1476,9 @@ static __init int seqgen_init(void)
 late_initcall(seqgen_init);
 
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-__u32 secure_tcpv6_sequence_number(__u32 *saddr, __u32 *daddr,
-				   __u16 sport, __u16 dport)
+__u32 secure_tcpv6_sequence_number(__be32 *saddr, __be32 *daddr,
+				   __be16 sport, __be16 dport)
 {
-	struct timeval tv;
 	__u32 seq;
 	__u32 hash[12];
 	struct keydata *keyptr = get_keyptr();
@@ -1474,14 +1488,13 @@ __u32 secure_tcpv6_sequence_number(__u32 *saddr, __u32 *daddr,
 	 */
 
 	memcpy(hash, saddr, 16);
-	hash[4]=(sport << 16) + dport;
+	hash[4]=((__force u16)sport << 16) + (__force u16)dport;
 	memcpy(&hash[5],keyptr->secret,sizeof(__u32) * 7);
 
-	seq = twothirdsMD4Transform(daddr, hash) & HASH_MASK;
+	seq = twothirdsMD4Transform((const __u32 *)daddr, hash) & HASH_MASK;
 	seq += keyptr->count;
 
-	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	seq += ktime_to_ns(ktime_get_real());
 
 	return seq;
 }
@@ -1491,7 +1504,7 @@ EXPORT_SYMBOL(secure_tcpv6_sequence_number);
 /*  The code below is shamelessly stolen from secure_tcp_sequence_number().
  *  All blames to Andrey V. Savochkin <saw@msu.ru>.
  */
-__u32 secure_ip_id(__u32 daddr)
+__u32 secure_ip_id(__be32 daddr)
 {
 	struct keydata *keyptr;
 	__u32 hash[4];
@@ -1503,7 +1516,7 @@ __u32 secure_ip_id(__u32 daddr)
 	 *  The dest ip address is placed in the starting vector,
 	 *  which is then hashed with random data.
 	 */
-	hash[0] = daddr;
+	hash[0] = (__force __u32)daddr;
 	hash[1] = keyptr->secret[9];
 	hash[2] = keyptr->secret[10];
 	hash[3] = keyptr->secret[11];
@@ -1513,10 +1526,9 @@ __u32 secure_ip_id(__u32 daddr)
 
 #ifdef CONFIG_INET
 
-__u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
-				 __u16 sport, __u16 dport)
+__u32 secure_tcp_sequence_number(__be32 saddr, __be32 daddr,
+				 __be16 sport, __be16 dport)
 {
-	struct timeval tv;
 	__u32 seq;
 	__u32 hash[4];
 	struct keydata *keyptr = get_keyptr();
@@ -1527,9 +1539,9 @@ __u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
 	 *  Note that the words are placed into the starting vector, which is
 	 *  then mixed with a partial MD4 over random data.
 	 */
-	hash[0]=saddr;
-	hash[1]=daddr;
-	hash[2]=(sport << 16) + dport;
+	hash[0]=(__force u32)saddr;
+	hash[1]=(__force u32)daddr;
+	hash[2]=((__force u16)sport << 16) + (__force u16)dport;
 	hash[3]=keyptr->secret[11];
 
 	seq = half_md4_transform(hash, keyptr->secret) & HASH_MASK;
@@ -1539,11 +1551,12 @@ __u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
 	 *	suggests using a 250 kHz clock.
 	 *	Further reading shows this assumes 2 Mb/s networks.
 	 *	For 10 Mb/s Ethernet, a 1 MHz clock is appropriate.
-	 *	That's funny, Linux has one built in!  Use it!
-	 *	(Networks are faster now - should this be increased?)
+	 *	For 10 Gb/s Ethernet, a 1 GHz clock should be ok, but
+	 *	we also need to limit the resolution so that the u32 seq
+	 *	overlaps less than one time per MSL (2 minutes).
+	 *	Choosing a clock of 64 ns period is OK. (period of 274 s)
 	 */
-	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	seq += ktime_to_ns(ktime_get_real()) >> 6;
 #if 0
 	printk("init_seq(%lx, %lx, %d, %d) = %d\n",
 	       saddr, daddr, sport, dport, seq);
@@ -1551,10 +1564,8 @@ __u32 secure_tcp_sequence_number(__u32 saddr, __u32 daddr,
 	return seq;
 }
 
-EXPORT_SYMBOL(secure_tcp_sequence_number);
-
 /* Generate secure starting point for ephemeral IPV4 transport port search */
-u32 secure_ipv4_port_ephemeral(__u32 saddr, __u32 daddr, __u16 dport)
+u32 secure_ipv4_port_ephemeral(__be32 saddr, __be32 daddr, __be16 dport)
 {
 	struct keydata *keyptr = get_keyptr();
 	u32 hash[4];
@@ -1563,25 +1574,25 @@ u32 secure_ipv4_port_ephemeral(__u32 saddr, __u32 daddr, __u16 dport)
 	 *  Pick a unique starting offset for each ephemeral port search
 	 *  (saddr, daddr, dport) and 48bits of random data.
 	 */
-	hash[0] = saddr;
-	hash[1] = daddr;
-	hash[2] = dport ^ keyptr->secret[10];
+	hash[0] = (__force u32)saddr;
+	hash[1] = (__force u32)daddr;
+	hash[2] = (__force u32)dport ^ keyptr->secret[10];
 	hash[3] = keyptr->secret[11];
 
 	return half_md4_transform(hash, keyptr->secret);
 }
 
 #if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
-u32 secure_ipv6_port_ephemeral(const __u32 *saddr, const __u32 *daddr, __u16 dport)
+u32 secure_ipv6_port_ephemeral(const __be32 *saddr, const __be32 *daddr, __be16 dport)
 {
 	struct keydata *keyptr = get_keyptr();
 	u32 hash[12];
 
 	memcpy(hash, saddr, 16);
-	hash[4] = dport;
+	hash[4] = (__force u32)dport;
 	memcpy(&hash[5],keyptr->secret,sizeof(__u32) * 7);
 
-	return twothirdsMD4Transform(daddr, hash);
+	return twothirdsMD4Transform((const __u32 *)daddr, hash);
 }
 #endif
 
@@ -1590,24 +1601,22 @@ u32 secure_ipv6_port_ephemeral(const __u32 *saddr, const __u32 *daddr, __u16 dpo
  * bit's 32-47 increase every key exchange
  *       0-31  hash(source, dest)
  */
-u64 secure_dccp_sequence_number(__u32 saddr, __u32 daddr,
-				__u16 sport, __u16 dport)
+u64 secure_dccp_sequence_number(__be32 saddr, __be32 daddr,
+				__be16 sport, __be16 dport)
 {
-	struct timeval tv;
 	u64 seq;
 	__u32 hash[4];
 	struct keydata *keyptr = get_keyptr();
 
-	hash[0] = saddr;
-	hash[1] = daddr;
-	hash[2] = (sport << 16) + dport;
+	hash[0] = (__force u32)saddr;
+	hash[1] = (__force u32)daddr;
+	hash[2] = ((__force u16)sport << 16) + (__force u16)dport;
 	hash[3] = keyptr->secret[11];
 
 	seq = half_md4_transform(hash, keyptr->secret);
 	seq |= ((u64)keyptr->count) << (32 - HASH_BITS);
 
-	do_gettimeofday(&tv);
-	seq += tv.tv_usec + tv.tv_sec * 1000000;
+	seq += ktime_to_ns(ktime_get_real());
 	seq &= (1ull << 48) - 1;
 #if 0
 	printk("dccp init_seq(%lx, %lx, %d, %d) = %d\n",
@@ -1636,7 +1645,7 @@ unsigned int get_random_int(void)
 	 * drain on it), and uses halfMD4Transform within the second. We
 	 * also mix it with jiffies and the PID:
 	 */
-	return secure_ip_id(current->pid + jiffies);
+	return secure_ip_id((__force __be32)(current->pid + jiffies));
 }
 
 /*

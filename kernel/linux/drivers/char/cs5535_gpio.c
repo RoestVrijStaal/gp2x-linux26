@@ -44,6 +44,7 @@ static struct pci_device_id divil_pci[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_AMD, PCI_DEVICE_ID_AMD_CS5536_ISA) },
 	{ } /* NULL entry */
 };
+MODULE_DEVICE_TABLE(pci, divil_pci);
 
 static struct cdev cs5535_gpio_cdev;
 
@@ -82,7 +83,7 @@ static inline u32 cs5535_lowhigh_base(int reg)
 static ssize_t cs5535_gpio_write(struct file *file, const char __user *data,
 				 size_t len, loff_t *ppos)
 {
-	u32	m = iminor(file->f_dentry->d_inode);
+	u32	m = iminor(file->f_path.dentry->d_inode);
 	int	i, j;
 	u32	base = gpio_base + cs5535_lowhigh_base(m);
 	u32	m0, m1;
@@ -103,6 +104,11 @@ static ssize_t cs5535_gpio_write(struct file *file, const char __user *data,
 		for (j = 0; j < ARRAY_SIZE(rm); j++) {
 			if (c == rm[j].on) {
 				outl(m1, base + rm[j].wr_offset);
+				/* If enabling output, turn off AUX 1 and AUX 2 */
+				if (c == 'O') {
+					outl(m0, base + 0x10);
+					outl(m0, base + 0x14);
+				}
 				break;
 			} else if (c == rm[j].off) {
 				outl(m0, base + rm[j].wr_offset);
@@ -117,7 +123,7 @@ static ssize_t cs5535_gpio_write(struct file *file, const char __user *data,
 static ssize_t cs5535_gpio_read(struct file *file, char __user *buf,
 				size_t len, loff_t *ppos)
 {
-	u32	m = iminor(file->f_dentry->d_inode);
+	u32	m = iminor(file->f_path.dentry->d_inode);
 	u32	base = gpio_base + cs5535_lowhigh_base(m);
 	int	rd_bit = 1 << (m & 0x0f);
 	int	i;

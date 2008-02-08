@@ -25,7 +25,6 @@
 
 #include <linux/module.h>
 #include <linux/slab.h>	/* for kmalloc() and kfree() */
-#include <linux/sched.h>	/* for struct wait_queue etc */
 #include <linux/major.h>
 #include <linux/types.h>
 #include <linux/errno.h>
@@ -33,7 +32,6 @@
 #include <linux/fs.h>
 #include <linux/mm.h>
 #include <linux/init.h>
-#include <linux/smp_lock.h>
 #include <linux/device.h>
 
 #include <asm/atarihw.h>
@@ -138,7 +136,7 @@ static int sizeof_bootstrap = 375;
 
 
 static struct dsp56k_device {
-	long in_use;
+	unsigned long in_use;
 	long maxio, timeout;
 	int tx_wsize, rx_wsize;
 } dsp56k;
@@ -201,7 +199,7 @@ static int dsp56k_upload(u_char __user *bin, int len)
 static ssize_t dsp56k_read(struct file *file, char __user *buf, size_t count,
 			   loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int dev = iminor(inode) & 0x0f;
 
 	switch(dev)
@@ -264,7 +262,7 @@ static ssize_t dsp56k_read(struct file *file, char __user *buf, size_t count,
 static ssize_t dsp56k_write(struct file *file, const char __user *buf, size_t count,
 			    loff_t *ppos)
 {
-	struct inode *inode = file->f_dentry->d_inode;
+	struct inode *inode = file->f_path.dentry->d_inode;
 	int dev = iminor(inode) & 0x0f;
 
 	switch(dev)
@@ -420,7 +418,7 @@ static int dsp56k_ioctl(struct inode *inode, struct file *file,
 #if 0
 static unsigned int dsp56k_poll(struct file *file, poll_table *wait)
 {
-	int dev = iminor(file->f_dentry->d_inode) & 0x0f;
+	int dev = iminor(file->f_path.dentry->d_inode) & 0x0f;
 
 	switch(dev)
 	{
@@ -515,7 +513,7 @@ static int __init dsp56k_init_driver(void)
 		err = PTR_ERR(dsp56k_class);
 		goto out_chrdev;
 	}
-	class_device_create(dsp56k_class, NULL, MKDEV(DSP56K_MAJOR, 0), NULL, "dsp56k");
+	device_create(dsp56k_class, NULL, MKDEV(DSP56K_MAJOR, 0), "dsp56k");
 
 	printk(banner);
 	goto out;
@@ -529,7 +527,7 @@ module_init(dsp56k_init_driver);
 
 static void __exit dsp56k_cleanup_driver(void)
 {
-	class_device_destroy(dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
+	device_destroy(dsp56k_class, MKDEV(DSP56K_MAJOR, 0));
 	class_destroy(dsp56k_class);
 	unregister_chrdev(DSP56K_MAJOR, "dsp56k");
 }
