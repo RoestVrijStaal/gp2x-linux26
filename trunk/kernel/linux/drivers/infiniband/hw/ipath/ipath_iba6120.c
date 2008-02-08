@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -32,7 +32,7 @@
  */
 /*
  * This file contains all of the code that is specific to the
- * InfiniPath PE-800 chip.
+ * InfiniPath PCIe chip.
  */
 
 #include <linux/interrupt.h>
@@ -43,11 +43,13 @@
 #include "ipath_kernel.h"
 #include "ipath_registers.h"
 
+static void ipath_setup_pe_setextled(struct ipath_devdata *, u64, u64);
+
 /*
  * This file contains all the chip-specific register information and
- * access functions for the QLogic InfiniPath PE800, the PCI-Express chip.
+ * access functions for the QLogic InfiniPath PCI-Express chip.
  *
- * This lists the InfiniPath PE800 registers, in the actual chip layout.
+ * This lists the InfiniPath registers, in the actual chip layout.
  * This structure should never be directly accessed.
  */
 struct _infinipath_do_not_use_kernel_regs {
@@ -207,13 +209,12 @@ static const struct ipath_kregs ipath_pe_kregs = {
 	.kr_ibpllcfg = IPATH_KREG_OFFSET(IBPLLCfg),
 
 	/*
-	 * These should not be used directly via ipath_read_kreg64(),
-	 * use them with ipath_read_kreg64_port()
+	 * These should not be used directly via ipath_write_kreg64(),
+	 * use them with ipath_write_kreg64_port(),
 	 */
 	.kr_rcvhdraddr = IPATH_KREG_OFFSET(RcvHdrAddr0),
 	.kr_rcvhdrtailaddr = IPATH_KREG_OFFSET(RcvHdrTailAddr0),
 
-	/* This group is pe-800-specific; and used only in this file */
 	/* The rcvpktled register controls one of the debug port signals, so
 	 * a packet activity LED can be connected to it. */
 	.kr_rcvpktledcnt = IPATH_KREG_OFFSET(RcvPktLEDCnt),
@@ -264,8 +265,8 @@ static const struct ipath_cregs ipath_pe_cregs = {
 };
 
 /* kr_intstatus, kr_intclear, kr_intmask bits */
-#define INFINIPATH_I_RCVURG_MASK 0x1F
-#define INFINIPATH_I_RCVAVAIL_MASK 0x1F
+#define INFINIPATH_I_RCVURG_MASK ((1U<<5)-1)
+#define INFINIPATH_I_RCVAVAIL_MASK ((1U<<5)-1)
 
 /* kr_hwerrclear, kr_hwerrmask, kr_hwerrstatus, bits */
 #define INFINIPATH_HWE_PCIEMEMPARITYERR_MASK  0x000000000000003fULL
@@ -295,6 +296,34 @@ static const struct ipath_cregs ipath_pe_cregs = {
 #define IPATH_GPIO_SCL (1ULL << \
 	(_IPATH_GPIO_SCL_NUM+INFINIPATH_EXTC_GPIOOE_SHIFT))
 
+/* 6120 specific hardware errors... */
+static const struct ipath_hwerror_msgs ipath_6120_hwerror_msgs[] = {
+	INFINIPATH_HWE_MSG(PCIEPOISONEDTLP, "PCIe Poisoned TLP"),
+	INFINIPATH_HWE_MSG(PCIECPLTIMEOUT, "PCIe completion timeout"),
+	/*
+	 * In practice, it's unlikely wthat we'll see PCIe PLL, or bus
+	 * parity or memory parity error failures, because most likely we
+	 * won't be able to talk to the core of the chip.  Nonetheless, we
+	 * might see them, if they are in parts of the PCIe core that aren't
+	 * essential.
+	 */
+	INFINIPATH_HWE_MSG(PCIE1PLLFAILED, "PCIePLL1"),
+	INFINIPATH_HWE_MSG(PCIE0PLLFAILED, "PCIePLL0"),
+	INFINIPATH_HWE_MSG(PCIEBUSPARITYXTLH, "PCIe XTLH core parity"),
+	INFINIPATH_HWE_MSG(PCIEBUSPARITYXADM, "PCIe ADM TX core parity"),
+	INFINIPATH_HWE_MSG(PCIEBUSPARITYRADM, "PCIe ADM RX core parity"),
+	INFINIPATH_HWE_MSG(RXDSYNCMEMPARITYERR, "Rx Dsync"),
+	INFINIPATH_HWE_MSG(SERDESPLLFAILED, "SerDes PLL"),
+};
+
+#define TXE_PIO_PARITY ((INFINIPATH_HWE_TXEMEMPARITYERR_PIOBUF | \
+		        INFINIPATH_HWE_TXEMEMPARITYERR_PIOPBC) \
+		        << INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT)
+
+static int ipath_pe_txe_recover(struct ipath_devdata *);
+static void ipath_pe_put_tid_2(struct ipath_devdata *, u64 __iomem *,
+			       u32, unsigned long);
+
 /**
  * ipath_pe_handle_hwerrors - display hardware errors.
  * @dd: the infinipath device
@@ -313,6 +342,7 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 	u32 bits, ctrl;
 	int isfatal = 0;
 	char bitsmsg[64];
+	int log_idx;
 
 	hwerrs = ipath_read_kreg64(dd, dd->ipath_kregs->kr_hwerrstatus);
 	if (!hwerrs) {
@@ -340,32 +370,57 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 
 	hwerrs &= dd->ipath_hwerrmask;
 
+	/* We log some errors to EEPROM, check if we have any of those. */
+	for (log_idx = 0; log_idx < IPATH_EEP_LOG_CNT; ++log_idx)
+		if (hwerrs & dd->ipath_eep_st_masks[log_idx].hwerrs_to_log)
+			ipath_inc_eeprom_err(dd, log_idx, 1);
+
 	/*
 	 * make sure we get this much out, unless told to be quiet,
 	 * or it's occurred within the last 5 seconds
 	 */
-	if ((hwerrs & ~dd->ipath_lasthwerror) ||
+	if ((hwerrs & ~(dd->ipath_lasthwerror |
+			((INFINIPATH_HWE_TXEMEMPARITYERR_PIOBUF |
+			  INFINIPATH_HWE_TXEMEMPARITYERR_PIOPBC)
+			 << INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT))) ||
 	    (ipath_debug & __IPATH_VERBDBG))
 		dev_info(&dd->pcidev->dev, "Hardware error: hwerr=0x%llx "
 			 "(cleared)\n", (unsigned long long) hwerrs);
 	dd->ipath_lasthwerror |= hwerrs;
 
-	if (hwerrs & ~infinipath_hwe_bitsextant)
+	if (hwerrs & ~dd->ipath_hwe_bitsextant)
 		ipath_dev_err(dd, "hwerror interrupt with unknown errors "
 			      "%llx set\n", (unsigned long long)
-			      (hwerrs & ~infinipath_hwe_bitsextant));
+			      (hwerrs & ~dd->ipath_hwe_bitsextant));
 
 	ctrl = ipath_read_kreg32(dd, dd->ipath_kregs->kr_control);
 	if (ctrl & INFINIPATH_C_FREEZEMODE) {
+		/*
+		 * parity errors in send memory are recoverable,
+		 * just cancel the send (if indicated in * sendbuffererror),
+		 * count the occurrence, unfreeze (if no other handled
+		 * hardware error bits are set), and continue. They can
+		 * occur if a processor speculative read is done to the PIO
+		 * buffer while we are sending a packet, for example.
+		 */
+		if ((hwerrs & TXE_PIO_PARITY) && ipath_pe_txe_recover(dd))
+			hwerrs &= ~TXE_PIO_PARITY;
 		if (hwerrs) {
 			/*
 			 * if any set that we aren't ignoring only make the
 			 * complaint once, in case it's stuck or recurring,
 			 * and we get here multiple times
+			 * Force link down, so switch knows, and
+			 * LEDs are turned off
 			 */
 			if (dd->ipath_flags & IPATH_INITTED) {
-				ipath_dev_err(dd, "Fatal Error (freeze "
-					      "mode), no longer usable\n");
+				ipath_set_linkstate(dd, IPATH_IB_LINKDOWN);
+				ipath_setup_pe_setextled(dd,
+					INFINIPATH_IBCS_L_STATE_DOWN,
+					INFINIPATH_IBCS_LT_STATE_DISABLED);
+				ipath_dev_err(dd, "Fatal Hardware Error (freeze "
+					      "mode), no longer usable, SN %.16s\n",
+						  dd->ipath_serial);
 				isfatal = 1;
 			}
 			/*
@@ -377,18 +432,19 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 			*dd->ipath_statusp |= IPATH_STATUS_HWERROR;
 			dd->ipath_flags &= ~IPATH_INITTED;
 		} else {
-			ipath_dbg("Clearing freezemode on ignored hardware "
-				  "error\n");
-			ctrl &= ~INFINIPATH_C_FREEZEMODE;
-			ipath_write_kreg(dd, dd->ipath_kregs->kr_control,
-					 ctrl);
+			static u32 freeze_cnt;
+
+			freeze_cnt++;
+			ipath_dbg("Clearing freezemode on ignored or recovered "
+				  "hardware error (%u)\n", freeze_cnt);
+			ipath_clear_freeze(dd);
 		}
 	}
 
 	*msg = '\0';
 
 	if (hwerrs & INFINIPATH_HWE_MEMBISTFAILED) {
-		strlcat(msg, "[Memory BIST test failed, PE-800 unusable]",
+		strlcat(msg, "[Memory BIST test failed, InfiniPath hardware unusable]",
 			msgl);
 		/* ignore from now on, so disable until driver reloaded */
 		*dd->ipath_statusp |= IPATH_STATUS_HWERROR;
@@ -396,24 +452,13 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 		ipath_write_kreg(dd, dd->ipath_kregs->kr_hwerrmask,
 				 dd->ipath_hwerrmask);
 	}
-	if (hwerrs & (INFINIPATH_HWE_RXEMEMPARITYERR_MASK
-		      << INFINIPATH_HWE_RXEMEMPARITYERR_SHIFT)) {
-		bits = (u32) ((hwerrs >>
-			       INFINIPATH_HWE_RXEMEMPARITYERR_SHIFT) &
-			      INFINIPATH_HWE_RXEMEMPARITYERR_MASK);
-		snprintf(bitsmsg, sizeof bitsmsg, "[RXE Parity Errs %x] ",
-			 bits);
-		strlcat(msg, bitsmsg, msgl);
-	}
-	if (hwerrs & (INFINIPATH_HWE_TXEMEMPARITYERR_MASK
-		      << INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT)) {
-		bits = (u32) ((hwerrs >>
-			       INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT) &
-			      INFINIPATH_HWE_TXEMEMPARITYERR_MASK);
-		snprintf(bitsmsg, sizeof bitsmsg, "[TXE Parity Errs %x] ",
-			 bits);
-		strlcat(msg, bitsmsg, msgl);
-	}
+
+	ipath_format_hwerrors(hwerrs,
+			      ipath_6120_hwerror_msgs,
+			      sizeof(ipath_6120_hwerror_msgs)/
+			      sizeof(ipath_6120_hwerror_msgs[0]),
+			      msg, msgl);
+
 	if (hwerrs & (INFINIPATH_HWE_PCIEMEMPARITYERR_MASK
 		      << INFINIPATH_HWE_PCIEMEMPARITYERR_SHIFT)) {
 		bits = (u32) ((hwerrs >>
@@ -423,17 +468,13 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 			 "[PCIe Mem Parity Errs %x] ", bits);
 		strlcat(msg, bitsmsg, msgl);
 	}
-	if (hwerrs & INFINIPATH_HWE_IBCBUSTOSPCPARITYERR)
-		strlcat(msg, "[IB2IPATH Parity]", msgl);
-	if (hwerrs & INFINIPATH_HWE_IBCBUSFRSPCPARITYERR)
-		strlcat(msg, "[IPATH2IB Parity]", msgl);
 
 #define _IPATH_PLL_FAIL (INFINIPATH_HWE_COREPLL_FBSLIP |	\
 			 INFINIPATH_HWE_COREPLL_RFSLIP )
 
 	if (hwerrs & _IPATH_PLL_FAIL) {
 		snprintf(bitsmsg, sizeof bitsmsg,
-			 "[PLL failed (%llx), PE-800 unusable]",
+			 "[PLL failed (%llx), InfiniPath hardware unusable]",
 			 (unsigned long long) hwerrs & _IPATH_PLL_FAIL);
 		strlcat(msg, bitsmsg, msgl);
 		/* ignore from now on, so disable until driver reloaded */
@@ -452,35 +493,8 @@ static void ipath_pe_handle_hwerrors(struct ipath_devdata *dd, char *msg,
 				 dd->ipath_hwerrmask);
 	}
 
-	if (hwerrs & INFINIPATH_HWE_PCIEPOISONEDTLP)
-		strlcat(msg, "[PCIe Poisoned TLP]", msgl);
-	if (hwerrs & INFINIPATH_HWE_PCIECPLTIMEOUT)
-		strlcat(msg, "[PCIe completion timeout]", msgl);
-
-	/*
-	 * In practice, it's unlikely wthat we'll see PCIe PLL, or bus
-	 * parity or memory parity error failures, because most likely we
-	 * won't be able to talk to the core of the chip.  Nonetheless, we
-	 * might see them, if they are in parts of the PCIe core that aren't
-	 * essential.
-	 */
-	if (hwerrs & INFINIPATH_HWE_PCIE1PLLFAILED)
-		strlcat(msg, "[PCIePLL1]", msgl);
-	if (hwerrs & INFINIPATH_HWE_PCIE0PLLFAILED)
-		strlcat(msg, "[PCIePLL0]", msgl);
-	if (hwerrs & INFINIPATH_HWE_PCIEBUSPARITYXTLH)
-		strlcat(msg, "[PCIe XTLH core parity]", msgl);
-	if (hwerrs & INFINIPATH_HWE_PCIEBUSPARITYXADM)
-		strlcat(msg, "[PCIe ADM TX core parity]", msgl);
-	if (hwerrs & INFINIPATH_HWE_PCIEBUSPARITYRADM)
-		strlcat(msg, "[PCIe ADM RX core parity]", msgl);
-
-	if (hwerrs & INFINIPATH_HWE_RXDSYNCMEMPARITYERR)
-		strlcat(msg, "[Rx Dsync]", msgl);
-	if (hwerrs & INFINIPATH_HWE_SERDESPLLFAILED)
-		strlcat(msg, "[SerDes PLL]", msgl);
-
-	ipath_dev_err(dd, "%s hardware error\n", msg);
+	if (*msg)
+		ipath_dev_err(dd, "%s hardware error\n", msg);
 	if (isfatal && !ipath_diag_inuse && dd->ipath_freezemsg) {
 		/*
 		 * for /sys status file ; if no trailing } is copied, we'll
@@ -511,22 +525,28 @@ static int ipath_pe_boardname(struct ipath_devdata *dd, char *name,
 		n = "InfiniPath_Emulation";
 		break;
 	case 1:
-		n = "InfiniPath_PE-800-Bringup";
+		n = "InfiniPath_QLE7140-Bringup";
 		break;
 	case 2:
-		n = "InfiniPath_PE-880";
+		n = "InfiniPath_QLE7140";
 		break;
 	case 3:
-		n = "InfiniPath_PE-850";
+		n = "InfiniPath_QMI7140";
 		break;
 	case 4:
-		n = "InfiniPath_PE-860";
+		n = "InfiniPath_QEM7140";
+		break;
+	case 5:
+		n = "InfiniPath_QMH7140";
+		break;
+	case 6:
+		n = "InfiniPath_QLE7142";
 		break;
 	default:
 		ipath_dev_err(dd,
 			      "Don't yet know about board with ID %u\n",
 			      boardrev);
-		snprintf(name, namelen, "Unknown_InfiniPath_PE-8xx_%u",
+		snprintf(name, namelen, "Unknown_InfiniPath_PCIe_%u",
 			 boardrev);
 		break;
 	}
@@ -534,11 +554,14 @@ static int ipath_pe_boardname(struct ipath_devdata *dd, char *name,
 		snprintf(name, namelen, "%s", n);
 
 	if (dd->ipath_majrev != 4 || !dd->ipath_minrev || dd->ipath_minrev>2) {
-		ipath_dev_err(dd, "Unsupported PE-800 revision %u.%u!\n",
+		ipath_dev_err(dd, "Unsupported InfiniPath hardware revision %u.%u!\n",
 			      dd->ipath_majrev, dd->ipath_minrev);
 		ret = 1;
-	} else
+	} else {
 		ret = 0;
+		if (dd->ipath_minrev >= 2)
+			dd->ipath_f_put_tid = ipath_pe_put_tid_2;
+	}
 
 	return ret;
 }
@@ -562,15 +585,20 @@ static void ipath_pe_init_hwerrors(struct ipath_devdata *dd)
 
 	if (!(extsval & INFINIPATH_EXTS_MEMBIST_ENDTEST))
 		ipath_dev_err(dd, "MemBIST did not complete!\n");
+	if (extsval & INFINIPATH_EXTS_MEMBIST_FOUND)
+		ipath_dbg("MemBIST corrected\n");
 
 	val = ~0ULL;	/* barring bugs, all hwerrors become interrupts, */
 
 	if (!dd->ipath_boardrev)	// no PLL for Emulator
 		val &= ~INFINIPATH_HWE_SERDESPLLFAILED;
 
-	/* workaround bug 9460 in internal interface bus parity checking */
-	val &= ~INFINIPATH_HWE_PCIEBUSPARITYRADM;
-
+	if (dd->ipath_minrev < 2) {
+		/* workaround bug 9460 in internal interface bus parity
+		 * checking. Fixed (HW bug 9490) in Rev2.
+		 */
+		val &= ~INFINIPATH_HWE_PCIEBUSPARITYRADM;
+	}
 	dd->ipath_hwerrmask = val;
 }
 
@@ -580,8 +608,8 @@ static void ipath_pe_init_hwerrors(struct ipath_devdata *dd)
  */
 static int ipath_pe_bringup_serdes(struct ipath_devdata *dd)
 {
-	u64 val, tmp, config1;
-	int ret = 0, change = 0;
+	u64 val, config1, prev_val;
+	int ret = 0;
 
 	ipath_dbg("Trying to bringup serdes\n");
 
@@ -611,7 +639,7 @@ static int ipath_pe_bringup_serdes(struct ipath_devdata *dd)
 		| INFINIPATH_SERDC0_L1PWR_DN;
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_serdesconfig0, val);
 	/* be sure chip saw it */
-	tmp = ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
 	udelay(5);		/* need pll reset set at least for a bit */
 	/*
 	 * after PLL is reset, set the per-lane Resets and TxIdle and
@@ -625,7 +653,7 @@ static int ipath_pe_bringup_serdes(struct ipath_devdata *dd)
 		   "and txidle (%llx)\n", (unsigned long long) val);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_serdesconfig0, val);
 	/* be sure chip saw it */
-	tmp = ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
+	ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
 	/* need PLL reset clear for at least 11 usec before lane
 	 * resets cleared; give it a few more to be sure */
 	udelay(15);
@@ -638,6 +666,7 @@ static int ipath_pe_bringup_serdes(struct ipath_devdata *dd)
 	val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_scratch);
 
 	val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_xgxsconfig);
+	prev_val = val;
 	if (((val >> INFINIPATH_XGXS_MDIOADDR_SHIFT) &
 	     INFINIPATH_XGXS_MDIOADDR_MASK) != 3) {
 		val &=
@@ -645,13 +674,19 @@ static int ipath_pe_bringup_serdes(struct ipath_devdata *dd)
 			  INFINIPATH_XGXS_MDIOADDR_SHIFT);
 		/* MDIO address 3 */
 		val |= 3ULL << INFINIPATH_XGXS_MDIOADDR_SHIFT;
-		change = 1;
 	}
 	if (val & INFINIPATH_XGXS_RESET) {
 		val &= ~INFINIPATH_XGXS_RESET;
-		change = 1;
 	}
-	if (change)
+	if (((val >> INFINIPATH_XGXS_RX_POL_SHIFT) &
+	     INFINIPATH_XGXS_RX_POL_MASK) != dd->ipath_rx_pol_inv ) {
+		/* need to compensate for Tx inversion in partner */
+		val &= ~(INFINIPATH_XGXS_RX_POL_MASK <<
+		         INFINIPATH_XGXS_RX_POL_SHIFT);
+		val |= dd->ipath_rx_pol_inv <<
+			INFINIPATH_XGXS_RX_POL_SHIFT;
+	}
+	if (val != prev_val)
 		ipath_write_kreg(dd, dd->ipath_kregs->kr_xgxsconfig, val);
 
 	val = ipath_read_kreg64(dd, dd->ipath_kregs->kr_serdesconfig0);
@@ -705,9 +740,24 @@ static void ipath_pe_quiet_serdes(struct ipath_devdata *dd)
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_serdesconfig0, val);
 }
 
-/* this is not yet needed on the PE800, so just return 0. */
 static int ipath_pe_intconfig(struct ipath_devdata *dd)
 {
+	u32 chiprev;
+
+	/*
+	 * If the chip supports added error indication via GPIO pins,
+	 * enable interrupts on those bits so the interrupt routine
+	 * can count the events. Also set flag so interrupt routine
+	 * can know they are expected.
+	 */
+	chiprev = dd->ipath_revision >> INFINIPATH_R_CHIPREVMINOR_SHIFT;
+	if ((chiprev & INFINIPATH_R_CHIPREVMINOR_MASK) > 1) {
+		/* Rev2+ reports extra errors via internal GPIO pins */
+		dd->ipath_flags |= IPATH_GPIO_ERRINTRS;
+		dd->ipath_gpio_mask |= IPATH_GPIO_ERRINTR_MASK;
+		ipath_write_kreg(dd, dd->ipath_kregs->kr_gpio_mask,
+				 dd->ipath_gpio_mask);
+	}
 	return 0;
 }
 
@@ -736,12 +786,24 @@ static void ipath_setup_pe_setextled(struct ipath_devdata *dd, u64 lst,
 				     u64 ltst)
 {
 	u64 extctl;
+	unsigned long flags = 0;
 
 	/* the diags use the LED to indicate diag info, so we leave
 	 * the external LED alone when the diags are running */
 	if (ipath_diag_inuse)
 		return;
 
+	/* Allow override of LED display for, e.g. Locating system in rack */
+	if (dd->ipath_led_override) {
+		ltst = (dd->ipath_led_override & IPATH_LED_PHYS)
+			? INFINIPATH_IBCS_LT_STATE_LINKUP
+			: INFINIPATH_IBCS_LT_STATE_DISABLED;
+		lst = (dd->ipath_led_override & IPATH_LED_LOG)
+			? INFINIPATH_IBCS_L_STATE_ACTIVE
+			: INFINIPATH_IBCS_L_STATE_DOWN;
+	}
+
+	spin_lock_irqsave(&dd->ipath_gpio_lock, flags);
 	extctl = dd->ipath_extctrl & ~(INFINIPATH_EXTC_LED1PRIPORT_ON |
 				       INFINIPATH_EXTC_LED2PRIPORT_ON);
 
@@ -751,6 +813,7 @@ static void ipath_setup_pe_setextled(struct ipath_devdata *dd, u64 lst,
 		extctl |= INFINIPATH_EXTC_LED1PRIPORT_ON;
 	dd->ipath_extctrl = extctl;
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_extctrl, extctl);
+	spin_unlock_irqrestore(&dd->ipath_gpio_lock, flags);
 }
 
 /**
@@ -759,8 +822,8 @@ static void ipath_setup_pe_setextled(struct ipath_devdata *dd, u64 lst,
  *
  * This is called during driver unload.
  * We do the pci_disable_msi here, not in generic code, because it
- * isn't used for the HT-400. If we do end up needing pci_enable_msi
- * at some point in the future for HT-400, we'll move the call back
+ * isn't used for the HT chips. If we do end up needing pci_enable_msi
+ * at some point in the future for HT, we'll move the call back
  * into the main init_one code.
  */
 static void ipath_setup_pe_cleanup(struct ipath_devdata *dd)
@@ -780,10 +843,10 @@ static void ipath_setup_pe_cleanup(struct ipath_devdata *dd)
  * late in 2.6.16).
  * All that can be done is to edit the kernel source to remove the quirk
  * check until that is fixed.
- * We do not need to call enable_msi() for our HyperTransport chip (HT-400),
- * even those it uses MSI, and we want to avoid the quirk warning, so
- * So we call enable_msi only for the PE-800.  If we do end up needing
- * pci_enable_msi at some point in the future for HT-400, we'll move the
+ * We do not need to call enable_msi() for our HyperTransport chip,
+ * even though it uses MSI, and we want to avoid the quirk warning, so
+ * So we call enable_msi only for PCIe.  If we do end up needing
+ * pci_enable_msi at some point in the future for HT, we'll move the
  * call back into the main init_one code.
  * We save the msi lo and hi values, so we can restore them after
  * chip reset (the kernel PCI infrastructure doesn't yet handle that
@@ -800,6 +863,7 @@ static int ipath_setup_pe_config(struct ipath_devdata *dd,
 		ipath_dev_err(dd, "pci_enable_msi failed: %d, "
 			      "interrupts may not work\n", ret);
 	/* continue even if it fails, we may still be OK... */
+	dd->ipath_irq = pdev->irq;
 
 	if ((pos = pci_find_capability(dd->pcidev, PCI_CAP_ID_MSI))) {
 		u16 control;
@@ -841,21 +905,23 @@ static int ipath_setup_pe_config(struct ipath_devdata *dd,
 	return 0;
 }
 
-static void ipath_init_pe_variables(void)
+static void ipath_init_pe_variables(struct ipath_devdata *dd)
 {
 	/*
 	 * bits for selecting i2c direction and values,
 	 * used for I2C serial flash
 	 */
-	ipath_gpio_sda_num = _IPATH_GPIO_SDA_NUM;
-	ipath_gpio_scl_num = _IPATH_GPIO_SCL_NUM;
-	ipath_gpio_sda = IPATH_GPIO_SDA;
-	ipath_gpio_scl = IPATH_GPIO_SCL;
+	dd->ipath_gpio_sda_num = _IPATH_GPIO_SDA_NUM;
+	dd->ipath_gpio_scl_num = _IPATH_GPIO_SCL_NUM;
+	dd->ipath_gpio_sda = IPATH_GPIO_SDA;
+	dd->ipath_gpio_scl = IPATH_GPIO_SCL;
 
 	/* variables for sanity checking interrupt and errors */
-	infinipath_hwe_bitsextant =
+	dd->ipath_hwe_bitsextant =
 		(INFINIPATH_HWE_RXEMEMPARITYERR_MASK <<
 		 INFINIPATH_HWE_RXEMEMPARITYERR_SHIFT) |
+		(INFINIPATH_HWE_TXEMEMPARITYERR_MASK <<
+		 INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT) |
 		(INFINIPATH_HWE_PCIEMEMPARITYERR_MASK <<
 		 INFINIPATH_HWE_PCIEMEMPARITYERR_SHIFT) |
 		INFINIPATH_HWE_PCIE1PLLFAILED |
@@ -871,13 +937,13 @@ static void ipath_init_pe_variables(void)
 		INFINIPATH_HWE_SERDESPLLFAILED |
 		INFINIPATH_HWE_IBCBUSTOSPCPARITYERR |
 		INFINIPATH_HWE_IBCBUSFRSPCPARITYERR;
-	infinipath_i_bitsextant =
+	dd->ipath_i_bitsextant =
 		(INFINIPATH_I_RCVURG_MASK << INFINIPATH_I_RCVURG_SHIFT) |
 		(INFINIPATH_I_RCVAVAIL_MASK <<
 		 INFINIPATH_I_RCVAVAIL_SHIFT) |
 		INFINIPATH_I_ERROR | INFINIPATH_I_SPIOSENT |
 		INFINIPATH_I_SPIOBUFAVAIL | INFINIPATH_I_GPIO;
-	infinipath_e_bitsextant =
+	dd->ipath_e_bitsextant =
 		INFINIPATH_E_RFORMATERR | INFINIPATH_E_RVCRC |
 		INFINIPATH_E_RICRC | INFINIPATH_E_RMINPKTLEN |
 		INFINIPATH_E_RMAXPKTLEN | INFINIPATH_E_RLONGPKTLEN |
@@ -895,8 +961,29 @@ static void ipath_init_pe_variables(void)
 		INFINIPATH_E_INVALIDADDR | INFINIPATH_E_RESET |
 		INFINIPATH_E_HARDWARE;
 
-	infinipath_i_rcvavail_mask = INFINIPATH_I_RCVAVAIL_MASK;
-	infinipath_i_rcvurg_mask = INFINIPATH_I_RCVURG_MASK;
+	dd->ipath_i_rcvavail_mask = INFINIPATH_I_RCVAVAIL_MASK;
+	dd->ipath_i_rcvurg_mask = INFINIPATH_I_RCVURG_MASK;
+
+	/*
+	 * EEPROM error log 0 is TXE Parity errors. 1 is RXE Parity.
+	 * 2 is Some Misc, 3 is reserved for future.
+	 */
+	dd->ipath_eep_st_masks[0].hwerrs_to_log =
+		INFINIPATH_HWE_TXEMEMPARITYERR_MASK <<
+		INFINIPATH_HWE_TXEMEMPARITYERR_SHIFT;
+
+	/* Ignore errors in PIO/PBC on systems with unordered write-combining */
+	if (ipath_unordered_wc())
+		dd->ipath_eep_st_masks[0].hwerrs_to_log &= ~TXE_PIO_PARITY;
+
+	dd->ipath_eep_st_masks[1].hwerrs_to_log =
+		INFINIPATH_HWE_RXEMEMPARITYERR_MASK <<
+		INFINIPATH_HWE_RXEMEMPARITYERR_SHIFT;
+
+	dd->ipath_eep_st_masks[2].errs_to_log =
+		INFINIPATH_E_INVALIDADDR | INFINIPATH_E_RESET;
+
+
 }
 
 /* setup the MSI stuff again after a reset.  I'd like to just call
@@ -971,8 +1058,7 @@ static int ipath_setup_pe_reset(struct ipath_devdata *dd)
 	int ret;
 
 	/* Use ERROR so it shows up in logs, etc. */
-	ipath_dev_err(dd, "Resetting PE-800 unit %u\n",
-		      dd->ipath_unit);
+	ipath_dev_err(dd, "Resetting InfiniPath unit %u\n", dd->ipath_unit);
 	/* keep chip from being accessed in a few places */
 	dd->ipath_flags &= ~(IPATH_INITTED|IPATH_PRESENT);
 	val = dd->ipath_control | INFINIPATH_C_RESET;
@@ -1025,7 +1111,7 @@ bail:
  * ipath_pe_put_tid - write a TID in chip
  * @dd: the infinipath device
  * @tidptr: pointer to the expected TID (in chip) to udpate
- * @tidtype: 0 for eager, 1 for expected
+ * @tidtype: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0) for expected
  * @pa: physical address of in memory buffer; ipath_tidinvalid if freeing
  *
  * This exists as a separate routine to allow for special locking etc.
@@ -1051,17 +1137,20 @@ static void ipath_pe_put_tid(struct ipath_devdata *dd, u64 __iomem *tidptr,
 				      "BUG: Physical page address 0x%lx "
 				      "has bits set in 31-29\n", pa);
 
-		if (type == 0)
+		if (type == RCVHQ_RCV_TYPE_EAGER)
 			pa |= dd->ipath_tidtemplate;
 		else /* for now, always full 4KB page */
 			pa |= 2 << 29;
 	}
 
-	/* workaround chip bug 9437 by writing each TID twice
-	 * and holding a spinlock around the writes, so they don't
-	 * intermix with other TID (eager or expected) writes
-	 * Unfortunately, this call can be done from interrupt level
-	 * for the port 0 eager TIDs, so we have to use irqsave
+	/*
+	 * Workaround chip bug 9437 by writing the scratch register
+	 * before and after the TID, and with an io write barrier.
+	 * We use a spinlock around the writes, so they can't intermix
+	 * with other TID (eager or expected) writes (the chip bug
+	 * is triggered by back to back TID writes). Unfortunately, this
+	 * call can be done from interrupt level for the port 0 eager TIDs,
+	 * so we have to use irqsave locks.
 	 */
 	spin_lock_irqsave(&dd->ipath_tid_lock, flags);
 	ipath_write_kreg(dd, dd->ipath_kregs->kr_scratch, 0xfeeddeaf);
@@ -1071,6 +1160,45 @@ static void ipath_pe_put_tid(struct ipath_devdata *dd, u64 __iomem *tidptr,
 	mmiowb();
 	spin_unlock_irqrestore(&dd->ipath_tid_lock, flags);
 }
+/**
+ * ipath_pe_put_tid_2 - write a TID in chip, Revision 2 or higher
+ * @dd: the infinipath device
+ * @tidptr: pointer to the expected TID (in chip) to udpate
+ * @tidtype: RCVHQ_RCV_TYPE_EAGER (1) for eager, RCVHQ_RCV_TYPE_EXPECTED (0) for expected
+ * @pa: physical address of in memory buffer; ipath_tidinvalid if freeing
+ *
+ * This exists as a separate routine to allow for selection of the
+ * appropriate "flavor". The static calls in cleanup just use the
+ * revision-agnostic form, as they are not performance critical.
+ */
+static void ipath_pe_put_tid_2(struct ipath_devdata *dd, u64 __iomem *tidptr,
+			     u32 type, unsigned long pa)
+{
+	u32 __iomem *tidp32 = (u32 __iomem *)tidptr;
+
+	if (pa != dd->ipath_tidinvalid) {
+		if (pa & ((1U << 11) - 1)) {
+			dev_info(&dd->pcidev->dev, "BUG: physaddr %lx "
+				 "not 2KB aligned!\n", pa);
+			return;
+		}
+		pa >>= 11;
+		/* paranoia check */
+		if (pa & (7<<29))
+			ipath_dev_err(dd,
+				      "BUG: Physical page address 0x%lx "
+				      "has bits set in 31-29\n", pa);
+
+		if (type == RCVHQ_RCV_TYPE_EAGER)
+			pa |= dd->ipath_tidtemplate;
+		else /* for now, always full 4KB page */
+			pa |= 2 << 29;
+	}
+	if (dd->ipath_kregbase)
+		writel(pa, tidp32);
+	mmiowb();
+}
+
 
 /**
  * ipath_pe_clear_tid - clear all TID entries for a port, expected and eager
@@ -1078,7 +1206,7 @@ static void ipath_pe_put_tid(struct ipath_devdata *dd, u64 __iomem *tidptr,
  * @port: the port
  *
  * clear all TID entries for a port, expected and eager.
- * Used from ipath_close().  On PE800, TIDs are only 32 bits,
+ * Used from ipath_close().  On this chip, TIDs are only 32 bits,
  * not 64, but they are still on 64 bit boundaries, so tidbase
  * is declared as u64 * for the pointer math, even though we write 32 bits
  */
@@ -1100,7 +1228,8 @@ static void ipath_pe_clear_tids(struct ipath_devdata *dd, unsigned port)
 		 port * dd->ipath_rcvtidcnt * sizeof(*tidbase));
 
 	for (i = 0; i < dd->ipath_rcvtidcnt; i++)
-		ipath_pe_put_tid(dd, &tidbase[i], 0, tidinv);
+		dd->ipath_f_put_tid(dd, &tidbase[i], RCVHQ_RCV_TYPE_EXPECTED,
+				 tidinv);
 
 	tidbase = (u64 __iomem *)
 		((char __iomem *)(dd->ipath_kregbase) +
@@ -1108,7 +1237,8 @@ static void ipath_pe_clear_tids(struct ipath_devdata *dd, unsigned port)
 		 port * dd->ipath_rcvegrcnt * sizeof(*tidbase));
 
 	for (i = 0; i < dd->ipath_rcvegrcnt; i++)
-		ipath_pe_put_tid(dd, &tidbase[i], 1, tidinv);
+		dd->ipath_f_put_tid(dd, &tidbase[i], RCVHQ_RCV_TYPE_EAGER,
+				 tidinv);
 }
 
 /**
@@ -1146,11 +1276,13 @@ static void ipath_pe_tidtemplate(struct ipath_devdata *dd)
 static int ipath_pe_early_init(struct ipath_devdata *dd)
 {
 	dd->ipath_flags |= IPATH_4BYTE_TID;
+	if (ipath_unordered_wc())
+		dd->ipath_flags |= IPATH_PIO_FLUSH_WC;
 
 	/*
-	 * For openib, we need to be able to handle an IB header of 96 bytes
-	 * or 24 dwords.  HT-400 has arbitrary sized receive buffers, so we
-	 * made them the same size as the PIO buffers.  The PE-800 does not
+	 * For openfabrics, we need to be able to handle an IB header of
+	 * 24 dwords.  HT chip has arbitrary sized receive buffers, so we
+	 * made them the same size as the PIO buffers.  This chip does not
 	 * handle arbitrary size buffers, so we need the header large enough
 	 * to handle largest IB header, but still have room for a 2KB MTU
 	 * standard IB packet.
@@ -1158,11 +1290,10 @@ static int ipath_pe_early_init(struct ipath_devdata *dd)
 	dd->ipath_rcvhdrentsize = 24;
 	dd->ipath_rcvhdrsize = IPATH_DFLT_RCVHDRSIZE;
 
-	/* For HT-400, we allocate a somewhat overly large eager buffer,
-	 * such that we can guarantee that we can receive the largest packet
-	 * that we can send out.  To truly support a 4KB MTU, we need to
-	 * bump this to a larger value.  We'll do this when I get around to
-	 * testing 4KB sends on the PE-800, which I have not yet done.
+	/*
+	 * To truly support a 4KB MTU (for usermode), we need to
+	 * bump this to a larger value.  For now, we use them for
+	 * the kernel only.
 	 */
 	dd->ipath_rcvegrbufsize = 2048;
 	/*
@@ -1175,9 +1306,9 @@ static int ipath_pe_early_init(struct ipath_devdata *dd)
 	dd->ipath_init_ibmaxlen = dd->ipath_ibmaxlen;
 
 	/*
-	 * For PE-800, we can request a receive interrupt for 1 or
+	 * We can request a receive interrupt for 1 or
 	 * more packets from current offset.  For now, we set this
-	 * up for a single packet, to match the HT-400 behavior.
+	 * up for a single packet.
 	 */
 	dd->ipath_rhdrhead_intr_off = 1ULL<<32;
 
@@ -1193,15 +1324,16 @@ int __attribute__((weak)) ipath_unordered_wc(void)
 
 /**
  * ipath_init_pe_get_base_info - set chip-specific flags for user code
- * @dd: the infinipath device
+ * @pd: the infinipath port
  * @kbase: ipath_base_info pointer
  *
  * We set the PCIE flag because the lower bandwidth on PCIe vs
- * HyperTransport can affect some user packet algorithims.
+ * HyperTransport can affect some user packet algorithms.
  */
 static int ipath_pe_get_base_info(struct ipath_portdata *pd, void *kbase)
 {
 	struct ipath_base_info *kinfo = kbase;
+	struct ipath_devdata *dd;
 
 	if (ipath_unordered_wc()) {
 		kinfo->spi_runtime_flags |= IPATH_RUNTIME_FORCE_WC_ORDER;
@@ -1210,19 +1342,59 @@ static int ipath_pe_get_base_info(struct ipath_portdata *pd, void *kbase)
 	else
 		ipath_cdbg(PROC, "Not Intel processor, WC ordered\n");
 
-	kinfo->spi_runtime_flags |= IPATH_RUNTIME_PCIE;
+	if (pd == NULL)
+		goto done;
 
+	dd = pd->port_dd;
+
+done:
+	kinfo->spi_runtime_flags |= IPATH_RUNTIME_PCIE |
+		IPATH_RUNTIME_FORCE_PIOAVAIL | IPATH_RUNTIME_PIO_REGSWAPPED;
 	return 0;
 }
 
+static void ipath_pe_free_irq(struct ipath_devdata *dd)
+{
+	free_irq(dd->ipath_irq, dd);
+	dd->ipath_irq = 0;
+}
+
+/*
+ * On platforms using this chip, and not having ordered WC stores, we
+ * can get TXE parity errors due to speculative reads to the PIO buffers,
+ * and this, due to a chip bug can result in (many) false parity error
+ * reports.  So it's a debug print on those, and an info print on systems
+ * where the speculative reads don't occur.
+ * Because we can get lots of false errors, we have no upper limit
+ * on recovery attempts on those platforms.
+ */
+static int ipath_pe_txe_recover(struct ipath_devdata *dd)
+{
+	if (ipath_unordered_wc())
+		ipath_dbg("Recovering from TXE PIO parity error\n");
+	else {
+		int cnt = ++ipath_stats.sps_txeparity;
+		if (cnt >= IPATH_MAX_PARITY_ATTEMPTS)  {
+			if (cnt == IPATH_MAX_PARITY_ATTEMPTS)
+				ipath_dev_err(dd,
+					"Too many attempts to recover from "
+					"TXE parity, giving up\n");
+			return 0;
+		}
+		dev_info(&dd->pcidev->dev,
+			"Recovering from TXE PIO parity error\n");
+	}
+	return 1;
+}
+
 /**
- * ipath_init_pe800_funcs - set up the chip-specific function pointers
+ * ipath_init_iba6120_funcs - set up the chip-specific function pointers
  * @dd: the infinipath device
  *
  * This is global, and is called directly at init to set up the
  * chip-specific function pointers for later use.
  */
-void ipath_init_pe800_funcs(struct ipath_devdata *dd)
+void ipath_init_iba6120_funcs(struct ipath_devdata *dd)
 {
 	dd->ipath_f_intrsetup = ipath_pe_intconfig;
 	dd->ipath_f_bus = ipath_setup_pe_config;
@@ -1234,10 +1406,15 @@ void ipath_init_pe800_funcs(struct ipath_devdata *dd)
 	dd->ipath_f_quiet_serdes = ipath_pe_quiet_serdes;
 	dd->ipath_f_bringup_serdes = ipath_pe_bringup_serdes;
 	dd->ipath_f_clear_tids = ipath_pe_clear_tids;
+	/*
+	 * this may get changed after we read the chip revision,
+	 * but we start with the safe version for all revs
+	 */
 	dd->ipath_f_put_tid = ipath_pe_put_tid;
 	dd->ipath_f_cleanup = ipath_setup_pe_cleanup;
 	dd->ipath_f_setextled = ipath_setup_pe_setextled;
 	dd->ipath_f_get_base_info = ipath_pe_get_base_info;
+	dd->ipath_f_free_irq = ipath_pe_free_irq;
 
 	/* initialize chip-specific variables */
 	dd->ipath_f_tidtemplate = ipath_pe_tidtemplate;
@@ -1249,6 +1426,6 @@ void ipath_init_pe800_funcs(struct ipath_devdata *dd)
 	dd->ipath_kregs = &ipath_pe_kregs;
 	dd->ipath_cregs = &ipath_pe_cregs;
 
-	ipath_init_pe_variables();
+	ipath_init_pe_variables(dd);
 }
 

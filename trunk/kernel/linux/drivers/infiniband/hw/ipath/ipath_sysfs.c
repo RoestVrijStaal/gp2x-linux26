@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -32,10 +32,8 @@
  */
 
 #include <linux/ctype.h>
-#include <linux/pci.h>
 
 #include "ipath_kernel.h"
-#include "ipath_layer.h"
 #include "ipath_common.h"
 
 /**
@@ -76,7 +74,7 @@ bail:
 static ssize_t show_version(struct device_driver *dev, char *buf)
 {
 	/* The string printed here is already newline-terminated. */
-	return scnprintf(buf, PAGE_SIZE, "%s", ipath_core_version);
+	return scnprintf(buf, PAGE_SIZE, "%s", ib_ipath_version);
 }
 
 static ssize_t show_num_units(struct device_driver *dev, char *buf)
@@ -108,8 +106,8 @@ static const char *ipath_status_str[] = {
 	"Initted",
 	"Disabled",
 	"Admin_Disabled",
-	"OIB_SMA",
-	"SMA",
+	"", /* This used to be the old "OIB_SMA" status. */
+	"", /* This used to be the old "SMA" status. */
 	"Present",
 	"IB_link_up",
 	"IB_configured",
@@ -165,6 +163,42 @@ static ssize_t show_boardversion(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "%s", dd->ipath_boardversion);
 }
 
+static ssize_t show_lmc(struct device *dev,
+			struct device_attribute *attr,
+			char *buf)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", dd->ipath_lmc);
+}
+
+static ssize_t store_lmc(struct device *dev,
+			 struct device_attribute *attr,
+			 const char *buf,
+			 size_t count)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	u16 lmc = 0;
+	int ret;
+
+	ret = ipath_parse_ushort(buf, &lmc);
+	if (ret < 0)
+		goto invalid;
+
+	if (lmc > 7) {
+		ret = -EINVAL;
+		goto invalid;
+	}
+
+	ipath_set_lid(dd, dd->ipath_lid, lmc);
+
+	goto bail;
+invalid:
+	ipath_dev_err(dd, "attempt to set invalid LMC %u\n", lmc);
+bail:
+	return ret;
+}
+
 static ssize_t show_lid(struct device *dev,
 			struct device_attribute *attr,
 			char *buf)
@@ -192,7 +226,7 @@ static ssize_t store_lid(struct device *dev,
 		goto invalid;
 	}
 
-	ipath_set_lid(dd, lid, 0);
+	ipath_set_lid(dd, lid, dd->ipath_lmc);
 
 	goto bail;
 invalid:
@@ -216,7 +250,6 @@ static ssize_t store_mlid(struct device *dev,
 			  size_t count)
 {
 	struct ipath_devdata *dd = dev_get_drvdata(dev);
-	int unit;
 	u16 mlid;
 	int ret;
 
@@ -224,10 +257,7 @@ static ssize_t store_mlid(struct device *dev,
 	if (ret < 0 || mlid < IPATH_MULTICAST_LID_BASE)
 		goto invalid;
 
-	unit = dd->ipath_unit;
-
 	dd->ipath_mlid = mlid;
-	ipath_layer_intr(dd, IPATH_LAYER_INT_BCAST);
 
 	goto bail;
 invalid:
@@ -259,7 +289,7 @@ static ssize_t store_guid(struct device *dev,
 	struct ipath_devdata *dd = dev_get_drvdata(dev);
 	ssize_t ret;
 	unsigned short guid[8];
-	__be64 nguid;
+	__be64 new_guid;
 	u8 *ng;
 	int i;
 
@@ -268,7 +298,7 @@ static ssize_t store_guid(struct device *dev,
 		   &guid[4], &guid[5], &guid[6], &guid[7]) != 8)
 		goto invalid;
 
-	ng = (u8 *) &nguid;
+	ng = (u8 *) &new_guid;
 
 	for (i = 0; i < 8; i++) {
 		if (guid[i] > 0xff)
@@ -276,7 +306,10 @@ static ssize_t store_guid(struct device *dev,
 		ng[i] = guid[i];
 	}
 
-	dd->ipath_guid = nguid;
+	if (new_guid == 0)
+		goto invalid;
+
+	dd->ipath_guid = new_guid;
 	dd->ipath_nguid = 1;
 
 	ret = strlen(buf);
@@ -297,6 +330,16 @@ static ssize_t show_nguid(struct device *dev,
 	struct ipath_devdata *dd = dev_get_drvdata(dev);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", dd->ipath_nguid);
+}
+
+static ssize_t show_nports(struct device *dev,
+			   struct device_attribute *attr,
+			   char *buf)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+
+	/* Return the number of user ports available. */
+	return scnprintf(buf, PAGE_SIZE, "%u\n", dd->ipath_cfgports - 1);
 }
 
 static ssize_t show_serial(struct device *dev,
@@ -467,7 +510,7 @@ static ssize_t store_link_state(struct device *dev,
 	if (ret < 0)
 		goto invalid;
 
-	r = ipath_layer_set_linkstate(dd, state);
+	r = ipath_set_linkstate(dd, state);
 	if (r < 0) {
 		ret = r;
 		goto bail;
@@ -502,7 +545,7 @@ static ssize_t store_mtu(struct device *dev,
 	if (ret < 0)
 		goto invalid;
 
-	r = ipath_layer_set_mtu(dd, mtu);
+	r = ipath_set_mtu(dd, mtu);
 	if (r < 0)
 		ret = r;
 
@@ -563,6 +606,70 @@ bail:
 	return ret;
 }
 
+static ssize_t store_rx_pol_inv(struct device *dev,
+			  struct device_attribute *attr,
+			  const char *buf,
+			  size_t count)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	int ret, r;
+	u16 val;
+
+	ret = ipath_parse_ushort(buf, &val);
+	if (ret < 0)
+		goto invalid;
+
+	r = ipath_set_rx_pol_inv(dd, val);
+	if (r < 0) {
+		ret = r;
+		goto bail;
+	}
+
+	goto bail;
+invalid:
+	ipath_dev_err(dd, "attempt to set invalid Rx Polarity invert\n");
+bail:
+	return ret;
+}
+
+static ssize_t store_led_override(struct device *dev,
+			  struct device_attribute *attr,
+			  const char *buf,
+			  size_t count)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	int ret;
+	u16 val;
+
+	ret = ipath_parse_ushort(buf, &val);
+	if (ret > 0)
+		ipath_set_led_override(dd, val);
+	else
+		ipath_dev_err(dd, "attempt to set invalid LED override\n");
+	return ret;
+}
+
+static ssize_t show_logged_errs(struct device *dev,
+				struct device_attribute *attr,
+				char *buf)
+{
+	struct ipath_devdata *dd = dev_get_drvdata(dev);
+	int idx, count;
+
+	/* force consistency with actual EEPROM */
+	if (ipath_update_eeprom_log(dd) != 0)
+		return -ENXIO;
+
+	count = 0;
+	for (idx = 0; idx < IPATH_EEP_LOG_CNT; ++idx) {
+		count += scnprintf(buf + count, PAGE_SIZE - count, "%d%c",
+			dd->ipath_eep_st_errs[idx],
+			idx == (IPATH_EEP_LOG_CNT - 1) ? '\n' : ' ');
+	}
+
+	return count;
+}
+
 static DRIVER_ATTR(num_units, S_IRUGO, show_num_units, NULL);
 static DRIVER_ATTR(version, S_IRUGO, show_version, NULL);
 
@@ -577,32 +684,42 @@ static struct attribute_group driver_attr_group = {
 };
 
 static DEVICE_ATTR(guid, S_IWUSR | S_IRUGO, show_guid, store_guid);
+static DEVICE_ATTR(lmc, S_IWUSR | S_IRUGO, show_lmc, store_lmc);
 static DEVICE_ATTR(lid, S_IWUSR | S_IRUGO, show_lid, store_lid);
 static DEVICE_ATTR(link_state, S_IWUSR, NULL, store_link_state);
 static DEVICE_ATTR(mlid, S_IWUSR | S_IRUGO, show_mlid, store_mlid);
 static DEVICE_ATTR(mtu, S_IWUSR | S_IRUGO, show_mtu, store_mtu);
 static DEVICE_ATTR(enabled, S_IWUSR | S_IRUGO, show_enabled, store_enabled);
 static DEVICE_ATTR(nguid, S_IRUGO, show_nguid, NULL);
+static DEVICE_ATTR(nports, S_IRUGO, show_nports, NULL);
 static DEVICE_ATTR(reset, S_IWUSR, NULL, store_reset);
 static DEVICE_ATTR(serial, S_IRUGO, show_serial, NULL);
 static DEVICE_ATTR(status, S_IRUGO, show_status, NULL);
 static DEVICE_ATTR(status_str, S_IRUGO, show_status_str, NULL);
 static DEVICE_ATTR(boardversion, S_IRUGO, show_boardversion, NULL);
 static DEVICE_ATTR(unit, S_IRUGO, show_unit, NULL);
+static DEVICE_ATTR(rx_pol_inv, S_IWUSR, NULL, store_rx_pol_inv);
+static DEVICE_ATTR(led_override, S_IWUSR, NULL, store_led_override);
+static DEVICE_ATTR(logged_errors, S_IRUGO, show_logged_errs, NULL);
 
 static struct attribute *dev_attributes[] = {
 	&dev_attr_guid.attr,
+	&dev_attr_lmc.attr,
 	&dev_attr_lid.attr,
 	&dev_attr_link_state.attr,
 	&dev_attr_mlid.attr,
 	&dev_attr_mtu.attr,
 	&dev_attr_nguid.attr,
+	&dev_attr_nports.attr,
 	&dev_attr_serial.attr,
 	&dev_attr_status.attr,
 	&dev_attr_status_str.attr,
 	&dev_attr_boardversion.attr,
 	&dev_attr_unit.attr,
 	&dev_attr_enabled.attr,
+	&dev_attr_rx_pol_inv.attr,
+	&dev_attr_led_override.attr,
+	&dev_attr_logged_errors.attr,
 	NULL
 };
 
