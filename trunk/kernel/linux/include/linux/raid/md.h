@@ -53,6 +53,8 @@
 #include <linux/raid/md_u.h>
 #include <linux/raid/md_k.h>
 
+#ifdef CONFIG_MD
+
 /*
  * Different major versions are not compatible.
  * Different minor versions are only downward compatible.
@@ -92,8 +94,8 @@ extern int sync_page_io(struct block_device *bdev, sector_t sector, int size,
 			struct page *page, int rw);
 extern void md_do_sync(mddev_t *mddev);
 extern void md_new_event(mddev_t *mddev);
+extern void md_allow_write(mddev_t *mddev);
 
-extern void md_update_sb(mddev_t * mddev);
-
+#endif /* CONFIG_MD */
 #endif 
 
