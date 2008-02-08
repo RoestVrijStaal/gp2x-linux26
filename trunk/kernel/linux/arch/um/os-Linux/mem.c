@@ -11,7 +11,6 @@
 #include <sys/statfs.h>
 #include "kern_util.h"
 #include "user.h"
-#include "user_util.h"
 #include "mem_user.h"
 #include "init.h"
 #include "os.h"
@@ -20,7 +19,13 @@
 
 #include <sys/param.h>
 
+/* Modified by which_tmpdir, which is called during early boot */
 static char *default_tmpdir = "/tmp";
+
+/*
+ *  Modified when creating the physical memory file and when checking
+ * the tmp filesystem for usability, both happening during early boot.
+ */
 static char *tempdir = NULL;
 
 static void __init find_tempdir(void)
@@ -29,7 +34,8 @@ static void __init find_tempdir(void)
 	int i;
 	char *dir = NULL;
 
-	if(tempdir != NULL) return;	/* We've already been called */
+	if(tempdir != NULL) /* We've already been called */
+		return;
 	for(i = 0; dirs[i]; i++){
 		dir = getenv(dirs[i]);
 		if((dir != NULL) && (*dir != '\0'))
@@ -83,6 +89,7 @@ static int next(int fd, char *buf, int size, char c)
 	return 1;
 }
 
+/* which_tmpdir is called only during early boot */
 static int checked_tmpdir = 0;
 
 /* Look for a tmpfs mounted at /dev/shm.  I couldn't find a cleaner
@@ -114,14 +121,14 @@ static void which_tmpdir(void)
 	}
 
 	while(1){
-		found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), ' ');
+		found = next(fd, buf, ARRAY_SIZE(buf), ' ');
 		if(found != 1)
 			break;
 
 		if(!strncmp(buf, "/dev/shm", strlen("/dev/shm")))
 			goto found;
 
-		found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), '\n');
+		found = next(fd, buf, ARRAY_SIZE(buf), '\n');
 		if(found != 1)
 			break;
 	}
@@ -132,20 +139,24 @@ err:
 	else if(found < 0)
 		printf("read returned errno %d\n", -found);
 
+out:
+	close(fd);
+
 	return;
 
 found:
-	found = next(fd, buf, sizeof(buf) / sizeof(buf[0]), ' ');
+	found = next(fd, buf, ARRAY_SIZE(buf), ' ');
 	if(found != 1)
 		goto err;
 
 	if(strncmp(buf, "tmpfs", strlen("tmpfs"))){
 		printf("not tmpfs\n");
-		return;
+		goto out;
 	}
 
 	printf("OK\n");
 	default_tmpdir = "/dev/shm";
+	goto out;
 }
 
 /*
@@ -153,7 +164,8 @@ found:
  * (file: kernel/tt/ptproxy/proxy.c, proc: start_debugger).
  * So it isn't 'static' yet.
  */
-int make_tempfile(const char *template, char **out_tempname, int do_unlink)
+int __init make_tempfile(const char *template, char **out_tempname,
+			 int do_unlink)
 {
 	char *tempname;
 	int fd;
@@ -182,7 +194,7 @@ int make_tempfile(const char *template, char **out_tempname, int do_unlink)
 	} else {
 		free(tempname);
 	}
-	return(fd);
+	return fd;
 out:
 	free(tempname);
 	return -1;
@@ -194,7 +206,7 @@ out:
  * This proc is used in start_up.c
  * So it isn't 'static'.
  */
-int create_tmp_file(unsigned long long len)
+int __init create_tmp_file(unsigned long long len)
 {
 	int fd, err;
 	char zero;
@@ -206,7 +218,7 @@ int create_tmp_file(unsigned long long len)
 
 	err = fchmod(fd, 0777);
 	if(err < 0){
-		perror("os_mode_fd");
+		perror("fchmod");
 		exit(1);
 	}
 
@@ -214,38 +226,37 @@ int create_tmp_file(unsigned long long len)
 	 * increase the file size by one byte, to the desired length.
 	 */
 	if (lseek64(fd, len - 1, SEEK_SET) < 0) {
-		perror("os_seek_file");
+		perror("lseek64");
 		exit(1);
 	}
 
 	zero = 0;
 
-	err = os_write_file(fd, &zero, 1);
+	err = write(fd, &zero, 1);
 	if(err != 1){
-		errno = -err;
-		perror("os_write_file");
+		perror("write");
 		exit(1);
 	}
 
-	return(fd);
+	return fd;
 }
 
-int create_mem_file(unsigned long long len)
+int __init create_mem_file(unsigned long long len)
 {
 	int err, fd;
 
 	fd = create_tmp_file(len);
 
-	err = os_set_exec_close(fd, 1);
+	err = os_set_exec_close(fd);
 	if(err < 0){
 		errno = -err;
 		perror("exec_close");
 	}
-	return(fd);
+	return fd;
 }
 
 
-void check_tmpexec(void)
+void __init check_tmpexec(void)
 {
 	void *addr;
 	int err, fd = create_tmp_file(UM_KERN_PAGE_SIZE);

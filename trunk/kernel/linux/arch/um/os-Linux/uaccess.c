@@ -4,12 +4,11 @@
  * Licensed under the GPL
  */
 
-#include <setjmp.h>
-#include <string.h>
+#include <stddef.h>
 #include "longjmp.h"
 
 unsigned long __do_user_copy(void *to, const void *from, int n,
-			     void **fault_addr, void **fault_catcher,
+			     void **fault_addr, jmp_buf **fault_catcher,
 			     void (*op)(void *to, const void *from,
 					int n), int *faulted_out)
 {
