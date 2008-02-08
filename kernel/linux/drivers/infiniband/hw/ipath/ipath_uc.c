@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 QLogic, Inc. All rights reserved.
+ * Copyright (c) 2006, 2007 QLogic Corporation. All rights reserved.
  * Copyright (c) 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -32,76 +32,45 @@
  */
 
 #include "ipath_verbs.h"
-#include "ipath_common.h"
+#include "ipath_kernel.h"
 
 /* cut down ridiculously long IB macro names */
 #define OP(x) IB_OPCODE_UC_##x
 
-static void complete_last_send(struct ipath_qp *qp, struct ipath_swqe *wqe,
-			       struct ib_wc *wc)
-{
-	if (++qp->s_last == qp->s_size)
-		qp->s_last = 0;
-	if (!test_bit(IPATH_S_SIGNAL_REQ_WR, &qp->s_flags) ||
-	    (wqe->wr.send_flags & IB_SEND_SIGNALED)) {
-		wc->wr_id = wqe->wr.wr_id;
-		wc->status = IB_WC_SUCCESS;
-		wc->opcode = ib_ipath_wc_opcode[wqe->wr.opcode];
-		wc->vendor_err = 0;
-		wc->byte_len = wqe->length;
-		wc->qp_num = qp->ibqp.qp_num;
-		wc->src_qp = qp->remote_qpn;
-		wc->pkey_index = 0;
-		wc->slid = qp->remote_ah_attr.dlid;
-		wc->sl = qp->remote_ah_attr.sl;
-		wc->dlid_path_bits = 0;
-		wc->port_num = 0;
-		ipath_cq_enter(to_icq(qp->ibqp.send_cq), wc, 0);
-	}
-	wqe = get_swqe_ptr(qp, qp->s_last);
-}
-
 /**
  * ipath_make_uc_req - construct a request packet (SEND, RDMA write)
  * @qp: a pointer to the QP
- * @ohdr: a pointer to the IB header being constructed
- * @pmtu: the path MTU
- * @bth0p: pointer to the BTH opcode word
- * @bth2p: pointer to the BTH PSN word
  *
  * Return 1 if constructed; otherwise, return 0.
- * Note the QP s_lock must be held and interrupts disabled.
  */
-int ipath_make_uc_req(struct ipath_qp *qp,
-		      struct ipath_other_headers *ohdr,
-		      u32 pmtu, u32 *bth0p, u32 *bth2p)
+int ipath_make_uc_req(struct ipath_qp *qp)
 {
+	struct ipath_other_headers *ohdr;
 	struct ipath_swqe *wqe;
 	u32 hwords;
 	u32 bth0;
 	u32 len;
-	struct ib_wc wc;
+	u32 pmtu = ib_mtu_enum_to_int(qp->path_mtu);
+	int ret = 0;
 
 	if (!(ib_ipath_state_ops[qp->state] & IPATH_PROCESS_SEND_OK))
 		goto done;
 
+	ohdr = &qp->s_hdr.u.oth;
+	if (qp->remote_ah_attr.ah_flags & IB_AH_GRH)
+		ohdr = &qp->s_hdr.u.l.oth;
+
 	/* header size in 32-bit words LRH+BTH = (8+12)/4. */
 	hwords = 5;
-	bth0 = 0;
+	bth0 = 1 << 22; /* Set M bit */
 
 	/* Get the next send request. */
-	wqe = get_swqe_ptr(qp, qp->s_last);
+	wqe = get_swqe_ptr(qp, qp->s_cur);
+	qp->s_wqe = NULL;
 	switch (qp->s_state) {
 	default:
-		/*
-		 * Signal the completion of the last send
-		 * (if there is one).
-		 */
-		if (qp->s_last != qp->s_tail)
-			complete_last_send(qp, wqe, &wc);
-
 		/* Check if send work queue is empty. */
-		if (qp->s_tail == qp->s_head)
+		if (qp->s_cur == qp->s_head)
 			goto done;
 		/*
 		 * Start a new request.
@@ -130,6 +99,9 @@ int ipath_make_uc_req(struct ipath_qp *qp,
 			}
 			if (wqe->wr.send_flags & IB_SEND_SOLICITED)
 				bth0 |= 1 << 23;
+			qp->s_wqe = wqe;
+			if (++qp->s_cur >= qp->s_size)
+				qp->s_cur = 0;
 			break;
 
 		case IB_WR_RDMA_WRITE:
@@ -156,13 +128,14 @@ int ipath_make_uc_req(struct ipath_qp *qp,
 				if (wqe->wr.send_flags & IB_SEND_SOLICITED)
 					bth0 |= 1 << 23;
 			}
+			qp->s_wqe = wqe;
+			if (++qp->s_cur >= qp->s_size)
+				qp->s_cur = 0;
 			break;
 
 		default:
 			goto done;
 		}
-		if (++qp->s_tail >= qp->s_size)
-			qp->s_tail = 0;
 		break;
 
 	case OP(SEND_FIRST):
@@ -184,6 +157,9 @@ int ipath_make_uc_req(struct ipath_qp *qp,
 		}
 		if (wqe->wr.send_flags & IB_SEND_SOLICITED)
 			bth0 |= 1 << 23;
+		qp->s_wqe = wqe;
+		if (++qp->s_cur >= qp->s_size)
+			qp->s_cur = 0;
 		break;
 
 	case OP(RDMA_WRITE_FIRST):
@@ -206,18 +182,22 @@ int ipath_make_uc_req(struct ipath_qp *qp,
 			if (wqe->wr.send_flags & IB_SEND_SOLICITED)
 				bth0 |= 1 << 23;
 		}
+		qp->s_wqe = wqe;
+		if (++qp->s_cur >= qp->s_size)
+			qp->s_cur = 0;
 		break;
 	}
 	qp->s_len -= len;
 	qp->s_hdrwords = hwords;
 	qp->s_cur_sge = &qp->s_sge;
 	qp->s_cur_size = len;
-	*bth0p = bth0 | (qp->s_state << 24);
-	*bth2p = qp->s_next_psn++ & IPATH_PSN_MASK;
-	return 1;
+	ipath_make_ruc_header(to_idev(qp->ibqp.device),
+			      qp, ohdr, bth0 | (qp->s_state << 24),
+			      qp->s_next_psn++ & IPATH_PSN_MASK);
+	ret = 1;
 
 done:
-	return 0;
+	return ret;
 }
 
 /**
@@ -246,6 +226,10 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 	struct ib_reth *reth;
 	int header_in_data;
 
+	/* Validate the SLID. See Ch. 9.6.1.5 */
+	if (unlikely(be16_to_cpu(hdr->lrh[3]) != qp->remote_ah_attr.dlid))
+		goto done;
+
 	/* Check for GRH */
 	if (!has_grh) {
 		ohdr = &hdr->u.oth;
@@ -261,8 +245,7 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 		 * size to 56 bytes so the last 4 bytes of
 		 * the BTH header (PSN) is in the data buffer.
 		 */
-		header_in_data =
-			ipath_layer_get_rcvhdrentsize(dev->dd) == 16;
+		header_in_data = dev->dd->ipath_rcvhdrentsize == 16;
 		if (header_in_data) {
 			psn = be32_to_cpu(((__be32 *) data)[0]);
 			data += sizeof(__be32);
@@ -341,13 +324,13 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 	send_first:
 		if (qp->r_reuse_sge) {
 			qp->r_reuse_sge = 0;
-			qp->r_sge = qp->s_rdma_sge;
+			qp->r_sge = qp->s_rdma_read_sge;
 		} else if (!ipath_get_rwqe(qp, 0)) {
 			dev->n_pkt_drops++;
 			goto done;
 		}
 		/* Save the WQE so we can reuse it in case of an error. */
-		qp->s_rdma_sge = qp->r_sge;
+		qp->s_rdma_read_sge = qp->r_sge;
 		qp->r_rcv_len = 0;
 		if (opcode == OP(SEND_ONLY))
 			goto send_last;
@@ -408,7 +391,7 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 		wc.status = IB_WC_SUCCESS;
 		wc.opcode = IB_WC_RECV;
 		wc.vendor_err = 0;
-		wc.qp_num = qp->ibqp.qp_num;
+		wc.qp = &qp->ibqp;
 		wc.src_qp = qp->remote_qpn;
 		wc.pkey_index = 0;
 		wc.slid = qp->remote_ah_attr.dlid;
@@ -441,7 +424,7 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 			int ok;
 
 			/* Check rkey */
-			ok = ipath_rkey_ok(dev, &qp->r_sge, qp->r_len,
+			ok = ipath_rkey_ok(qp, &qp->r_sge, qp->r_len,
 					   vaddr, rkey,
 					   IB_ACCESS_REMOTE_WRITE);
 			if (unlikely(!ok)) {
@@ -481,6 +464,16 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 
 	case OP(RDMA_WRITE_LAST_WITH_IMMEDIATE):
 	rdma_last_imm:
+		if (header_in_data) {
+			wc.imm_data = *(__be32 *) data;
+			data += sizeof(__be32);
+		} else {
+			/* Immediate data comes after BTH */
+			wc.imm_data = ohdr->u.imm_data;
+		}
+		hdrsize += 4;
+		wc.wc_flags = IB_WC_WITH_IMM;
+
 		/* Get the number of bytes the message was padded by. */
 		pad = (be32_to_cpu(ohdr->bth[0]) >> 20) & 3;
 		/* Check for invalid length. */
@@ -501,16 +494,7 @@ void ipath_uc_rcv(struct ipath_ibdev *dev, struct ipath_ib_header *hdr,
 			dev->n_pkt_drops++;
 			goto done;
 		}
-		if (header_in_data) {
-			wc.imm_data = *(__be32 *) data;
-			data += sizeof(__be32);
-		} else {
-			/* Immediate data comes after BTH */
-			wc.imm_data = ohdr->u.imm_data;
-		}
-		hdrsize += 4;
-		wc.wc_flags = IB_WC_WITH_IMM;
-		wc.byte_len = 0;
+		wc.byte_len = qp->r_len;
 		goto last_imm;
 
 	case OP(RDMA_WRITE_LAST):
