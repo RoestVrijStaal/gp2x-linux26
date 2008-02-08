@@ -1,10 +1,9 @@
 /*
- * arch/sh/drivers/pci/fixups-rts7751r2d.c
+ * arch/sh/drivers/pci/fixups-lboxre2.c
  *
- * RTS7751R2D PCI fixups
+ * L-BOX RE2 PCI fixups
  *
- * Copyright (C) 2003  Lineo uSolutions, Inc.
- * Copyright (C) 2004  Paul Mundt
+ * Copyright (C) 2007 Nobuhiro Iwamatsu
  *
  * This file is subject to the terms and conditions of the GNU General Public
  * License.  See the file "COPYING" in the main directory of this archive
@@ -26,7 +25,6 @@ int pci_fixup_pcic(void)
 	/* Enable all interrupts, so we known what to fix */
 	pci_write_reg(0x0000c3ff, SH4_PCIINTM);
 	pci_write_reg(0x0000380f, SH4_PCIAINTM);
-
 	pci_write_reg(0xfb900047, SH7751_PCICONF1);
 	pci_write_reg(0xab000001, SH7751_PCICONF4);
 
