@@ -12,6 +12,7 @@
 #include <linux/sched.h>
 #include <asm/mpc8xx.h>
 #endif
+#include <asm/io.h>
 
 #ifndef MAX_HWIFS
 #ifdef __powerpc64__
@@ -21,15 +22,14 @@
 #endif
 #endif
 
+#define __ide_mm_insw(p, a, c)	readsw((void __iomem *)(p), (a), (c))
+#define __ide_mm_insl(p, a, c)	readsl((void __iomem *)(p), (a), (c))
+#define __ide_mm_outsw(p, a, c)	writesw((void __iomem *)(p), (a), (c))
+#define __ide_mm_outsl(p, a, c)	writesl((void __iomem *)(p), (a), (c))
+
 #ifndef  __powerpc64__
 #include <linux/hdreg.h>
 #include <linux/ioport.h>
-#include <asm/io.h>
-
-extern void __ide_mm_insw(void __iomem *port, void *addr, u32 count);
-extern void __ide_mm_outsw(void __iomem *port, void *addr, u32 count);
-extern void __ide_mm_insl(void __iomem *port, void *addr, u32 count);
-extern void __ide_mm_outsl(void __iomem *port, void *addr, u32 count);
 
 struct ide_machdep_calls {
         int         (*default_irq)(unsigned long base);
@@ -67,14 +67,13 @@ static __inline__ unsigned long ide_default_io_base(int index)
 #define ide_init_default_irq(base)	ide_default_irq(base)
 #endif
 
-#if (defined CONFIG_APUS || defined CONFIG_BLK_DEV_MPC8xx_IDE )
+#ifdef CONFIG_BLK_DEV_MPC8xx_IDE
 #define IDE_ARCH_ACK_INTR  1
-#define ide_ack_intr(hwif) (hwif->hw.ack_intr ? hwif->hw.ack_intr(hwif) : 1)
+#define ide_ack_intr(hwif) ((hwif)->ack_intr ? (hwif)->ack_intr(hwif) : 1)
 #endif
 
 #endif /* __powerpc64__ */
 
-#define IDE_ARCH_OBSOLETE_INIT
 #define ide_default_io_ctl(base)	((base) + 0x206) /* obsolete */
 
 #endif /* __KERNEL__ */

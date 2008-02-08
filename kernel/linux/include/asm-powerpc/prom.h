@@ -17,7 +17,16 @@
  */
 #include <linux/types.h>
 #include <linux/proc_fs.h>
+#include <linux/platform_device.h>
+#include <asm/irq.h>
 #include <asm/atomic.h>
+
+#define OF_ROOT_NODE_ADDR_CELLS_DEFAULT	1
+#define OF_ROOT_NODE_SIZE_CELLS_DEFAULT	1
+
+#define of_compat_cmp(s1, s2, l)	strcasecmp((s1), (s2))
+#define of_prop_cmp(s1, s2)		strcmp((s1), (s2))
+#define of_node_cmp(s1, s2)		strcasecmp((s1), (s2))
 
 /* Definitions used by the flattened device tree */
 #define OF_DT_HEADER		0xd00dfeed	/* marker */
@@ -57,6 +66,8 @@ struct boot_param_header
 	u32	boot_cpuid_phys;	/* Physical CPU id we're booting on */
 	/* version 3 fields below */
 	u32	dt_strings_size;	/* size of the DT strings block */
+	/* version 17 fields below */
+	u32	dt_struct_size;		/* size of the DT structure block */
 };
 
 
@@ -67,13 +78,13 @@ typedef u32 ihandle;
 struct property {
 	char	*name;
 	int	length;
-	unsigned char *value;
+	void	*value;
 	struct property *next;
 };
 
 struct device_node {
-	char	*name;
-	char	*type;
+	const char *name;
+	const char *type;
 	phandle	node;
 	phandle linux_phandle;
 	char	*full_name;
@@ -93,11 +104,16 @@ struct device_node {
 
 extern struct device_node *of_chosen;
 
-/* flag descriptions */
-#define OF_DYNAMIC 1 /* node and properties were allocated via kmalloc */
+static inline int of_node_check_flag(struct device_node *n, unsigned long flag)
+{
+	return test_bit(flag, &n->_flags);
+}
 
-#define OF_IS_DYNAMIC(x) test_bit(OF_DYNAMIC, &x->_flags)
-#define OF_MARK_DYNAMIC(x) set_bit(OF_DYNAMIC, &x->_flags)
+static inline void of_node_set_flag(struct device_node *n, unsigned long flag)
+{
+	set_bit(flag, &n->_flags);
+}
+
 
 #define HAVE_ARCH_DEVTREE_FIXUPS
 
@@ -107,36 +123,7 @@ static inline void set_node_proc_entry(struct device_node *dn, struct proc_dir_e
 }
 
 
-/* OBSOLETE: Old style node lookup */
-extern struct device_node *find_devices(const char *name);
-extern struct device_node *find_type_devices(const char *type);
-extern struct device_node *find_path_device(const char *path);
-extern struct device_node *find_compatible_devices(const char *type,
-						   const char *compat);
-extern struct device_node *find_all_nodes(void);
-
-/* New style node lookup */
-extern struct device_node *of_find_node_by_name(struct device_node *from,
-	const char *name);
-#define for_each_node_by_name(dn, name) \
-	for (dn = of_find_node_by_name(NULL, name); dn; \
-	     dn = of_find_node_by_name(dn, name))
-extern struct device_node *of_find_node_by_type(struct device_node *from,
-	const char *type);
-#define for_each_node_by_type(dn, type) \
-	for (dn = of_find_node_by_type(NULL, type); dn; \
-	     dn = of_find_node_by_type(dn, type))
-extern struct device_node *of_find_compatible_node(struct device_node *from,
-	const char *type, const char *compat);
-extern struct device_node *of_find_node_by_path(const char *path);
-extern struct device_node *of_find_node_by_phandle(phandle handle);
 extern struct device_node *of_find_all_nodes(struct device_node *prev);
-extern struct device_node *of_get_parent(const struct device_node *node);
-extern struct device_node *of_get_next_child(const struct device_node *node,
-					     struct device_node *prev);
-extern struct property *of_find_property(struct device_node *np,
-					 const char *name,
-					 int *lenp);
 extern struct device_node *of_node_get(struct device_node *node);
 extern void of_node_put(struct device_node *node);
 
@@ -152,19 +139,14 @@ extern unsigned long __init of_get_flat_dt_root(void);
 
 /* For updating the device tree at runtime */
 extern void of_attach_node(struct device_node *);
-extern void of_detach_node(const struct device_node *);
+extern void of_detach_node(struct device_node *);
 
 /* Other Prototypes */
 extern void finish_device_tree(void);
 extern void unflatten_device_tree(void);
 extern void early_init_devtree(void *);
-extern int device_is_compatible(struct device_node *device, const char *);
 extern int machine_is_compatible(const char *compat);
-extern void *get_property(struct device_node *node, const char *name,
-		int *lenp);
 extern void print_properties(struct device_node *node);
-extern int prom_n_addr_cells(struct device_node* np);
-extern int prom_n_size_cells(struct device_node* np);
 extern int prom_n_intr_cells(struct device_node* np);
 extern void prom_get_irq_senses(unsigned char *senses, int off, int max);
 extern int prom_add_property(struct device_node* np, struct property* prop);
@@ -197,8 +179,8 @@ extern int release_OF_resource(struct device_node* node, int index);
  */
 
 
-/* Helper to read a big number */
-static inline u64 of_read_number(u32 *cell, int size)
+/* Helper to read a big number; size is in cells (not bytes) */
+static inline u64 of_read_number(const u32 *cell, int size)
 {
 	u64 r = 0;
 	while (size--)
@@ -206,18 +188,27 @@ static inline u64 of_read_number(u32 *cell, int size)
 	return r;
 }
 
+/* Like of_read_number, but we want an unsigned long result */
+#ifdef CONFIG_PPC32
+static inline unsigned long of_read_ulong(const u32 *cell, int size)
+{
+	return cell[size-1];
+}
+#else
+#define of_read_ulong(cell, size)	of_read_number(cell, size)
+#endif
+
 /* Translate an OF address block into a CPU physical address
  */
-#define OF_BAD_ADDR	((u64)-1)
-extern u64 of_translate_address(struct device_node *np, u32 *addr);
+extern u64 of_translate_address(struct device_node *np, const u32 *addr);
 
 /* Extract an address from a device, returns the region size and
  * the address space flags too. The PCI version uses a BAR number
  * instead of an absolute index
  */
-extern u32 *of_get_address(struct device_node *dev, int index,
+extern const u32 *of_get_address(struct device_node *dev, int index,
 			   u64 *size, unsigned int *flags);
-extern u32 *of_get_pci_address(struct device_node *dev, int bar_no,
+extern const u32 *of_get_pci_address(struct device_node *dev, int bar_no,
 			       u64 *size, unsigned int *flags);
 
 /* Get an address as a resource. Note that if your address is
@@ -234,7 +225,7 @@ extern int of_pci_address_to_resource(struct device_node *dev, int bar,
 /* Parse the ibm,dma-window property of an OF node into the busno, phys and
  * size parameters.
  */
-void of_parse_dma_window(struct device_node *dn, unsigned char *dma_window_prop,
+void of_parse_dma_window(struct device_node *dn, const void *dma_window_prop,
 		unsigned long *busno, unsigned long *phys, unsigned long *size);
 
 extern void kdump_move_device_tree(void);
@@ -242,6 +233,8 @@ extern void kdump_move_device_tree(void);
 /* CPU OF node matching */
 struct device_node *of_get_cpu_node(int cpu, unsigned int *thread);
 
+/* Get the MAC address */
+extern const void *of_get_mac_address(struct device_node *np);
 
 /*
  * OF interrupt mapping
@@ -259,7 +252,7 @@ struct of_irq {
 	u32 specifier[OF_MAX_IRQ_SPEC];	/* Specifier copy */
 };
 
-/***
+/**
  * of_irq_map_init - Initialize the irq remapper
  * @flags:	flags defining workarounds to enable
  *
@@ -272,7 +265,7 @@ struct of_irq {
 
 extern void of_irq_map_init(unsigned int flags);
 
-/***
+/**
  * of_irq_map_raw - Low level interrupt tree parsing
  * @parent:	the device interrupt parent
  * @intspec:	interrupt specifier ("interrupts" property of the device)
@@ -289,12 +282,12 @@ extern void of_irq_map_init(unsigned int flags);
  *
  */
 
-extern int of_irq_map_raw(struct device_node *parent, u32 *intspec,
-			  u32 ointsize, u32 *addr,
+extern int of_irq_map_raw(struct device_node *parent, const u32 *intspec,
+			  u32 ointsize, const u32 *addr,
 			  struct of_irq *out_irq);
 
 
-/***
+/**
  * of_irq_map_one - Resolve an interrupt for a device
  * @device:	the device whose interrupt is to be resolved
  * @index:     	index of the interrupt to resolve
@@ -307,7 +300,7 @@ extern int of_irq_map_raw(struct device_node *parent, u32 *intspec,
 extern int of_irq_map_one(struct device_node *device, int index,
 			  struct of_irq *out_irq);
 
-/***
+/**
  * of_irq_map_pci - Resolve the interrupt for a PCI device
  * @pdev:	the device whose interrupt is to be resolved
  * @out_irq:	structure of_irq filled by this function
@@ -321,6 +314,23 @@ extern int of_irq_map_one(struct device_node *device, int index,
 struct pci_dev;
 extern int of_irq_map_pci(struct pci_dev *pdev, struct of_irq *out_irq);
 
+extern int of_irq_to_resource(struct device_node *dev, int index,
+			struct resource *r);
+
+/**
+ * of_iomap - Maps the memory mapped IO for a given device_node
+ * @device:	the device whose io range will be mapped
+ * @index:	index of the io range
+ *
+ * Returns a pointer to the mapped memory
+ */
+extern void __iomem *of_iomap(struct device_node *device, int index);
+
+/*
+ * NB:  This is here while we transition from using asm/prom.h
+ * to linux/of.h
+ */
+#include <linux/of.h>
 
 #endif /* __KERNEL__ */
 #endif /* _POWERPC_PROM_H */

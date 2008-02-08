@@ -32,6 +32,7 @@
 #define _CHRP_Motorola	0x04	/* motorola chrp, the cobra */
 #define _CHRP_IBM	0x05	/* IBM chrp, the longtrail and longtrail 2 */
 #define _CHRP_Pegasos	0x06	/* Genesi/bplan's Pegasos and Pegasos2 */
+#define _CHRP_briq	0x07	/* TotalImpact's briQ */
 
 #if defined(__KERNEL__) && defined(CONFIG_PPC32)
 
@@ -42,19 +43,7 @@ extern int _chrp_type;
 /* what kind of prep workstation we are */
 extern int _prep_type;
 
-/*
- * This is used to identify the board type from a given PReP board
- * vendor. Board revision is also made available. This will be moved
- * elsewhere soon
- */
-extern unsigned char ucBoardRev;
-extern unsigned char ucBoardRevMaj, ucBoardRevMin;
-
 #endif /* CONFIG_PPC_PREP */
-
-#ifndef CONFIG_PPC_MULTIPLATFORM
-#define _machine 0
-#endif /* CONFIG_PPC_MULTIPLATFORM */
 
 #endif /* defined(__KERNEL__) && defined(CONFIG_PPC32) */
 
@@ -136,7 +125,6 @@ struct thread_struct {
 	mm_segment_t	fs;		/* for get_fs() validation */
 #ifdef CONFIG_PPC32
 	void		*pgdir;		/* root of page-table tree */
-	signed long	last_syscall;
 #endif
 #if defined(CONFIG_4xx) || defined (CONFIG_BOOKE)
 	unsigned long	dbcr0;		/* debug control register values */
@@ -157,9 +145,9 @@ struct thread_struct {
 	unsigned long	dabr;		/* Data address breakpoint register */
 #ifdef CONFIG_ALTIVEC
 	/* Complete AltiVec register set */
-	vector128	vr[32] __attribute((aligned(16)));
+	vector128	vr[32] __attribute__((aligned(16)));
 	/* AltiVec status */
-	vector128	vscr __attribute((aligned(16)));
+	vector128	vscr __attribute__((aligned(16)));
 	unsigned long	vrsave;
 	int		used_vr;	/* set if process has used altivec */
 #endif /* CONFIG_ALTIVEC */

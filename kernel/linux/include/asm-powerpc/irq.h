@@ -9,7 +9,6 @@
  * 2 of the License, or (at your option) any later version.
  */
 
-#include <linux/config.h>
 #include <linux/threads.h>
 #include <linux/list.h>
 #include <linux/radix-tree.h>
@@ -90,6 +89,9 @@ struct irq_host_ops {
 	/* Dispose of such a mapping */
 	void (*unmap)(struct irq_host *h, unsigned int virq);
 
+	/* Update of such a mapping  */
+	void (*remap)(struct irq_host *h, unsigned int virq, irq_hw_number_t hw);
+
 	/* Translate device-tree interrupt specifier from raw format coming
 	 * from the firmware to a irq_hw_number_t (interrupt line number) and
 	 * type (sense) that can be passed to set_irq_type(). In the absence
@@ -122,6 +124,9 @@ struct irq_host {
 	struct irq_host_ops	*ops;
 	void			*host_data;
 	irq_hw_number_t		inval_irq;
+
+	/* Optional device node pointer */
+	struct device_node	*of_node;
 };
 
 /* The main irq map itself is an array of NR_IRQ entries containing the
@@ -136,10 +141,11 @@ struct irq_map_entry {
 
 extern struct irq_map_entry irq_map[NR_IRQS];
 
+extern irq_hw_number_t virq_to_hw(unsigned int virq);
 
-/***
+/**
  * irq_alloc_host - Allocate a new irq_host data structure
- * @node: device-tree node of the interrupt controller
+ * @of_node: optional device-tree node of the interrupt controller
  * @revmap_type: type of reverse mapping to use
  * @revmap_arg: for IRQ_HOST_MAP_LINEAR linear only: size of the map
  * @ops: map/unmap host callbacks
@@ -153,20 +159,21 @@ extern struct irq_map_entry irq_map[NR_IRQS];
  * later during boot automatically (the reverse mapping will use the slow path
  * until that happens).
  */
-extern struct irq_host *irq_alloc_host(unsigned int revmap_type,
+extern struct irq_host *irq_alloc_host(struct device_node *of_node,
+				       unsigned int revmap_type,
 				       unsigned int revmap_arg,
 				       struct irq_host_ops *ops,
 				       irq_hw_number_t inval_irq);
 
 
-/***
+/**
  * irq_find_host - Locates a host for a given device node
  * @node: device-tree node of the interrupt controller
  */
 extern struct irq_host *irq_find_host(struct device_node *node);
 
 
-/***
+/**
  * irq_set_default_host - Set a "default" host
  * @host: default host pointer
  *
@@ -178,7 +185,7 @@ extern struct irq_host *irq_find_host(struct device_node *node);
 extern void irq_set_default_host(struct irq_host *host);
 
 
-/***
+/**
  * irq_set_virq_count - Set the maximum number of virt irqs
  * @count: number of linux virtual irqs, capped with NR_IRQS
  *
@@ -188,7 +195,7 @@ extern void irq_set_default_host(struct irq_host *host);
 extern void irq_set_virq_count(unsigned int count);
 
 
-/***
+/**
  * irq_create_mapping - Map a hardware interrupt into linux virq space
  * @host: host owning this hardware interrupt or NULL for default host
  * @hwirq: hardware irq number in that host space
@@ -202,13 +209,13 @@ extern unsigned int irq_create_mapping(struct irq_host *host,
 				       irq_hw_number_t hwirq);
 
 
-/***
+/**
  * irq_dispose_mapping - Unmap an interrupt
  * @virq: linux virq number of the interrupt to unmap
  */
 extern void irq_dispose_mapping(unsigned int virq);
 
-/***
+/**
  * irq_find_mapping - Find a linux virq from an hw irq number.
  * @host: host owning this hardware interrupt
  * @hwirq: hardware irq number in that host space
@@ -220,8 +227,17 @@ extern void irq_dispose_mapping(unsigned int virq);
 extern unsigned int irq_find_mapping(struct irq_host *host,
 				     irq_hw_number_t hwirq);
 
+/**
+ * irq_create_direct_mapping - Allocate a virq for direct mapping
+ * @host: host to allocate the virq for or NULL for default host
+ *
+ * This routine is used for irq controllers which can choose the hardware
+ * interrupt numbers they generate. In such a case it's simplest to use
+ * the linux virq as the hardware interrupt number.
+ */
+extern unsigned int irq_create_direct_mapping(struct irq_host *host);
 
-/***
+/**
  * irq_radix_revmap - Find a linux virq from a hw irq number.
  * @host: host owning this hardware interrupt
  * @hwirq: hardware irq number in that host space
@@ -232,7 +248,7 @@ extern unsigned int irq_find_mapping(struct irq_host *host,
 extern unsigned int irq_radix_revmap(struct irq_host *host,
 				     irq_hw_number_t hwirq);
 
-/***
+/**
  * irq_linear_revmap - Find a linux virq from a hw irq number.
  * @host: host owning this hardware interrupt
  * @hwirq: hardware irq number in that host space
@@ -247,7 +263,7 @@ extern unsigned int irq_linear_revmap(struct irq_host *host,
 
 
 
-/***
+/**
  * irq_alloc_virt - Allocate virtual irq numbers
  * @host: host owning these new virtual irqs
  * @count: number of consecutive numbers to allocate
@@ -261,7 +277,7 @@ extern unsigned int irq_alloc_virt(struct irq_host *host,
 				   unsigned int count,
 				   unsigned int hint);
 
-/***
+/**
  * irq_free_virt - Free virtual irq numbers
  * @virq: virtual irq number of the first interrupt to free
  * @count: number of interrupts to free
@@ -300,7 +316,7 @@ extern unsigned int irq_of_parse_and_map(struct device_node *dev, int index);
 
 /* -- End OF helpers -- */
 
-/***
+/**
  * irq_early_init - Init irq remapping subsystem
  */
 extern void irq_early_init(void);
@@ -826,7 +842,7 @@ extern struct thread_info *softirq_ctx[NR_CPUS];
 
 extern void irq_ctx_init(void);
 extern void call_do_softirq(struct thread_info *tp);
-extern int call_handle_irq(int irq, void *p1, void *p2,
+extern int call_handle_irq(int irq, void *p1,
 			   struct thread_info *tp, void *func);
 #else
 #define irq_ctx_init()
