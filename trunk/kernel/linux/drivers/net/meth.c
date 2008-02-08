@@ -8,16 +8,16 @@
  *	as published by the Free Software Foundation; either version
  *	2 of the License, or (at your option) any later version.
  */
-#include <linux/module.h>
-#include <linux/init.h>
-
-#include <linux/sched.h>
-#include <linux/kernel.h> /* printk() */
 #include <linux/delay.h>
+#include <linux/dma-mapping.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/platform_device.h>
 #include <linux/slab.h>
-#include <linux/errno.h>  /* error codes */
-#include <linux/types.h>  /* size_t */
-#include <linux/interrupt.h> /* mark_bh */
+#include <linux/errno.h>
+#include <linux/types.h>
+#include <linux/interrupt.h>
 
 #include <linux/in.h>
 #include <linux/in6.h>
@@ -33,9 +33,6 @@
 #include <asm/ip32/ip32_ints.h>
 
 #include <asm/io.h>
-#include <asm/checksum.h>
-#include <asm/scatterlist.h>
-#include <linux/dma-mapping.h>
 
 #include "meth.h"
 
@@ -53,8 +50,6 @@
 
 
 static const char *meth_str="SGI O2 Fast Ethernet";
-MODULE_AUTHOR("Ilya Volynets <ilya@theIlya.com>");
-MODULE_DESCRIPTION("SGI O2 Builtin Fast Ethernet driver");
 
 #define HAVE_TX_TIMEOUT
 /* The maximum time waited (in jiffies) before assuming a Tx failed. (400ms) */
@@ -70,7 +65,6 @@ module_param(timeout, int, 0);
  * packets in and out, so there is place for a packet
  */
 struct meth_private {
-	struct net_device_stats stats;
 	/* in-memory copy of MAC Control register */
 	unsigned long mac_ctrl;
 	/* in-memory copy of DMA Control register */
@@ -92,20 +86,23 @@ struct meth_private {
 };
 
 static void meth_tx_timeout(struct net_device *dev);
-static irqreturn_t meth_interrupt(int irq, void *dev_id, struct pt_regs *pregs);
-        
+static irqreturn_t meth_interrupt(int irq, void *dev_id);
+
 /* global, initialized in ip32-setup.c */
 char o2meth_eaddr[8]={0,0,0,0,0,0,0,0};
 
 static inline void load_eaddr(struct net_device *dev)
 {
 	int i;
-	DPRINTK("Loading MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
-		(int)o2meth_eaddr[0]&0xFF,(int)o2meth_eaddr[1]&0xFF,(int)o2meth_eaddr[2]&0xFF,
-		(int)o2meth_eaddr[3]&0xFF,(int)o2meth_eaddr[4]&0xFF,(int)o2meth_eaddr[5]&0xFF);
+	DECLARE_MAC_BUF(mac);
+	u64 macaddr;
+
+	DPRINTK("Loading MAC Address: %s\n", print_mac(mac, dev->dev_addr));
+	macaddr = 0;
 	for (i = 0; i < 6; i++)
-		dev->dev_addr[i] = o2meth_eaddr[i];
-	mace->eth.mac_addr = (*(unsigned long*)o2meth_eaddr) >> 16;
+		macaddr |= dev->dev_addr[i] << ((5 - i) * 8);
+
+	mace->eth.mac_addr = macaddr;
 }
 
 /*
@@ -172,7 +169,7 @@ static int mdio_probe(struct meth_private *priv)
 
 static void meth_check_link(struct net_device *dev)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long mii_advertising = mdio_read(priv, 4);
 	unsigned long mii_partner = mdio_read(priv, 5);
 	unsigned long negotiated = mii_advertising & mii_partner;
@@ -232,7 +229,7 @@ static int meth_init_rx_ring(struct meth_private *priv)
 		skb_reserve(priv->rx_skbs[i],METH_RX_HEAD);
 		priv->rx_ring[i]=(rx_packet*)(priv->rx_skbs[i]->head);
 		/* I'll need to re-sync it after each RX */
-		priv->rx_ring_dmas[i] = 
+		priv->rx_ring_dmas[i] =
 			dma_map_single(NULL, priv->rx_ring[i],
 				       METH_RX_BUFF_SIZE, DMA_FROM_DEVICE);
 		mace->eth.rx_fifo = priv->rx_ring_dmas[i];
@@ -270,7 +267,7 @@ static void meth_free_rx_ring(struct meth_private *priv)
 
 int meth_reset(struct net_device *dev)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 
 	/* Reset card */
 	mace->eth.mac_ctrl = SGI_MAC_RESET;
@@ -281,7 +278,7 @@ int meth_reset(struct net_device *dev)
 	/* Load ethernet address */
 	load_eaddr(dev);
 	/* Should load some "errata", but later */
-	
+
 	/* Check for device */
 	if (mdio_probe(priv) < 0) {
 		DPRINTK("Unable to find PHY\n");
@@ -312,7 +309,7 @@ int meth_reset(struct net_device *dev)
  */
 static int meth_open(struct net_device *dev)
 {
-	struct meth_private *priv = dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	int ret;
 
 	priv->phy_addr = -1;    /* No PHY is known yet... */
@@ -356,7 +353,7 @@ out_free_tx_ring:
 
 static int meth_release(struct net_device *dev)
 {
-	struct meth_private *priv = dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 
 	DPRINTK("Stopping queue\n");
 	netif_stop_queue(dev); /* can't transmit any more */
@@ -378,7 +375,7 @@ static void meth_rx(struct net_device* dev, unsigned long int_status)
 {
 	struct sk_buff *skb;
 	unsigned long status;
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long fifo_rptr = (int_status & METH_INT_RX_RPTR_MASK) >> 8;
 
 	spin_lock(&priv->meth_lock);
@@ -405,15 +402,15 @@ static void meth_rx(struct net_device* dev, unsigned long int_status)
 				printk(KERN_DEBUG "%s: bogus packet size: %ld, status=%#2lx.\n",
 				       dev->name, priv->rx_write,
 				       priv->rx_ring[priv->rx_write]->status.raw);
-				priv->stats.rx_errors++;
-				priv->stats.rx_length_errors++;
+				dev->stats.rx_errors++;
+				dev->stats.rx_length_errors++;
 				skb = priv->rx_skbs[priv->rx_write];
 			} else {
-				skb = alloc_skb(METH_RX_BUFF_SIZE, GFP_ATOMIC | GFP_DMA);
+				skb = alloc_skb(METH_RX_BUFF_SIZE, GFP_ATOMIC);
 				if (!skb) {
 					/* Ouch! No memory! Drop packet on the floor */
 					DPRINTK("No mem: dropping packet\n");
-					priv->stats.rx_dropped++;
+					dev->stats.rx_dropped++;
 					skb = priv->rx_skbs[priv->rx_write];
 				} else {
 					struct sk_buff *skb_c = priv->rx_skbs[priv->rx_write];
@@ -423,16 +420,15 @@ static void meth_rx(struct net_device* dev, unsigned long int_status)
 					/* Write metadata, and then pass to the receive level */
 					skb_put(skb_c, len);
 					priv->rx_skbs[priv->rx_write] = skb;
-					skb_c->dev = dev;
 					skb_c->protocol = eth_type_trans(skb_c, dev);
 					dev->last_rx = jiffies;
-					priv->stats.rx_packets++;
-					priv->stats.rx_bytes += len;
+					dev->stats.rx_packets++;
+					dev->stats.rx_bytes += len;
 					netif_rx(skb_c);
 				}
 			}
 		} else {
-			priv->stats.rx_errors++;
+			dev->stats.rx_errors++;
 			skb=priv->rx_skbs[priv->rx_write];
 #if MFE_DEBUG>0
 			printk(KERN_WARNING "meth: RX error: status=0x%016lx\n",status);
@@ -452,7 +448,7 @@ static void meth_rx(struct net_device* dev, unsigned long int_status)
 		}
 		priv->rx_ring[priv->rx_write] = (rx_packet*)skb->head;
 		priv->rx_ring[priv->rx_write]->status.raw = 0;
-		priv->rx_ring_dmas[priv->rx_write] = 
+		priv->rx_ring_dmas[priv->rx_write] =
 			dma_map_single(NULL, priv->rx_ring[priv->rx_write],
 				       METH_RX_BUFF_SIZE, DMA_FROM_DEVICE);
 		mace->eth.rx_fifo = priv->rx_ring_dmas[priv->rx_write];
@@ -468,14 +464,14 @@ static void meth_rx(struct net_device* dev, unsigned long int_status)
 
 static int meth_tx_full(struct net_device *dev)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 
 	return (priv->tx_count >= TX_RING_ENTRIES - 1);
 }
 
 static void meth_tx_cleanup(struct net_device* dev, unsigned long int_status)
 {
-	struct meth_private *priv = dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long status;
 	struct sk_buff *skb;
 	unsigned long rptr = (int_status&TX_INFO_RPTR) >> 16;
@@ -495,10 +491,10 @@ static void meth_tx_cleanup(struct net_device* dev, unsigned long int_status)
 #endif
 		if (status & METH_TX_ST_DONE) {
 			if (status & METH_TX_ST_SUCCESS){
-				priv->stats.tx_packets++;
-				priv->stats.tx_bytes += skb->len;
+				dev->stats.tx_packets++;
+				dev->stats.tx_bytes += skb->len;
 			} else {
-				priv->stats.tx_errors++;
+				dev->stats.tx_errors++;
 #if MFE_DEBUG>=1
 				DPRINTK("TX error: status=%016lx <",status);
 				if(status & METH_TX_ST_SUCCESS)
@@ -538,7 +534,7 @@ static void meth_tx_cleanup(struct net_device* dev, unsigned long int_status)
 
 static void meth_error(struct net_device* dev, unsigned status)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 
 	printk(KERN_WARNING "meth: error status: 0x%08x\n",status);
 	/* check for errors too... */
@@ -555,7 +551,7 @@ static void meth_error(struct net_device* dev, unsigned status)
 		printk(KERN_WARNING "meth: Rx underflow\n");
 		spin_lock(&priv->meth_lock);
 		mace->eth.int_stat = METH_INT_RX_UNDERFLOW;
-		/* more underflow interrupts will be delivered, 
+		/* more underflow interrupts will be delivered,
 		 * effectively throwing us into an infinite loop.
 		 *  Thus I stop processing Rx in this case. */
 		priv->dma_ctrl &= ~METH_DMA_RX_EN;
@@ -569,10 +565,10 @@ static void meth_error(struct net_device* dev, unsigned status)
 /*
  * The typical interrupt entry point
  */
-static irqreturn_t meth_interrupt(int irq, void *dev_id, struct pt_regs *pregs)
+static irqreturn_t meth_interrupt(int irq, void *dev_id)
 {
 	struct net_device *dev = (struct net_device *)dev_id;
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long status;
 
 	status = mace->eth.int_stat;
@@ -611,7 +607,7 @@ static void meth_tx_short_prepare(struct meth_private *priv,
 
 	desc->header.raw = METH_TX_CMD_INT_EN | (len-1) | ((128-len) << 16);
 	/* maybe I should set whole thing to 0 first... */
-	memcpy(desc->data.dt + (120 - len), skb->data, skb->len);
+	skb_copy_from_linear_data(skb, desc->data.dt + (120 - len), skb->len);
 	if (skb->len < len)
 		memset(desc->data.dt + 120 - len + skb->len, 0, len-skb->len);
 }
@@ -629,8 +625,8 @@ static void meth_tx_1page_prepare(struct meth_private *priv,
 
 	/* unaligned part */
 	if (unaligned_len) {
-		memcpy(desc->data.dt + (120 - unaligned_len),
-		       skb->data, unaligned_len);
+		skb_copy_from_linear_data(skb, desc->data.dt + (120 - unaligned_len),
+			      unaligned_len);
 		desc->header.raw |= (128 - unaligned_len) << 16;
 	}
 
@@ -655,8 +651,8 @@ static void meth_tx_2page_prepare(struct meth_private *priv,
 	desc->header.raw = METH_TX_CMD_INT_EN | TX_CATBUF1 | TX_CATBUF2| (skb->len - 1);
 	/* unaligned part */
 	if (unaligned_len){
-		memcpy(desc->data.dt + (120 - unaligned_len),
-		       skb->data, unaligned_len);
+		skb_copy_from_linear_data(skb, desc->data.dt + (120 - unaligned_len),
+			      unaligned_len);
 		desc->header.raw |= (128 - unaligned_len) << 16;
 	}
 
@@ -697,7 +693,7 @@ static void meth_add_to_tx_ring(struct meth_private *priv, struct sk_buff *skb)
  */
 static int meth_tx(struct sk_buff *skb, struct net_device *dev)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long flags;
 
 	spin_lock_irqsave(&priv->meth_lock, flags);
@@ -728,7 +724,7 @@ static int meth_tx(struct sk_buff *skb, struct net_device *dev)
  */
 static void meth_tx_timeout(struct net_device *dev)
 {
-	struct meth_private *priv = (struct meth_private *) dev->priv;
+	struct meth_private *priv = netdev_priv(dev);
 	unsigned long flags;
 
 	printk(KERN_WARNING "%s: transmit timed out\n", dev->name);
@@ -739,7 +735,7 @@ static void meth_tx_timeout(struct net_device *dev)
 	/* Try to reset the interface. */
 	meth_reset(dev);
 
-	priv->stats.tx_errors++;
+	dev->stats.tx_errors++;
 
 	/* Clear all rings */
 	meth_free_tx_ring(priv);
@@ -761,12 +757,12 @@ static void meth_tx_timeout(struct net_device *dev)
 }
 
 /*
- * Ioctl commands 
+ * Ioctl commands
  */
 static int meth_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 {
 	/* XXX Not yet implemented */
-	switch(cmd) { 
+	switch(cmd) {
 	case SIOCGMIIPHY:
 	case SIOCGMIIREG:
 	case SIOCSMIIREG:
@@ -778,44 +774,39 @@ static int meth_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 /*
  * Return statistics to the caller
  */
-static struct net_device_stats *meth_stats(struct net_device *dev)
-{
-	struct meth_private *priv = (struct meth_private *) dev->priv;
-	return &priv->stats;
-}
-
 /*
  * The init function.
  */
-static struct net_device *meth_init(void)
+static int __init meth_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
 	struct meth_private *priv;
-	int ret;
+	int err;
 
 	dev = alloc_etherdev(sizeof(struct meth_private));
 	if (!dev)
-		return ERR_PTR(-ENOMEM);
+		return -ENOMEM;
 
 	dev->open            = meth_open;
 	dev->stop            = meth_release;
 	dev->hard_start_xmit = meth_tx;
 	dev->do_ioctl        = meth_ioctl;
-	dev->get_stats       = meth_stats;
 #ifdef HAVE_TX_TIMEOUT
 	dev->tx_timeout      = meth_tx_timeout;
 	dev->watchdog_timeo  = timeout;
 #endif
 	dev->irq	     = MACE_ETHERNET_IRQ;
 	dev->base_addr	     = (unsigned long)&mace->eth;
+	memcpy(dev->dev_addr, o2meth_eaddr, 6);
 
-	priv = (struct meth_private *) dev->priv;
+	priv = netdev_priv(dev);
 	spin_lock_init(&priv->meth_lock);
+	SET_NETDEV_DEV(dev, &pdev->dev);
 
-	ret = register_netdev(dev);
-	if (ret) {
+	err = register_netdev(dev);
+	if (err) {
 		free_netdev(dev);
-		return ERR_PTR(ret);
+		return err;
 	}
 
 	printk(KERN_INFO "%s: SGI MACE Ethernet rev. %d\n",
@@ -823,21 +814,44 @@ static struct net_device *meth_init(void)
 	return 0;
 }
 
-static struct net_device *meth_dev;
+static int __exit meth_remove(struct platform_device *pdev)
+{
+	struct net_device *dev = platform_get_drvdata(pdev);
+
+	unregister_netdev(dev);
+	free_netdev(dev);
+	platform_set_drvdata(pdev, NULL);
+
+	return 0;
+}
+
+static struct platform_driver meth_driver = {
+	.probe	= meth_probe,
+	.remove	= __devexit_p(meth_remove),
+	.driver = {
+		.name	= "meth",
+	}
+};
 
 static int __init meth_init_module(void)
 {
-	meth_dev = meth_init();
-	if (IS_ERR(meth_dev))
-		return PTR_ERR(meth_dev);
-	return 0;
+	int err;
+
+	err = platform_driver_register(&meth_driver);
+	if (err)
+		printk(KERN_ERR "Driver registration failed\n");
+
+	return err;
 }
 
 static void __exit meth_exit_module(void)
 {
-	unregister_netdev(meth_dev);
-	free_netdev(meth_dev);
+	platform_driver_unregister(&meth_driver);
 }
 
 module_init(meth_init_module);
 module_exit(meth_exit_module);
+
+MODULE_AUTHOR("Ilya Volynets <ilya@theIlya.com>");
+MODULE_DESCRIPTION("SGI O2 Builtin Fast Ethernet driver");
+MODULE_LICENSE("GPL");

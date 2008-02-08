@@ -42,7 +42,7 @@
 #define DRV_RELDATE	"11/24/03"
 #define DRV_AUTHOR	"David S. Miller (davem@redhat.com)"
 
-static char version[] __initdata =
+static char version[] =
 	DRV_NAME ".c:v" DRV_VERSION " " DRV_RELDATE " " DRV_AUTHOR "\n";
 
 MODULE_VERSION(DRV_VERSION);
@@ -855,13 +855,12 @@ static void bigmac_rx(struct bigmac *bp)
 				drops++;
 				goto drop_it;
 			}
-			copy_skb->dev = bp->dev;
 			skb_reserve(copy_skb, 2);
 			skb_put(copy_skb, len);
 			sbus_dma_sync_single_for_cpu(bp->bigmac_sdev,
 						     this->rx_addr, len,
 						     SBUS_DMA_FROMDEVICE);
-			eth_copy_and_sum(copy_skb, (unsigned char *)skb->data, len, 0);
+			skb_copy_to_linear_data(copy_skb, (unsigned char *)skb->data, len);
 			sbus_dma_sync_single_for_device(bp->bigmac_sdev,
 							this->rx_addr, len,
 							SBUS_DMA_FROMDEVICE);
@@ -888,7 +887,7 @@ static void bigmac_rx(struct bigmac *bp)
 		printk(KERN_NOTICE "%s: Memory squeeze, deferring packet.\n", bp->dev->name);
 }
 
-static irqreturn_t bigmac_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t bigmac_interrupt(int irq, void *dev_id)
 {
 	struct bigmac *bp = (struct bigmac *) dev_id;
 	u32 qec_status, bmac_status;
@@ -1071,7 +1070,7 @@ static u32 bigmac_get_link(struct net_device *dev)
 	return (bp->sw_bmsr & BMSR_LSTATUS);
 }
 
-static struct ethtool_ops bigmac_ethtool_ops = {
+static const struct ethtool_ops bigmac_ethtool_ops = {
 	.get_drvinfo		= bigmac_get_drvinfo,
 	.get_link		= bigmac_get_link,
 };
@@ -1083,12 +1082,12 @@ static int __init bigmac_ether_init(struct sbus_dev *qec_sdev)
 	struct bigmac *bp;
 	u8 bsizes, bsizes_more;
 	int i;
+	DECLARE_MAC_BUF(mac);
 
 	/* Get a new device struct for this interface. */
 	dev = alloc_etherdev(sizeof(struct bigmac));
 	if (!dev)
 		return -ENOMEM;
-	SET_MODULE_OWNER(dev);
 
 	if (version_printed++ == 0)
 		printk(KERN_INFO "%s", version);
@@ -1228,11 +1227,8 @@ static int __init bigmac_ether_init(struct sbus_dev *qec_sdev)
 
 	dev_set_drvdata(&bp->bigmac_sdev->ofdev.dev, bp);
 
-	printk(KERN_INFO "%s: BigMAC 100baseT Ethernet ", dev->name);
-	for (i = 0; i < 6; i++)
-		printk("%2.2x%c", dev->dev_addr[i],
-		       i == 5 ? ' ' : ':');
-	printk("\n");
+	printk(KERN_INFO "%s: BigMAC 100baseT Ethernet %s\n",
+	       dev->name, print_mac(mac, dev->dev_addr));
 
 	return 0;
 

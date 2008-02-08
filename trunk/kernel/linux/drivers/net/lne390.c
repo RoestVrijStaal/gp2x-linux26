@@ -111,8 +111,6 @@ static int __init do_lne390_probe(struct net_device *dev)
 	int mem_start = dev->mem_start;
 	int ret;
 
-	SET_MODULE_OWNER(dev);
-
 	if (ioaddr > 0x1ff) {		/* Check a single specified location. */
 		if (!request_region(ioaddr, LNE390_IO_EXTENT, DRV_NAME))
 			return -EBUSY;
@@ -171,6 +169,7 @@ static int __init lne390_probe1(struct net_device *dev, int ioaddr)
 {
 	int i, revision, ret;
 	unsigned long eisa_id;
+	DECLARE_MAC_BUF(mac);
 
 	if (inb_p(ioaddr + LNE390_ID_PORT) == 0xff) return -ENODEV;
 
@@ -188,7 +187,7 @@ static int __init lne390_probe1(struct net_device *dev, int ioaddr)
 	}
 
 	revision = (eisa_id >> 24) & 0x01;	/* 0 = rev A, 1 rev B */
-	
+
 #if 0
 /*	Check the Mylex vendor ID as well. Not really required. */
 	if (inb(ioaddr + LNE390_SA_PROM + 0) != LNE390_ADDR0
@@ -202,10 +201,12 @@ static int __init lne390_probe1(struct net_device *dev, int ioaddr)
 	}
 #endif
 
-	printk("lne390.c: LNE390%X in EISA slot %d, address", 0xa+revision, ioaddr/0x1000);
 	for(i = 0; i < ETHER_ADDR_LEN; i++)
-		printk(" %02x", (dev->dev_addr[i] = inb(ioaddr + LNE390_SA_PROM + i)));
-	printk(".\nlne390.c: ");
+		dev->dev_addr[i] = inb(ioaddr + LNE390_SA_PROM + i);
+	printk("lne390.c: LNE390%X in EISA slot %d, address %s.\n",
+	       0xa+revision, ioaddr/0x1000, print_mac(mac, dev->dev_addr));
+
+	printk("lne390.c: ");
 
 	/* Snarf the interrupt now. CFG file has them all listed as `edge' with share=NO */
 	if (dev->irq == 0) {
@@ -341,7 +342,7 @@ lne390_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr, int ring_
 	hdr->count = (hdr->count + 3) & ~3;     /* Round up allocation. */
 }
 
-/*	
+/*
  *	Block input and output are easy on shared memory ethercards, the only
  *	complication is when the ring buffer wraps. The count will already
  *	be rounded up to a doubleword value via lne390_get_8390_hdr() above.
@@ -440,7 +441,7 @@ static void cleanup_card(struct net_device *dev)
 	iounmap(ei_status.mem);
 }
 
-void cleanup_module(void)
+void __exit cleanup_module(void)
 {
 	int this_dev;
 

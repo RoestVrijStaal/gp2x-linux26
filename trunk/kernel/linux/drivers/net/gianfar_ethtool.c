@@ -10,13 +10,12 @@
  *
  *  Copyright (c) 2003,2004 Freescale Semiconductor, Inc.
  *
- *  This software may be used and distributed according to 
- *  the terms of the GNU Public License, Version 2, incorporated herein 
+ *  This software may be used and distributed according to
+ *  the terms of the GNU Public License, Version 2, incorporated herein
  *  by reference.
  */
 
 #include <linux/kernel.h>
-#include <linux/sched.h>
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
@@ -35,14 +34,11 @@
 #include <linux/module.h>
 #include <linux/crc32.h>
 #include <asm/types.h>
-#include <asm/uaccess.h>
 #include <linux/ethtool.h>
 #include <linux/mii.h>
 #include <linux/phy.h>
 
 #include "gianfar.h"
-
-#define is_power_of_2(x)        ((x) != 0 && (((x) & ((x) - 1)) == 0))
 
 extern void gfar_start(struct net_device *dev);
 extern int gfar_clean_rx_ring(struct net_device *dev, int rx_work_limit);
@@ -156,15 +152,19 @@ static void gfar_fill_stats(struct net_device *dev, struct ethtool_stats *dummy,
 			buf[i] = extra[i];
 }
 
-/* Returns the number of stats (and their corresponding strings) */
-static int gfar_stats_count(struct net_device *dev)
+static int gfar_sset_count(struct net_device *dev, int sset)
 {
 	struct gfar_private *priv = netdev_priv(dev);
 
-	if (priv->einfo->device_flags & FSL_GIANFAR_DEV_HAS_RMON)
-		return GFAR_STATS_LEN;
-	else
-		return GFAR_EXTRA_STATS_LEN;
+	switch (sset) {
+	case ETH_SS_STATS:
+		if (priv->einfo->device_flags & FSL_GIANFAR_DEV_HAS_RMON)
+			return GFAR_STATS_LEN;
+		else
+			return GFAR_EXTRA_STATS_LEN;
+	default:
+		return -EOPNOTSUPP;
+	}
 }
 
 /* Fills in the drvinfo structure with some basic info */
@@ -175,8 +175,6 @@ static void gfar_gdrvinfo(struct net_device *dev, struct
 	strncpy(drvinfo->version, gfar_driver_version, GFAR_INFOSTR_LEN);
 	strncpy(drvinfo->fw_version, "N/A", GFAR_INFOSTR_LEN);
 	strncpy(drvinfo->bus_info, "N/A", GFAR_INFOSTR_LEN);
-	drvinfo->n_stats = GFAR_STATS_LEN;
-	drvinfo->testinfo_len = 0;
 	drvinfo->regdump_len = 0;
 	drvinfo->eedump_len = 0;
 }
@@ -202,7 +200,7 @@ static int gfar_gsettings(struct net_device *dev, struct ethtool_cmd *cmd)
 
 	if (NULL == phydev)
 		return -ENODEV;
-	
+
 	cmd->maxtxpkt = priv->txcount;
 	cmd->maxrxpkt = priv->rxcount;
 
@@ -281,7 +279,7 @@ static unsigned int gfar_ticks2usecs(struct gfar_private *priv, unsigned int tic
 static int gfar_gcoalesce(struct net_device *dev, struct ethtool_coalesce *cvals)
 {
 	struct gfar_private *priv = netdev_priv(dev);
-	
+
 	if (!(priv->einfo->device_flags & FSL_GIANFAR_DEV_HAS_COALESCE))
 		return -EOPNOTSUPP;
 
@@ -555,19 +553,19 @@ static uint32_t gfar_get_tx_csum(struct net_device *dev)
 }
 
 static uint32_t gfar_get_msglevel(struct net_device *dev)
-{       
+{
 	struct gfar_private *priv = netdev_priv(dev);
 	return priv->msg_enable;
-}       
-        
+}
+
 static void gfar_set_msglevel(struct net_device *dev, uint32_t data)
-{       
+{
 	struct gfar_private *priv = netdev_priv(dev);
 	priv->msg_enable = data;
 }
 
 
-struct ethtool_ops gfar_ethtool_ops = {
+const struct ethtool_ops gfar_ethtool_ops = {
 	.get_settings = gfar_gsettings,
 	.set_settings = gfar_ssettings,
 	.get_drvinfo = gfar_gdrvinfo,
@@ -579,7 +577,7 @@ struct ethtool_ops gfar_ethtool_ops = {
 	.get_ringparam = gfar_gringparam,
 	.set_ringparam = gfar_sringparam,
 	.get_strings = gfar_gstrings,
-	.get_stats_count = gfar_stats_count,
+	.get_sset_count = gfar_sset_count,
 	.get_ethtool_stats = gfar_fill_stats,
 	.get_rx_csum = gfar_get_rx_csum,
 	.get_tx_csum = gfar_get_tx_csum,

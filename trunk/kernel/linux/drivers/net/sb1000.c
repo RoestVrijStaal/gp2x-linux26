@@ -28,7 +28,7 @@
 
 	Small changes to make it work with 2.1.x kernels. Hopefully,
 	nothing major will change before official release of Linux 2.2.
-	
+
 	Merged with 2.2 - Alan Cox
 */
 
@@ -76,7 +76,6 @@ struct sb1000_private {
 	unsigned char rx_session_id[NPIDS];
 	unsigned char rx_frame_id[NPIDS];
 	unsigned char rx_pkt_type[NPIDS];
-	struct net_device_stats stats;
 };
 
 /* prototypes for Linux interface */
@@ -84,8 +83,7 @@ extern int sb1000_probe(struct net_device *dev);
 static int sb1000_open(struct net_device *dev);
 static int sb1000_dev_ioctl (struct net_device *dev, struct ifreq *ifr, int cmd);
 static int sb1000_start_xmit(struct sk_buff *skb, struct net_device *dev);
-static irqreturn_t sb1000_interrupt(int irq, void *dev_id, struct pt_regs *regs);
-static struct net_device_stats *sb1000_stats(struct net_device *dev);
+static irqreturn_t sb1000_interrupt(int irq, void *dev_id);
 static int sb1000_close(struct net_device *dev);
 
 
@@ -143,7 +141,7 @@ sb1000_probe_one(struct pnp_dev *pdev, const struct pnp_device_id *id)
 	unsigned short ioaddr[2], irq;
 	unsigned int serial_number;
 	int error = -ENODEV;
-	
+
 	if (pnp_device_attach(pdev) < 0)
 		return -ENODEV;
 	if (pnp_activate_dev(pdev) < 0)
@@ -153,12 +151,12 @@ sb1000_probe_one(struct pnp_dev *pdev, const struct pnp_device_id *id)
 		goto out_disable;
 	if (!pnp_irq_valid(pdev, 0))
 		goto out_disable;
-		
+
 	serial_number = pdev->card->serial;
-		
+
 	ioaddr[0] = pnp_port_start(pdev, 0);
 	ioaddr[1] = pnp_port_start(pdev, 0);
-		
+
 	irq = pnp_irq(pdev, 0);
 
 	if (!request_region(ioaddr[0], 16, "sb1000"))
@@ -172,7 +170,7 @@ sb1000_probe_one(struct pnp_dev *pdev, const struct pnp_device_id *id)
 		goto out_release_regions;
 	}
 
-		 
+
 	dev->base_addr = ioaddr[0];
 	/* mem_start holds the second I/O address */
 	dev->mem_start = ioaddr[1];
@@ -189,7 +187,6 @@ sb1000_probe_one(struct pnp_dev *pdev, const struct pnp_device_id *id)
 	 */
 	dev->flags = IFF_POINTOPOINT|IFF_NOARP;
 
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	if (sb1000_debug > 0)
@@ -200,7 +197,6 @@ sb1000_probe_one(struct pnp_dev *pdev, const struct pnp_device_id *id)
 	dev->do_ioctl		= sb1000_dev_ioctl;
 	dev->hard_start_xmit	= sb1000_start_xmit;
 	dev->stop		= sb1000_close;
-	dev->get_stats		= sb1000_stats;
 
 	/* hardware address is 0:0:serial_number */
 	dev->dev_addr[2]	= serial_number >> 24 & 0xff;
@@ -246,7 +242,7 @@ static struct pnp_driver sb1000_driver = {
 	.remove		= sb1000_remove_one,
 };
 
-
+
 /*
  * SB1000 hardware routines to be used during open/configuration phases
  */
@@ -351,7 +347,7 @@ card_send_command(const int ioaddr[], const char* name,
 	return 0;
 }
 
-
+
 /*
  * SB1000 hardware routines to be used during frame rx interrupt
  */
@@ -449,7 +445,7 @@ sb1000_issue_read_command(const int ioaddr[], const char* name)
 	return;
 }
 
-
+
 /*
  * SB1000 commands for open/configuration
  */
@@ -697,7 +693,7 @@ sb1000_set_PIDs(const int ioaddr[], const char* name, const short PID[])
 	return sb1000_end_get_set_command(ioaddr, name);
 }
 
-
+
 static inline void
 sb1000_print_status_buffer(const char* name, unsigned char st[],
 	unsigned char buffer[], int size)
@@ -740,7 +736,7 @@ sb1000_rx(struct net_device *dev)
 	unsigned int skbsize;
 	struct sk_buff *skb;
 	struct sb1000_private *lp = netdev_priv(dev);
-	struct net_device_stats *stats = &lp->stats;
+	struct net_device_stats *stats = &dev->stats;
 
 	/* SB1000 frame constants */
 	const int FrameSize = FRAMESIZE;
@@ -834,7 +830,7 @@ printk("cm0: IP identification: %02x%02x  fragment offset: %02x%02x\n", buffer[3
 			goto dropped_frame;
 		}
 		skb->dev = dev;
-		skb->mac.raw = skb->data;
+		skb_reset_mac_header(skb);
 		skb->protocol = (unsigned short) buffer[NewDatagramHeaderSkip + 16];
 		insw(ioaddr, skb_put(skb, NewDatagramDataSize),
 			NewDatagramDataSize / 2);
@@ -916,7 +912,7 @@ sb1000_error_dpc(struct net_device *dev)
 	return;
 }
 
-
+
 /*
  * Linux interface functions
  */
@@ -1003,11 +999,11 @@ static int sb1000_dev_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 
 	switch (cmd) {
 	case SIOCGCMSTATS:		/* get statistics */
-		stats[0] = lp->stats.rx_bytes;
+		stats[0] = dev->stats.rx_bytes;
 		stats[1] = lp->rx_frames;
-		stats[2] = lp->stats.rx_packets;
-		stats[3] = lp->stats.rx_errors;
-		stats[4] = lp->stats.rx_dropped;
+		stats[2] = dev->stats.rx_packets;
+		stats[3] = dev->stats.rx_errors;
+		stats[4] = dev->stats.rx_dropped;
 		if(copy_to_user(ifr->ifr_data, stats, sizeof(stats)))
 			return -EFAULT;
 		status = 0;
@@ -1079,23 +1075,17 @@ sb1000_start_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 
 /* SB1000 interrupt handler. */
-static irqreturn_t sb1000_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t sb1000_interrupt(int irq, void *dev_id)
 {
 	char *name;
 	unsigned char st;
 	int ioaddr[2];
-	struct net_device *dev = (struct net_device *) dev_id;
+	struct net_device *dev = dev_id;
 	struct sb1000_private *lp = netdev_priv(dev);
 
 	const unsigned char Command0[6] = {0x80, 0x2c, 0x00, 0x00, 0x00, 0x00};
 	const unsigned char Command1[6] = {0x80, 0x2e, 0x00, 0x00, 0x00, 0x00};
 	const int MaxRxErrorCount = 6;
-
-	if (dev == NULL) {
-		printk(KERN_ERR "sb1000_interrupt(): irq %d for unknown device.\n",
-			irq);
-		return IRQ_NONE;
-	}
 
 	ioaddr[0] = dev->base_addr;
 	/* mem_start holds the second I/O address */
@@ -1139,12 +1129,6 @@ static irqreturn_t sb1000_interrupt(int irq, void *dev_id, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static struct net_device_stats *sb1000_stats(struct net_device *dev)
-{
-	struct sb1000_private *lp = netdev_priv(dev);
-	return &lp->stats;
-}
-
 static int sb1000_close(struct net_device *dev)
 {
 	int i;
@@ -1155,7 +1139,7 @@ static int sb1000_close(struct net_device *dev)
 		printk(KERN_DEBUG "%s: Shutting down sb1000.\n", dev->name);
 
 	netif_stop_queue(dev);
-	
+
 	ioaddr[0] = dev->base_addr;
 	/* mem_start holds the second I/O address */
 	ioaddr[1] = dev->mem_start;
