@@ -3,7 +3,7 @@
 
 /*
  *  Digital Audio (PCM) abstract layer
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *                   Abramo Bagnara <abramo@alsa-project.org>
  *
  *
@@ -26,6 +26,7 @@
 #include <sound/asound.h>
 #include <sound/memalloc.h>
 #include <linux/poll.h>
+#include <linux/mm.h>
 #include <linux/bitops.h>
 
 #define snd_pcm_substream_chip(substream) ((substream)->private_data)
@@ -54,6 +55,8 @@ struct snd_pcm_hardware {
 	unsigned int periods_max;	/* max # of periods */
 	size_t fifo_size;		/* fifo size in bytes */
 };
+
+struct snd_pcm_substream;
 
 struct snd_pcm_ops {
 	int (*open)(struct snd_pcm_substream *substream);
@@ -190,7 +193,7 @@ struct snd_pcm_ops {
 
 struct snd_pcm_file {
 	struct snd_pcm_substream *substream;
-	struct snd_pcm_file *next;
+	int no_compat_mmap;
 };
 
 struct snd_pcm_hw_rule;
@@ -298,8 +301,8 @@ struct snd_pcm_runtime {
 	union snd_pcm_sync_id sync;	/* hardware synchronization ID */
 
 	/* -- mmap -- */
-	volatile struct snd_pcm_mmap_status *status;
-	volatile struct snd_pcm_mmap_control *control;
+	struct snd_pcm_mmap_status *status;
+	struct snd_pcm_mmap_control *control;
 
 	/* -- locking / scheduling -- */
 	wait_queue_head_t sleep;
@@ -347,6 +350,7 @@ struct snd_pcm_substream {
 	int number;
 	char name[32];			/* substream name */
 	int stream;			/* stream (direction) */
+	char latency_id[20];		/* latency identifier */
 	size_t buffer_bytes_max;	/* limit ring buffer size */
 	struct snd_dma_buffer dma_buffer;
 	unsigned int dma_buf_id;
@@ -382,9 +386,9 @@ struct snd_pcm_substream {
 	struct snd_info_entry *proc_sw_params_entry;
 	struct snd_info_entry *proc_status_entry;
 	struct snd_info_entry *proc_prealloc_entry;
+	struct snd_info_entry *proc_prealloc_max_entry;
 #endif
 	/* misc flags */
-	unsigned int no_mmap_ctrl: 1;
 	unsigned int hw_opened: 1;
 };
 
@@ -402,7 +406,6 @@ struct snd_pcm_str {
 	/* -- OSS things -- */
 	struct snd_pcm_oss_stream oss;
 #endif
-	struct snd_pcm_file *files;
 #ifdef CONFIG_SND_VERBOSE_PROCFS
 	struct snd_info_entry *proc_root;
 	struct snd_info_entry *proc_info_entry;
@@ -427,6 +430,7 @@ struct snd_pcm {
 	wait_queue_head_t open_wait;
 	void *private_data;
 	void (*private_free) (struct snd_pcm *pcm);
+	struct device *dev; /* actual hw device this belongs to */
 #if defined(CONFIG_SND_PCM_OSS) || defined(CONFIG_SND_PCM_OSS_MODULE)
 	struct snd_pcm_oss oss;
 #endif
@@ -443,7 +447,7 @@ struct snd_pcm_notify {
  *  Registering
  */
 
-extern struct file_operations snd_pcm_f_ops[2];
+extern const struct file_operations snd_pcm_f_ops[2];
 
 int snd_pcm_new(struct snd_card *card, char *id, int device,
 		int playback_count, int capture_count,
@@ -599,11 +603,8 @@ do { \
 	read_unlock_irqrestore(&snd_pcm_link_rwlock, (flags)); \
 } while (0)
 
-#define snd_pcm_group_for_each(pos, substream) \
-	list_for_each(pos, &substream->group->substreams)
-
-#define snd_pcm_group_substream_entry(pos) \
-	list_entry(pos, struct snd_pcm_substream, link_list)
+#define snd_pcm_group_for_each_entry(s, substream) \
+	list_for_each_entry(s, &substream->group->substreams, link_list)
 
 static inline int snd_pcm_running(struct snd_pcm_substream *substream)
 {
@@ -790,13 +791,13 @@ static inline struct snd_interval *hw_param_interval(struct snd_pcm_hw_params *p
 static inline const struct snd_mask *hw_param_mask_c(const struct snd_pcm_hw_params *params,
 					     snd_pcm_hw_param_t var)
 {
-	return (const struct snd_mask *)hw_param_mask((struct snd_pcm_hw_params*) params, var);
+	return &params->masks[var - SNDRV_PCM_HW_PARAM_FIRST_MASK];
 }
 
 static inline const struct snd_interval *hw_param_interval_c(const struct snd_pcm_hw_params *params,
 						     snd_pcm_hw_param_t var)
 {
-	return (const struct snd_interval *)hw_param_interval((struct snd_pcm_hw_params*) params, var);
+	return &params->intervals[var - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
 }
 
 #define params_access(p) snd_mask_min(hw_param_mask((p), SNDRV_PCM_HW_PARAM_ACCESS))
@@ -921,7 +922,10 @@ snd_pcm_sframes_t snd_pcm_lib_writev(struct snd_pcm_substream *substream,
 snd_pcm_sframes_t snd_pcm_lib_readv(struct snd_pcm_substream *substream,
 				    void __user **bufs, snd_pcm_uframes_t frames);
 
+extern const struct snd_pcm_hw_constraint_list snd_pcm_known_rates;
+
 int snd_pcm_limit_hw_rates(struct snd_pcm_runtime *runtime);
+unsigned int snd_pcm_rate_to_rate_bit(unsigned int rate);
 
 static inline void snd_pcm_set_runtime_buffer(struct snd_pcm_substream *substream,
 					      struct snd_dma_buffer *bufp)

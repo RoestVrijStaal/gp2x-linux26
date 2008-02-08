@@ -2,7 +2,7 @@
 #define __SOUND_AD1848_H
 
 /*
- *  Copyright (c) by Jaroslav Kysela <perex@suse.cz>
+ *  Copyright (c) by Jaroslav Kysela <perex@perex.cz>
  *  Definitions for AD1847/AD1848/CS4248 chips
  *
  *
@@ -27,7 +27,7 @@
 
 /* IO ports */
 
-#define AD1848P( codec, x ) ( (chip) -> port + c_d_c_AD1848##x )
+#define AD1848P( chip, x ) ( (chip) -> port + c_d_c_AD1848##x )
 
 #define c_d_c_AD1848REGSEL	0
 #define c_d_c_AD1848REG		1
@@ -154,7 +154,6 @@ struct snd_ad1848 {
 #endif
 
 	spinlock_t reg_lock;
-	struct mutex open_mutex;
 };
 
 /* exported functions */
@@ -179,14 +178,13 @@ enum { AD1848_MIX_SINGLE, AD1848_MIX_DOUBLE, AD1848_MIX_CAPTURE };
 #define AD1848_MIXVAL_DOUBLE(left_reg, right_reg, shift_left, shift_right, mask, invert) \
 	((left_reg) | ((right_reg) << 8) | ((shift_left) << 16) | ((shift_right) << 19) | ((mask) << 24) | ((invert) << 22))
 
-int snd_ad1848_add_ctl(struct snd_ad1848 *chip, const char *name, int index, int type, unsigned long value);
-
 /* for ease of use */
 struct ad1848_mix_elem {
 	const char *name;
 	int index;
 	int type;
 	unsigned long private_value;
+	const unsigned int *tlv;
 };
 
 #define AD1848_SINGLE(xname, xindex, reg, shift, mask, invert) \
@@ -195,15 +193,26 @@ struct ad1848_mix_elem {
   .type = AD1848_MIX_SINGLE, \
   .private_value = AD1848_MIXVAL_SINGLE(reg, shift, mask, invert) }
 
+#define AD1848_SINGLE_TLV(xname, xindex, reg, shift, mask, invert, xtlv) \
+{ .name = xname, \
+  .index = xindex, \
+  .type = AD1848_MIX_SINGLE, \
+  .private_value = AD1848_MIXVAL_SINGLE(reg, shift, mask, invert), \
+  .tlv = xtlv }
+
 #define AD1848_DOUBLE(xname, xindex, left_reg, right_reg, shift_left, shift_right, mask, invert) \
 { .name = xname, \
   .index = xindex, \
   .type = AD1848_MIX_DOUBLE, \
   .private_value = AD1848_MIXVAL_DOUBLE(left_reg, right_reg, shift_left, shift_right, mask, invert) }
 
-static inline int snd_ad1848_add_ctl_elem(struct snd_ad1848 *chip, const struct ad1848_mix_elem *c)
-{
-	return snd_ad1848_add_ctl(chip, c->name, c->index, c->type, c->private_value);
-}
+#define AD1848_DOUBLE_TLV(xname, xindex, left_reg, right_reg, shift_left, shift_right, mask, invert, xtlv) \
+{ .name = xname, \
+  .index = xindex, \
+  .type = AD1848_MIX_DOUBLE, \
+  .private_value = AD1848_MIXVAL_DOUBLE(left_reg, right_reg, shift_left, shift_right, mask, invert), \
+  .tlv = xtlv }
+
+int snd_ad1848_add_ctl_elem(struct snd_ad1848 *chip, const struct ad1848_mix_elem *c);
 
 #endif /* __SOUND_AD1848_H */
