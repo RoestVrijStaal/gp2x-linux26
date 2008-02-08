@@ -7,6 +7,7 @@
 #include <linux/compiler.h>
 #include <linux/errno.h>
 #include <linux/types.h>
+#include <linux/sched.h>
 #include <asm/segment.h>
 
 #define VERIFY_READ	0
@@ -76,7 +77,7 @@ asm volatile ("\n"					\
 		break;							\
 	case 8:								\
  	    {								\
- 		const void *__pu_ptr = (ptr);				\
+ 		const void __user *__pu_ptr = (ptr);			\
 		asm volatile ("\n"					\
 			"1:	moves.l	%2,(%1)+\n"			\
 			"2:	moves.l	%R2,(%1)\n"			\
@@ -125,7 +126,7 @@ asm volatile ("\n"					\
 		"	.previous"				\
 		: "+d" (res), "=&" #reg (__gu_val)		\
 		: "m" (*(ptr)), "i" (err));			\
-	(x) = (typeof(*(ptr)))(long)__gu_val;			\
+	(x) = (typeof(*(ptr)))(unsigned long)__gu_val;		\
 })
 
 #define __get_user(x, ptr)						\
@@ -221,16 +222,16 @@ __constant_copy_from_user(void *to, const void __user *from, unsigned long n)
 
 	switch (n) {
 	case 1:
-		__get_user_asm(res, *(u8 *)to, (u8 *)from, u8, b, d, 1);
+		__get_user_asm(res, *(u8 *)to, (u8 __user *)from, u8, b, d, 1);
 		break;
 	case 2:
-		__get_user_asm(res, *(u16 *)to, (u16 *)from, u16, w, d, 2);
+		__get_user_asm(res, *(u16 *)to, (u16 __user *)from, u16, w, d, 2);
 		break;
 	case 3:
 		__constant_copy_from_user_asm(res, to, from, tmp, 3, w, b,);
 		break;
 	case 4:
-		__get_user_asm(res, *(u32 *)to, (u32 *)from, u32, l, r, 4);
+		__get_user_asm(res, *(u32 *)to, (u32 __user *)from, u32, l, r, 4);
 		break;
 	case 5:
 		__constant_copy_from_user_asm(res, to, from, tmp, 5, l, b,);
@@ -302,16 +303,16 @@ __constant_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 	switch (n) {
 	case 1:
-		__put_user_asm(res, *(u8 *)from, (u8 *)to, b, d, 1);
+		__put_user_asm(res, *(u8 *)from, (u8 __user *)to, b, d, 1);
 		break;
 	case 2:
-		__put_user_asm(res, *(u16 *)from, (u16 *)to, w, d, 2);
+		__put_user_asm(res, *(u16 *)from, (u16 __user *)to, w, d, 2);
 		break;
 	case 3:
 		__constant_copy_to_user_asm(res, to, from, tmp, 3, w, b,);
 		break;
 	case 4:
-		__put_user_asm(res, *(u32 *)from, (u32 *)to, l, r, 4);
+		__put_user_asm(res, *(u32 *)from, (u32 __user *)to, l, r, 4);
 		break;
 	case 5:
 		__constant_copy_to_user_asm(res, to, from, tmp, 5, l, b,);
@@ -360,7 +361,9 @@ __constant_copy_to_user(void __user *to, const void *from, unsigned long n)
 
 long strncpy_from_user(char *dst, const char __user *src, long count);
 long strnlen_user(const char __user *src, long n);
-unsigned long clear_user(void __user *to, unsigned long n);
+unsigned long __clear_user(void __user *to, unsigned long n);
+
+#define clear_user	__clear_user
 
 #define strlen_user(str) strnlen_user(str, 32767)
 
