@@ -25,31 +25,25 @@
 
 static void disable_hd64465_irq(unsigned int irq)
 {
-	unsigned long flags;
 	unsigned short nimr;
 	unsigned short mask = 1 << (irq - HD64465_IRQ_BASE);
 
     	pr_debug("disable_hd64465_irq(%d): mask=%x\n", irq, mask);
-	local_irq_save(flags);
 	nimr = inw(HD64465_REG_NIMR);
 	nimr |= mask;
 	outw(nimr, HD64465_REG_NIMR);
-	local_irq_restore(flags);
 }
 
 
 static void enable_hd64465_irq(unsigned int irq)
 {
-	unsigned long flags;
 	unsigned short nimr;
 	unsigned short mask = 1 << (irq - HD64465_IRQ_BASE);
 
     	pr_debug("enable_hd64465_irq(%d): mask=%x\n", irq, mask);
-	local_irq_save(flags);
 	nimr = inw(HD64465_REG_NIMR);
 	nimr &= ~mask;
 	outw(nimr, HD64465_REG_NIMR);
-	local_irq_restore(flags);
 }
 
 
@@ -90,7 +84,7 @@ static struct hw_interrupt_type hd64465_irq_type = {
 };
 
 
-static irqreturn_t hd64465_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+static irqreturn_t hd64465_interrupt(int irq, void *dev_id)
 {
 	printk(KERN_INFO
 	       "HD64465: spurious interrupt, nirr: 0x%x nimr: 0x%x\n",
@@ -153,7 +147,12 @@ int hd64465_irq_demux(int irq)
 	return irq;
 }
 
-static struct irqaction irq0  = { hd64465_interrupt, IRQF_DISABLED, CPU_MASK_NONE, "HD64465", NULL, NULL};
+static struct irqaction irq0  = {
+	.handler = hd64465_interrupt,
+	.flags = IRQF_DISABLED,
+	.mask = CPU_MASK_NONE,
+	.name = "HD64465",
+};
 
 
 static int __init setup_hd64465(void)
