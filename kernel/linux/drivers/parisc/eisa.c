@@ -33,7 +33,6 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/sched.h>
 #include <linux/spinlock.h>
 #include <linux/eisa.h>
 
@@ -199,7 +198,7 @@ static struct hw_interrupt_type eisa_interrupt_type = {
 	.end =		no_end_irq,
 };
 
-static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
+static irqreturn_t eisa_irq(int wax_irq, void *intr_dev)
 {
 	int irq = gsc_readb(0xfc01f000); /* EISA supports 16 irqs */
 	unsigned long flags;
@@ -234,7 +233,7 @@ static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
 	}
 	spin_unlock_irqrestore(&eisa_irq_lock, flags);
 
-	__do_IRQ(irq, regs);
+	__do_IRQ(irq);
    
 	spin_lock_irqsave(&eisa_irq_lock, flags);
 	/* unmask */
@@ -249,7 +248,7 @@ static irqreturn_t eisa_irq(int wax_irq, void *intr_dev, struct pt_regs *regs)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t dummy_irq2_handler(int _, void *dev, struct pt_regs *regs)
+static irqreturn_t dummy_irq2_handler(int _, void *dev)
 {
 	printk(KERN_ALERT "eisa: uhh, irq2?\n");
 	return IRQ_HANDLED;
@@ -308,7 +307,7 @@ static void init_eisa_pic(void)
 
 #define is_mongoose(dev) (dev->id.sversion == 0x00076)
 
-static int __devinit eisa_probe(struct parisc_device *dev)
+static int __init eisa_probe(struct parisc_device *dev)
 {
 	int i, result;
 
@@ -388,7 +387,7 @@ static int __devinit eisa_probe(struct parisc_device *dev)
 	return 0;
 }
 
-static struct parisc_device_id eisa_tbl[] = {
+static const struct parisc_device_id eisa_tbl[] = {
 	{ HPHW_BA, HVERSION_REV_ANY_ID, HVERSION_ANY_ID, 0x00076 }, /* Mongoose */
 	{ HPHW_BA, HVERSION_REV_ANY_ID, HVERSION_ANY_ID, 0x00090 }, /* Wax EISA */
 	{ 0, }
