@@ -175,12 +175,6 @@ static inline int pte_none(pte_t pte)
  * The following only work if pte_present() is true.
  * Undefined behaviour if not..
  */
-static inline int pte_user(pte_t pte)
-{
-	return((pte_get_bits(pte, _PAGE_USER)) &&
-	       !(pte_get_bits(pte, _PAGE_PROTNONE)));
-}
-
 static inline int pte_read(pte_t pte)
 { 
 	return((pte_get_bits(pte, _PAGE_USER)) &&
@@ -238,18 +232,6 @@ static inline pte_t pte_mknewprot(pte_t pte)
 	return(pte);
 }
 
-static inline pte_t pte_rdprotect(pte_t pte)
-{ 
-	pte_clear_bits(pte, _PAGE_USER);
-	return(pte_mknewprot(pte));
-}
-
-static inline pte_t pte_exprotect(pte_t pte)
-{ 
-	pte_clear_bits(pte, _PAGE_USER);
-	return(pte_mknewprot(pte));
-}
-
 static inline pte_t pte_mkclean(pte_t pte)
 {
 	pte_clear_bits(pte, _PAGE_DIRTY);
@@ -269,12 +251,6 @@ static inline pte_t pte_wrprotect(pte_t pte)
 }
 
 static inline pte_t pte_mkread(pte_t pte)
-{ 
-	pte_set_bits(pte, _PAGE_RW);
-	return(pte_mknewprot(pte)); 
-}
-
-static inline pte_t pte_mkexec(pte_t pte)
 { 
 	pte_set_bits(pte, _PAGE_USER);
 	return(pte_mknewprot(pte)); 
@@ -349,7 +325,7 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 	return pte; 
 }
 
-#define pmd_page_kernel(pmd) ((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
+#define pmd_page_vaddr(pmd) ((unsigned long) __va(pmd_val(pmd) & PAGE_MASK))
 
 /*
  * the pgd page can be thought of an array like this: pgd_t[PTRS_PER_PGD]
@@ -389,7 +365,7 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
  */
 #define pte_index(address) (((address) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
 #define pte_offset_kernel(dir, address) \
-	((pte_t *) pmd_page_kernel(*(dir)) +  pte_index(address))
+	((pte_t *) pmd_page_vaddr(*(dir)) +  pte_index(address))
 #define pte_offset_map(dir, address) \
 	((pte_t *)page_address(pmd_page(*(dir))) + pte_index(address))
 #define pte_offset_map_nested(dir, address) pte_offset_map(dir, address)
@@ -413,6 +389,15 @@ static inline pte_t pte_modify(pte_t pte, pgprot_t newprot)
 #include <asm-generic/pgtable.h>
 
 #include <asm-generic/pgtable-nopud.h>
+
+#ifdef CONFIG_HIGHMEM
+/* Clear a kernel PTE and flush it from the TLB */
+#define kpte_clear_flush(ptep, vaddr)					\
+do {									\
+	pte_clear(&init_mm, vaddr, ptep);				\
+	__flush_tlb_one(vaddr);						\
+} while (0)
+#endif
 
 #endif
 #endif

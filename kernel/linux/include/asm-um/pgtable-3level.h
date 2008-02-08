@@ -69,16 +69,17 @@ static inline pmd_t *pmd_alloc_one(struct mm_struct *mm, unsigned long address)
         return pmd;
 }
 
-extern inline void pud_clear (pud_t *pud)
+static inline void pud_clear (pud_t *pud)
 {
-        set_pud(pud, __pud(0));
+	set_pud(pud, __pud(_PAGE_NEWPAGE));
 }
 
-#define pud_page(pud) \
+#define pud_page(pud) phys_to_page(pud_val(pud) & PAGE_MASK)
+#define pud_page_vaddr(pud) \
 	((struct page *) __va(pud_val(pud) & PAGE_MASK))
 
 /* Find an entry in the second-level page table.. */
-#define pmd_offset(pud, address) ((pmd_t *) pud_page(*(pud)) + \
+#define pmd_offset(pud, address) ((pmd_t *) pud_page_vaddr(*(pud)) + \
 			pmd_index(address))
 
 static inline unsigned long pte_pfn(pte_t pte)
