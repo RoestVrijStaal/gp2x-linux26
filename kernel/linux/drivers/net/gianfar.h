@@ -45,7 +45,6 @@
 #include <linux/crc32.h>
 #include <linux/workqueue.h>
 #include <linux/ethtool.h>
-#include <linux/netdevice.h>
 #include <linux/fsl_devices.h>
 #include "gianfar_mii.h"
 
@@ -136,6 +135,12 @@ extern const char gfar_driver_version[];
 #define MIIMCFG_RESET           0x80000000
 #define MIIMIND_BUSY            0x00000001
 
+/* TBI register addresses */
+#define MII_TBICON		0x11
+
+/* TBICON register bit fields */
+#define TBICON_CLK_SELECT	0x0020
+
 /* MAC register bits */
 #define MACCFG1_SOFT_RESET	0x80000000
 #define MACCFG1_RESET_RX_MC	0x00080000
@@ -160,7 +165,10 @@ extern const char gfar_driver_version[];
 
 #define ECNTRL_INIT_SETTINGS	0x00001000
 #define ECNTRL_TBI_MODE         0x00000020
+#define ECNTRL_REDUCED_MODE	0x00000010
 #define ECNTRL_R100		0x00000008
+#define ECNTRL_REDUCED_MII_MODE	0x00000004
+#define ECNTRL_SGMII_MODE	0x00000002
 
 #define MRBLR_INIT_SETTINGS	DEFAULT_RX_BUFFER_SIZE
 
@@ -682,6 +690,9 @@ struct gfar_private {
 	/* RX Locked fields */
 	spinlock_t rxlock;
 
+	struct net_device *dev;
+	struct napi_struct napi;
+
 	/* skb array and index */
 	struct sk_buff ** rx_skbuff;
 	u16 skb_currx;
@@ -738,7 +749,6 @@ struct gfar_private {
 	uint32_t msg_enable;
 
 	/* Network Statistics */
-	struct net_device_stats stats;
 	struct gfar_extra_stats extra_stats;
 };
 
@@ -754,9 +764,7 @@ static inline void gfar_write(volatile unsigned __iomem *addr, u32 val)
 	out_be32(addr, val);
 }
 
-extern struct ethtool_ops *gfar_op_array[];
-
-extern irqreturn_t gfar_receive(int irq, void *dev_id, struct pt_regs *regs);
+extern irqreturn_t gfar_receive(int irq, void *dev_id);
 extern int startup_gfar(struct net_device *dev);
 extern void stop_gfar(struct net_device *dev);
 extern void gfar_halt(struct net_device *dev);

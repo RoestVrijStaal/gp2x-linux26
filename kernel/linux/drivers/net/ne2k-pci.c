@@ -63,8 +63,7 @@ static int options[MAX_UNITS];
 
 /* These identify the driver base version and may not be removed. */
 static char version[] __devinitdata =
-KERN_INFO DRV_NAME ".c:v" DRV_VERSION " " DRV_RELDATE " D. Becker/P. Gortmaker\n"
-KERN_INFO "  http://www.scyld.com/network/ne2k-pci.html\n";
+KERN_INFO DRV_NAME ".c:v" DRV_VERSION " " DRV_RELDATE " D. Becker/P. Gortmaker\n";
 
 #if defined(__powerpc__)
 #define inl_le(addr)  le32_to_cpu(inl(addr))
@@ -175,9 +174,9 @@ static void ne2k_pci_block_input(struct net_device *dev, int count,
 			  struct sk_buff *skb, int ring_offset);
 static void ne2k_pci_block_output(struct net_device *dev, const int count,
 		const unsigned char *buf, const int start_page);
-static struct ethtool_ops ne2k_pci_ethtool_ops;
+static const struct ethtool_ops ne2k_pci_ethtool_ops;
 
-
+
 
 /* There is no room in the standard 8390 structure for extra info we need,
    so we build a meta/outer-wrapper structure.. */
@@ -213,6 +212,7 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 	static unsigned int fnd_cnt;
 	long ioaddr;
 	int flags = pci_clone_list[chip_idx].flags;
+	DECLARE_MAC_BUF(mac);
 
 /* when built into the kernel, we only print version if device is found */
 #ifndef MODULE
@@ -266,7 +266,6 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 		dev_err(&pdev->dev, "cannot allocate ethernet device\n");
 		goto err_out_free_res;
 	}
-	SET_MODULE_OWNER(dev);
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	/* Reset card. Who knows what dain-bramaged state it was left in. */
@@ -309,7 +308,7 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 			{0x00,	EN0_RSARHI},
 			{E8390_RREAD+E8390_START, E8390_CMD},
 		};
-		for (i = 0; i < sizeof(program_seq)/sizeof(program_seq[0]); i++)
+		for (i = 0; i < ARRAY_SIZE(program_seq); i++)
 			outb(program_seq[i].value, ioaddr + program_seq[i].offset);
 
 	}
@@ -367,12 +366,12 @@ static int __devinit ne2k_pci_init_one (struct pci_dev *pdev,
 	if (i)
 		goto err_out_free_netdev;
 
-	printk("%s: %s found at %#lx, IRQ %d, ",
-		   dev->name, pci_clone_list[chip_idx].name, ioaddr, dev->irq);
-	for(i = 0; i < 6; i++) {
-		printk("%2.2X%s", SA_prom[i], i == 5 ? ".\n": ":");
+	for(i = 0; i < 6; i++)
 		dev->dev_addr[i] = SA_prom[i];
-	}
+	printk("%s: %s found at %#lx, IRQ %d, %s.\n",
+	       dev->name, pci_clone_list[chip_idx].name, ioaddr, dev->irq,
+	       print_mac(mac, dev->dev_addr));
+
 	memcpy(dev->perm_addr, dev->dev_addr, dev->addr_len);
 
 	return 0;
@@ -386,7 +385,7 @@ err_out_free_res:
 
 }
 
-/* 
+/*
  * Magic incantation sequence for full duplex on the supported cards.
  */
 static inline int set_realtek_fdx(struct net_device *dev)
@@ -411,7 +410,7 @@ static inline int set_holtek_fdx(struct net_device *dev)
 
 static int ne2k_pci_set_fdx(struct net_device *dev)
 {
-	if (ei_status.ne2k_flags & REALTEK_FDX) 
+	if (ei_status.ne2k_flags & REALTEK_FDX)
 		return set_realtek_fdx(dev);
 	else if (ei_status.ne2k_flags & HOLTEK_FDX)
 		return set_holtek_fdx(dev);
@@ -635,11 +634,8 @@ static void ne2k_pci_get_drvinfo(struct net_device *dev,
 	strcpy(info->bus_info, pci_name(pci_dev));
 }
 
-static struct ethtool_ops ne2k_pci_ethtool_ops = {
+static const struct ethtool_ops ne2k_pci_ethtool_ops = {
 	.get_drvinfo		= ne2k_pci_get_drvinfo,
-	.get_tx_csum		= ethtool_op_get_tx_csum,
-	.get_sg			= ethtool_op_get_sg,
-	.get_perm_addr		= ethtool_op_get_perm_addr,
 };
 
 static void __devexit ne2k_pci_remove_one (struct pci_dev *pdev)
@@ -670,10 +666,15 @@ static int ne2k_pci_suspend (struct pci_dev *pdev, pm_message_t state)
 static int ne2k_pci_resume (struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata (pdev);
+	int rc;
 
 	pci_set_power_state(pdev, 0);
 	pci_restore_state(pdev);
-	pci_enable_device(pdev);
+
+	rc = pci_enable_device(pdev);
+	if (rc)
+		return rc;
+
 	NS8390_init(dev, 1);
 	netif_device_attach(dev);
 
@@ -702,7 +703,7 @@ static int __init ne2k_pci_init(void)
 #ifdef MODULE
 	printk(version);
 #endif
-	return pci_module_init (&ne2k_driver);
+	return pci_register_driver(&ne2k_driver);
 }
 
 

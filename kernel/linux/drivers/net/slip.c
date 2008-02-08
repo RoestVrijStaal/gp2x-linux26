@@ -113,7 +113,7 @@ static int sl_ioctl(struct net_device *dev,struct ifreq *rq,int cmd);
 *	on actively running device.
 *********************************/
 
-/* 
+/*
    Allocate channel buffers.
  */
 
@@ -207,7 +207,7 @@ sl_free_bufs(struct slip *sl)
 #endif
 }
 
-/* 
+/*
    Reallocate slip channel buffers.
  */
 
@@ -229,10 +229,10 @@ static int sl_realloc_bufs(struct slip *sl, int mtu)
 	if (len < 576 * 2)
 		len = 576 * 2;
 
-	xbuff = (unsigned char *) kmalloc (len + 4, GFP_ATOMIC);
-	rbuff = (unsigned char *) kmalloc (len + 4, GFP_ATOMIC);
+	xbuff = kmalloc(len + 4, GFP_ATOMIC);
+	rbuff = kmalloc(len + 4, GFP_ATOMIC);
 #ifdef SL_INCLUDE_CSLIP
-	cbuff = (unsigned char *) kmalloc (len + 4, GFP_ATOMIC);
+	cbuff = kmalloc(len + 4, GFP_ATOMIC);
 #endif
 
 
@@ -354,7 +354,7 @@ sl_bump(struct slip *sl)
 #endif  /* SL_INCLUDE_CSLIP */
 
 	sl->rx_bytes+=count;
-	
+
 	skb = dev_alloc_skb(count);
 	if (skb == NULL)  {
 		printk(KERN_WARNING "%s: memory squeeze, dropping packet.\n", sl->dev->name);
@@ -363,7 +363,7 @@ sl_bump(struct slip *sl)
 	}
 	skb->dev = sl->dev;
 	memcpy(skb_put(skb,count), sl->rbuff, count);
-	skb->mac.raw=skb->data;
+	skb_reset_mac_header(skb);
 	skb->protocol=htons(ETH_P_IP);
 	netif_rx(skb);
 	sl->dev->last_rx = jiffies;
@@ -602,7 +602,7 @@ static int sl_init(struct net_device *dev)
 	struct slip *sl = netdev_priv(dev);
 
 	/*
-	 *	Finish setting up the DEVICE info. 
+	 *	Finish setting up the DEVICE info.
 	 */
 
 	dev->mtu		= sl->mtu;
@@ -639,8 +639,6 @@ static void sl_setup(struct net_device *dev)
 	dev->addr_len		= 0;
 	dev->tx_queue_len	= 10;
 
-	SET_MODULE_OWNER(dev);
-
 	/* New-style flags. */
 	dev->flags		= IFF_NOARP|IFF_POINTOPOINT|IFF_MULTICAST;
 }
@@ -658,7 +656,7 @@ static void sl_setup(struct net_device *dev)
  * be re-entered while running but other ldisc functions may be called
  * in parallel
  */
- 
+
 static void slip_receive_buf(struct tty_struct *tty, const unsigned char *cp, char *fp, int count)
 {
 	struct slip *sl = (struct slip *) tty->disc_data;
@@ -720,7 +718,7 @@ sl_alloc(dev_t line)
 	struct net_device *dev = NULL;
 	struct slip       *sl;
 
-	if (slip_devs == NULL) 
+	if (slip_devs == NULL)
 		return NULL;	/* Master array missing ! */
 
 	for (i = 0; i < slip_maxdev; i++) {
@@ -788,7 +786,7 @@ sl_alloc(dev_t line)
 			slip_devs[i] = NULL;
 		}
 	}
-	
+
 	if (!dev) {
 		char name[IFNAMSIZ];
 		sprintf(name, "sl%d", i);
@@ -815,7 +813,7 @@ sl_alloc(dev_t line)
 	sl->outfill_timer.function=sl_outfill;
 #endif
 	slip_devs[i] = dev;
-				   
+
 	return sl;
 }
 
@@ -836,7 +834,7 @@ static int slip_open(struct tty_struct *tty)
 
 	if(!capable(CAP_NET_ADMIN))
 		return -EPERM;
-		
+
 	/* RTnetlink lock is misused here to serialize concurrent
 	   opens of slip channels. There are better ways, but it is
 	   the simplest one.
@@ -862,7 +860,7 @@ static int slip_open(struct tty_struct *tty)
 	tty->disc_data = sl;
 	sl->line = tty_devnum(tty);
 	sl->pid = current->pid;
-	
+
 	if (!test_bit(SLF_INUSE, &sl->flags)) {
 		/* Perform the low-level SLIP initialization. */
 		if ((err = sl_alloc_bufs(sl, SL_MTU)) != 0)
@@ -908,7 +906,7 @@ err_exit:
 /*
 
   FIXME: 1,2 are fixed 3 was never true anyway.
-  
+
    Let me to blame a bit.
    1. TTY module calls this funstion on soft interrupt.
    2. TTY module calls this function WITH MASKED INTERRUPTS!
@@ -920,7 +918,7 @@ err_exit:
 
    By-product (not desired): sl? does not feel hangups and remains open.
    It is supposed, that user level program (dip, diald, slattach...)
-   will catch SIGHUP and make the rest of work. 
+   will catch SIGHUP and make the rest of work.
 
    I see no way to make more with current tty code. --ANK
  */
@@ -957,7 +955,7 @@ slip_close(struct tty_struct *tty)
   *			STANDARD SLIP ENCAPSULATION		  	 *
   ************************************************************************/
 
-int
+static int
 slip_esc(unsigned char *s, unsigned char *d, int len)
 {
 	unsigned char *ptr = d;
@@ -1220,14 +1218,8 @@ static int slip_ioctl(struct tty_struct *tty, struct file *file, unsigned int cm
 		return 0;
 	/* VSV changes end */
 #endif
-
-	/* Allow stty to read, but not set, the serial port */
-	case TCGETS:
-	case TCGETA:
-		return n_tty_ioctl(tty, file, cmd, arg);
-
 	default:
-		return -ENOIOCTLCMD;
+		return tty_mode_ioctl(tty, file, cmd, arg);
 	}
 }
 
@@ -1291,7 +1283,7 @@ static int sl_ioctl(struct net_device *dev,struct ifreq *rq,int cmd)
 		break;
 
         case SIOCSLEASE:
-		/* Resolve race condition, when ioctl'ing hanged up 
+		/* Resolve race condition, when ioctl'ing hanged up
 		   and opened by another process device.
 		 */
 		if (sl->tty != current->signal->tty && sl->pid != current->pid) {
@@ -1343,14 +1335,11 @@ static int __init slip_init(void)
 	printk(KERN_INFO "SLIP linefill/keepalive option.\n");
 #endif
 
-	slip_devs = kmalloc(sizeof(struct net_device *)*slip_maxdev, GFP_KERNEL);
+	slip_devs = kzalloc(sizeof(struct net_device *)*slip_maxdev, GFP_KERNEL);
 	if (!slip_devs) {
 		printk(KERN_ERR "SLIP: Can't allocate slip devices array!  Uaargh! (-> No SLIP available)\n");
 		return -ENOMEM;
 	}
-
-	/* Clear the pointer array, we allocate devices when we need them */
-	memset(slip_devs, 0, sizeof(struct net_device *)*slip_maxdev); 
 
 	/* Fill in our line protocol discipline, and register it */
 	if ((status = tty_register_ldisc(N_SLIP, &sl_ldisc)) != 0)  {
@@ -1368,7 +1357,7 @@ static void __exit slip_exit(void)
 	unsigned long timeout = jiffies + HZ;
 	int busy = 0;
 
-	if (slip_devs == NULL) 
+	if (slip_devs == NULL)
 		return;
 
 	/* First of all: check for active disciplines and hangup them.
@@ -1405,7 +1394,7 @@ static void __exit slip_exit(void)
 			       dev->name);
 			/* Intentionally leak the control block. */
 			dev->destructor = NULL;
-		} 
+		}
 
 		unregister_netdev(dev);
 	}

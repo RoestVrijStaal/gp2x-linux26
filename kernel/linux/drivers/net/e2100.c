@@ -110,7 +110,7 @@ static void e21_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr,
 
 static int e21_close(struct net_device *dev);
 
-
+
 /*  Probe for the E2100 series ethercards.  These cards have an 8390 at the
 	base address and the station address at both offset 0x10 and 0x18.  I read
 	the station address from offset 0x18 to avoid the dataport of NE2000
@@ -123,8 +123,6 @@ static int  __init do_e2100_probe(struct net_device *dev)
 	int *port;
 	int base_addr = dev->base_addr;
 	int irq = dev->irq;
-
-	SET_MODULE_OWNER(dev);
 
 	if (base_addr > 0x1ff)		/* Check a single specified location. */
 		return e21_probe1(dev, base_addr);
@@ -355,8 +353,7 @@ e21_block_input(struct net_device *dev, int count, struct sk_buff *skb, int ring
 
 	mem_on(ioaddr, shared_mem, (ring_offset>>8));
 
-	/* Packet is always in one chunk -- we can copy + cksum. */
-	eth_io_copy_and_sum(skb, ei_status.mem + (ring_offset & 0xff), count, 0);
+	memcpy_fromio(skb->data, ei_status.mem + (ring_offset & 0xff), count);
 
 	mem_off(ioaddr);
 }
@@ -403,7 +400,7 @@ e21_close(struct net_device *dev)
 	return 0;
 }
 
-
+
 #ifdef MODULE
 #define MAX_E21_CARDS	4	/* Max number of E21 cards per module */
 static struct net_device *dev_e21[MAX_E21_CARDS];
@@ -463,7 +460,7 @@ static void cleanup_card(struct net_device *dev)
 	release_region(dev->base_addr, E21_IO_EXTENT);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;

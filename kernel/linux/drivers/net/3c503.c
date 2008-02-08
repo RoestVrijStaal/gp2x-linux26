@@ -79,9 +79,9 @@ static void el2_block_input(struct net_device *dev, int count, struct sk_buff *s
 			   int ring_offset);
 static void el2_get_8390_hdr(struct net_device *dev, struct e8390_pkt_hdr *hdr,
 			 int ring_page);
-static struct ethtool_ops netdev_ethtool_ops;
+static const struct ethtool_ops netdev_ethtool_ops;
 
-
+
 /* This routine probes for a memory-mapped 3c503 board by looking for
    the "location register" at the end of the jumpered boot PROM space.
    This works even if a PROM isn't there.
@@ -95,8 +95,6 @@ static int __init do_el2_probe(struct net_device *dev)
     int base_addr = dev->base_addr;
     int irq = dev->irq;
 
-    SET_MODULE_OWNER(dev);
-    
     if (base_addr > 0x1ff)	/* Check a single specified location. */
 	return el2_probe1(dev, base_addr);
     else if (base_addr != 0)		/* Don't probe at all. */
@@ -127,7 +125,7 @@ static int __init do_el2_probe(struct net_device *dev)
 
 /*  Try all of the locations that aren't obviously empty.  This touches
     a lot of locations, and is much riskier than the code above. */
-static int __init 
+static int __init
 el2_pio_probe(struct net_device *dev)
 {
     int i;
@@ -173,12 +171,13 @@ out:
 /* Probe for the Etherlink II card at I/O port base IOADDR,
    returning non-zero on success.  If found, set the station
    address and memory parameters in DEVICE. */
-static int __init 
+static int __init
 el2_probe1(struct net_device *dev, int ioaddr)
 {
     int i, iobase_reg, membase_reg, saved_406, wordlength, retval;
     static unsigned version_printed;
     unsigned long vendor_id;
+    DECLARE_MAC_BUF(mac);
 
     if (!request_region(ioaddr, EL2_IO_EXTENT, DRV_NAME))
 	return -EBUSY;
@@ -228,7 +227,8 @@ el2_probe1(struct net_device *dev, int ioaddr)
 
     /* Retrieve and print the ethernet address. */
     for (i = 0; i < 6; i++)
-	printk(" %2.2x", dev->dev_addr[i] = inb(ioaddr + i));
+	dev->dev_addr[i] = inb(ioaddr + i);
+    printk("%s", print_mac(mac, dev->dev_addr));
 
     /* Map the 8390 back into the window. */
     outb(ECNTRL_THIN, ioaddr + 0x406);
@@ -367,7 +367,7 @@ out:
     release_region(ioaddr, EL2_IO_EXTENT);
     return retval;
 }
-
+
 static int
 el2_open(struct net_device *dev)
 {
@@ -385,7 +385,7 @@ el2_open(struct net_device *dev)
 		outb_p(0x04 << ((*irqp == 9) ? 2 : *irqp), E33G_IDCFR);
 		outb_p(0x00, E33G_IDCFR);
 		if (*irqp == probe_irq_off(cookie)	/* It's a good IRQ line! */
-		    && ((retval = request_irq(dev->irq = *irqp, 
+		    && ((retval = request_irq(dev->irq = *irqp,
 		    ei_interrupt, 0, dev->name, dev)) == 0))
 		    break;
 	    }
@@ -600,8 +600,7 @@ el2_block_input(struct net_device *dev, int count, struct sk_buff *skb, int ring
 	    count -= semi_count;
 	    memcpy_fromio(skb->data + semi_count, base + ei_status.priv, count);
 	} else {
-		/* Packet is in one chunk -- we can copy + cksum. */
-		eth_io_copy_and_sum(skb, base + ring_offset, count, 0);
+		memcpy_fromio(skb->data, base + ring_offset, count);
 	}
 	return;
     }
@@ -666,7 +665,7 @@ static void netdev_get_drvinfo(struct net_device *dev,
 	sprintf(info->bus_info, "ISA 0x%lx", dev->base_addr);
 }
 
-static struct ethtool_ops netdev_ethtool_ops = {
+static const struct ethtool_ops netdev_ethtool_ops = {
 	.get_drvinfo		= netdev_get_drvinfo,
 };
 
@@ -726,7 +725,7 @@ static void cleanup_card(struct net_device *dev)
 		iounmap(ei_status.mem);
 }
 
-void
+void __exit
 cleanup_module(void)
 {
 	int this_dev;
