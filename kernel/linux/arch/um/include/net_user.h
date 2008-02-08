@@ -1,5 +1,5 @@
-/* 
- * Copyright (C) 2002 Jeff Dike (jdike@karaya.com)
+/*
+ * Copyright (C) 2002 - 2007 Jeff Dike (jdike@{addtoit,linux.intel}.com)
  * Licensed under the GPL
  */
 
@@ -14,21 +14,19 @@
 #define UML_NET_VERSION (4)
 
 struct net_user_info {
-	void (*init)(void *, void *);
+	int (*init)(void *, void *);
 	int (*open)(void *);
 	void (*close)(int, void *);
 	void (*remove)(void *);
-	int (*set_mtu)(int mtu, void *);
 	void (*add_address)(unsigned char *, unsigned char *, void *);
 	void (*delete_address)(unsigned char *, unsigned char *, void *);
 	int max_packet;
+	int mtu;
 };
 
 extern void ether_user_init(void *data, void *dev);
-extern void dev_ip_addr(void *d, unsigned char *bin_buf);
-extern void set_ether_mac(void *d, unsigned char *addr);
-extern void iter_addresses(void *d, void (*cb)(unsigned char *, 
-					       unsigned char *, void *), 
+extern void iter_addresses(void *d, void (*cb)(unsigned char *,
+					       unsigned char *, void *),
 			   void *arg);
 
 extern void *get_output_buffer(int *len_out);
@@ -53,14 +51,3 @@ extern char *split_if_spec(char *str, ...);
 extern int dev_netmask(void *d, void *m);
 
 #endif
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * Emacs will notice this stuff at the end of the file and automatically
- * adjust the settings for this buffer only.  This must remain at the end
- * of the file.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-file-style: "linux"
- * End:
- */

@@ -2,6 +2,7 @@
 #include <linux/sched.h>
 #include <linux/time.h>
 #include <linux/elf.h>
+#include <linux/crypto.h>
 #include <asm/page.h>
 #include <asm/mman.h>
 
@@ -16,11 +17,16 @@
 #define OFFSET(sym, str, mem) \
 	DEFINE(sym, offsetof(struct str, mem));
 
+#define __NO_STUBS 1
+#undef __SYSCALL
+#undef _ASM_X86_64_UNISTD_H_
+#define __SYSCALL(nr, sym) [nr] = 1,
+static char syscalls[] = {
+#include <asm/arch/unistd.h>
+};
+
 void foo(void)
 {
-	DEFINE(KERNEL_MADV_REMOVE, MADV_REMOVE);
-#ifdef CONFIG_MODE_TT
-	OFFSET(HOST_TASK_EXTERN_PID, task_struct, thread.mode.tt.extern_pid);
-#endif
 #include <common-offsets.h>
+DEFINE(UM_NR_syscall_max, sizeof(syscalls) - 1);
 }
