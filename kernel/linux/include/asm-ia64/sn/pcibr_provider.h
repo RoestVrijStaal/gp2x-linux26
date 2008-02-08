@@ -21,6 +21,7 @@
 #define IS_PCI_BRIDGE_ASIC(asic) (asic == PCIIO_ASIC_TYPE_PIC || \
                 asic == PCIIO_ASIC_TYPE_TIOCP)
 #define IS_PIC_SOFT(ps)     (ps->pbi_bridge_type == PCIBR_BRIDGETYPE_PIC)
+#define IS_TIOCP_SOFT(ps)   (ps->pbi_bridge_type == PCIBR_BRIDGETYPE_TIOCP)
 
 
 /*
@@ -53,8 +54,8 @@
  * Bridge PMU Address Transaltion Entry Attibutes
  */
 #define PCI32_ATE_V                     (0x1 << 0)
-#define PCI32_ATE_CO                    (0x1 << 1)
-#define PCI32_ATE_PREC                  (0x1 << 2)
+#define PCI32_ATE_CO                    (0x1 << 1)	/* PIC ASIC ONLY */
+#define PCI32_ATE_PIO                   (0x1 << 1)	/* TIOCP ASIC ONLY */
 #define PCI32_ATE_MSI                   (0x1 << 2)
 #define PCI32_ATE_PREF                  (0x1 << 3)
 #define PCI32_ATE_BAR                   (0x1 << 4)
@@ -135,14 +136,14 @@ extern void             pcireg_intr_addr_addr_set(struct pcibus_info *, int, u64
 extern void             pcireg_force_intr_set(struct pcibus_info *, int);
 extern u64         pcireg_wrb_flush_get(struct pcibus_info *, int);
 extern void             pcireg_int_ate_set(struct pcibus_info *, int, u64);
-extern u64 *	pcireg_int_ate_addr(struct pcibus_info *, int);
+extern u64 __iomem *	pcireg_int_ate_addr(struct pcibus_info *, int);
 extern void 		pcibr_force_interrupt(struct sn_irq_info *sn_irq_info);
 extern void 		pcibr_change_devices_irq(struct sn_irq_info *sn_irq_info);
 extern int 		pcibr_ate_alloc(struct pcibus_info *, int);
 extern void 		pcibr_ate_free(struct pcibus_info *, int);
 extern void 		ate_write(struct pcibus_info *, int, int, u64);
 extern int sal_pcibr_slot_enable(struct pcibus_info *soft, int device,
-				 void *resp);
+				 void *resp, char **ssdt);
 extern int sal_pcibr_slot_disable(struct pcibus_info *soft, int device,
 				  int action, void *resp);
 extern u16 sn_ioboard_to_pci_bus(struct pci_bus *pci_bus);

@@ -3,7 +3,7 @@
  * License.  See the file "COPYING" in the main directory of this archive
  * for more details.
  *
- * Copyright (c) 2004-2006 Silicon Graphics, Inc.  All Rights Reserved.
+ * Copyright (c) 2004-2007 Silicon Graphics, Inc.  All Rights Reserved.
  */
 
 
@@ -669,11 +669,11 @@ extern struct device *xpc_part;
 extern struct device *xpc_chan;
 extern int xpc_disengage_request_timelimit;
 extern int xpc_disengage_request_timedout;
-extern irqreturn_t xpc_notify_IRQ_handler(int, void *, struct pt_regs *);
+extern irqreturn_t xpc_notify_IRQ_handler(int, void *);
 extern void xpc_dropped_IPI_check(struct xpc_partition *);
 extern void xpc_activate_partition(struct xpc_partition *);
 extern void xpc_activate_kthreads(struct xpc_channel *, int);
-extern void xpc_create_kthreads(struct xpc_channel *, int);
+extern void xpc_create_kthreads(struct xpc_channel *, int, int);
 extern void xpc_disconnect_wait(int);
 
 
@@ -1211,6 +1211,14 @@ xpc_IPI_init(int index)
 static inline enum xpc_retval
 xpc_map_bte_errors(bte_result_t error)
 {
+	if (error == BTE_SUCCESS)
+		return xpcSuccess;
+
+	if (is_shub2()) {
+		if (BTE_VALID_SH2_ERROR(error))
+			return xpcBteSh2Start + error;
+		return xpcBteUnmappedError;
+	}
 	switch (error) {
 	case BTE_SUCCESS:	return xpcSuccess;
 	case BTEFAIL_DIR:	return xpcBteDirectoryError;
