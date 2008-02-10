@@ -1,4 +1,4 @@
-if ARCH_MP25XXF
+if PLAT_MP25XXF
 
 choice
 	prompt "System Type"
@@ -12,18 +12,10 @@ config	ARCH_MP2530F
 
 endchoice
 
-choice
-	prompt "Board Type"
+source "arch/arm/mach-mp2520f/Kconfig"
+source "arch/arm/mach-mp2530f/Kconfig"
 
-config MACH_GP2X
-	bool "GP2X Portable Console"
-	depends on ARCH_MP2520F
-	select MMSP2_SHADOW_ENABLE
-	help
-	  Say Y here if you intend to run this kernel on the GameparkHoldings GP2X portable console.
-endchoice
-
-config MMSP2_SHADOW_ENABLE
+config MP25XXF_SHADOW_ENABLE
 	depends on ARCH_MP2520F
 	bool  "Enable Shadow Config Pin"
 	help

@@ -114,10 +114,12 @@ gp2x_fixup(struct machine_desc *desc, struct tag *tags, char **cmdline, struct m
 	/* MCU_A: 64 MB DRAM memory but we only allocate 32MB 
 	 * the rest is for other devices (fb,v4l,...)
 	 */
+#if 0
 	mi->bank[0].start = DRAM_START;
 	mi->bank[0].size =  DRAM_LENGTH;
 	mi->bank[0].node =  0;
 	mi->nr_banks = 1;
+#endif
 }
 
 

@@ -34,13 +34,13 @@ static unsigned long mmsp2_gettimeoffset(void)
  * IRQ handler for the timer
  */
 static irqreturn_t
-mmsp2_timer_interrupt(int irq, void *dev_id, struct pt_regs *regs)
+mmsp2_timer_interrupt(int irq, void *dev_id)
 {
 	int next_match;
 	
 	write_seqlock(&xtime_lock);
 	do {
-		timer_tick(regs);
+		timer_tick();
 		/* clear match on timer 0 */
 		TSTATUS = TCNT0;
 		next_match = (TMATCH0 += LATCH);
@@ -72,8 +72,10 @@ static void __init mmsp2_timer_init(void)
 	/* to reset the TCOUNT register we have to 
 	 * write anything wait a cycle and then write 0 
 	 */
+#if 1
 	TCOUNT = 1;
 	{ int i; for (i = 10; i > 0; i--) ; }
+#endif
 	TCOUNT = 0;
 	/* enable all timers */
 	TCONTROL |= TIMER_EN;   

@@ -626,6 +626,9 @@ asmlinkage int printk(const char *fmt, ...)
 }
 
 /* cpu currently holding logbuf_lock */
+#if 1
+void printascii(char *);
+#endif
 static volatile unsigned int printk_cpu = UINT_MAX;
 
 asmlinkage int vprintk(const char *fmt, va_list args)
@@ -653,7 +656,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	/* Emit the output into the temporary buffer */
 	printed_len = vscnprintf(printk_buf, sizeof(printk_buf), fmt, args);
 	
-	//printascii(printk_buf);
+	printascii(printk_buf);
 
 	/*
 	 * Copy the output into log_buf.  If the caller didn't provide

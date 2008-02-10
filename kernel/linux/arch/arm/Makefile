@@ -139,7 +139,9 @@ endif
  machine-$(CONFIG_ARCH_KS8695)     := ks8695
   incdir-$(CONFIG_ARCH_MXC)	   := mxc
  machine-$(CONFIG_ARCH_MX3)	   := mx3
- machine-$(CONFIG_ARCH_MMSP2)      := mmsp2
+ machine-$(CONFIG_ARCH_MP2520F)	   := mp2520f
+ machine-$(CONFIG_ARCH_MP2530F)	   := mp2530f
+  incdir-$(CONFIG_PLAT_MP25XXF)	   := mp25xxf
 
 ifeq ($(CONFIG_ARCH_EBSA110),y)
 # This is what happens if you forget the IOCS16 line.
@@ -187,6 +189,7 @@ core-$(CONFIG_PLAT_IOP)		+= arch/arm/plat-iop/
 core-$(CONFIG_ARCH_OMAP)	+= arch/arm/plat-omap/
 core-$(CONFIG_PLAT_S3C24XX)		+= arch/arm/plat-s3c24xx/
 core-$(CONFIG_ARCH_MXC)		+= arch/arm/plat-mxc/
+core-$(CONFIG_PLAT_MP25XXF)	+= arch/arm/plat-mp25xxf/
 
 drivers-$(CONFIG_OPROFILE)      += arch/arm/oprofile/
 drivers-$(CONFIG_ARCH_CLPS7500)	+= drivers/acorn/char/

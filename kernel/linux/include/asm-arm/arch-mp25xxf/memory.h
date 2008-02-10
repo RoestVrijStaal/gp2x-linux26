@@ -1,7 +1,7 @@
 #ifndef MEMORY_H_
 #define MEMORY_H_
 
-#ifdef CONFIG_MMSP2_SHADOW_ENABLE
+#ifdef CONFIG_MP25XXF_SHADOW_ENABLE
         #define PHYS_OFFSET     UL(0x00000000)
 #else
         #define PHYS_OFFSET     UL(0xa0000000)

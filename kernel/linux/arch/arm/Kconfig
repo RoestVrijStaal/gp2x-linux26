@@ -409,7 +409,7 @@ config ARCH_OMAP
 	help
 	  Support for TI's OMAP platform (OMAP1 and OMAP2).
 
-config ARCH_MP25XXF
+config PLAT_MP25XXF
 	bool "MagicEyes MP25XXF"
 	help
 	  Say Y here for systems based on the MagicEyes MP2520F/MP2530F/MP2531F
