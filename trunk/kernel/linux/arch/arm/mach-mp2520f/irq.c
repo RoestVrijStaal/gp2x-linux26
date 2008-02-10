@@ -53,8 +53,7 @@ static struct irq_chip mmsp2_main_chip = {
 
 /* timer interrupts handling */
 static void
-mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
-			struct pt_regs *regs)
+mmsp2_timer_demux_handler(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned short mask;
 	
@@ -67,7 +66,7 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irqdesc *desc,
 		if (mask & 1) 
 		{
 			DEBUG_IRQ("handling irq %d\n", irq);
-			desc_handle_irq(irq, desc, regs);
+			desc_handle_irq(irq, desc);
 		}
 		irq++;
 		desc++;
@@ -111,8 +110,7 @@ static struct irq_chip mmsp2_timer_chip = {
 
 /* uart interrupts handling */
 static void
-mmsp2_uart_demux_handler(unsigned int irq, struct irqdesc *desc,
-			struct pt_regs *regs)
+mmsp2_uart_demux_handler(unsigned int irq, struct irq_desc *desc)
 {
 	unsigned short mask;
 	
@@ -126,7 +124,7 @@ mmsp2_uart_demux_handler(unsigned int irq, struct irqdesc *desc,
 		if (mask & 1) 
 		{
 			DEBUG_IRQ("handling irq %d\n", irq);
-			desc_handle_irq(irq, desc, regs);
+			desc_handle_irq(irq, desc);
 		}
 		irq++;
 		desc++;
@@ -245,7 +243,7 @@ mmsp2_init_irq(void)
 			
 			default:
 			set_irq_chip(irq, &mmsp2_main_chip);
-			set_irq_handler(irq, do_level_IRQ);
+			set_irq_handler(irq, handle_level_irq);
 			set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 			break;
 		}
@@ -255,7 +253,7 @@ mmsp2_init_irq(void)
 	for (irq = IRQ_TIMER_START; irq <= IRQ_TIMER_END; irq++) 
 	{
 		set_irq_chip(irq, &mmsp2_timer_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 	set_irq_chained_handler(IRQ_TIMER, mmsp2_timer_demux_handler);
@@ -263,7 +261,7 @@ mmsp2_init_irq(void)
 	for (irq = IRQ_UART_START; irq <= IRQ_UART_END; irq++) 
 	{
 		set_irq_chip(irq, &mmsp2_uart_chip);
-		set_irq_handler(irq, do_level_IRQ);
+		set_irq_handler(irq, handle_level_irq);
 		set_irq_flags(irq, IRQF_VALID | IRQF_PROBE);
 	}
 	set_irq_chained_handler(IRQ_UART, mmsp2_uart_demux_handler);

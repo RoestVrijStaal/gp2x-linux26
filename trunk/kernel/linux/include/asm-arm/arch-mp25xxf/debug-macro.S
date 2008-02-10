@@ -5,7 +5,7 @@
                 moveq   \rx, #MMSP2_NIO_START        @ physical
                 movne   \rx, #MMSP2_NIO_BASE        @ virtual
                 orr     \rx, \rx, #0x00001200
-                .endm
+		.endm
 
                 .macro  senduart,rd,rx
                 strh    \rd, [\rx, #0x10]

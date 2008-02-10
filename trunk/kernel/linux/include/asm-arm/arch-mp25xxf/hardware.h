@@ -4,10 +4,10 @@
 #include "mmsp2-regs.h"
 
 /* when the shadow pin is set the offset is 0x8000000 */
-#define MMSP2_SHADOW_OFFSET 0x80000000
+#define MP25XXF_SHADOW_OFFSET 0x80000000
 
-#ifdef CONFIG_MMSP2_SHADOW_ENABLE
-        #define MMSP2_IO(x) ((x) + MMSP2_SHADOW_OFFSET)
+#ifdef CONFIG_MP25XXF_SHADOW_ENABLE
+        #define MMSP2_IO(x) ((x) + MP25XXF_SHADOW_OFFSET)
 #else
         #define MMSP2_IO(x) ((x))
 #endif
