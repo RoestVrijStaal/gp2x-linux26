@@ -101,6 +101,14 @@ config MMC_IMX
 
 	  If unsure, say N.
 
+config MMC_MP2520F
+	tristate "MagicEyes MP2520F Multimedia Card Interface support"
+	depends on ARCH_MP2520F
+	help
+	  This selects the MP2520F MMC/SD controller.
+
+	  If unsure, say N.
+
 config MMC_TIFM_SD
 	tristate "TI Flash Media MMC/SD Interface support  (EXPERIMENTAL)"
 	depends on EXPERIMENTAL && PCI
