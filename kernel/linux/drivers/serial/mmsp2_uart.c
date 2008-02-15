@@ -136,7 +136,7 @@ console_initcall(mmsp2_console_init);
 #define MMSP2_CONSOLE	&mmsp2_console
 #else
 #define MMSP2_CONSOLE	NULL
-#endif /* CONFIG_SERIAL_MMSP2_CONSOLE
+#endif /* CONFIG_SERIAL_MMSP2_CONSOLE */
 
 /* ==== UART API ==== */
 
@@ -196,6 +196,31 @@ mmsp2_uart_get_mctrl(struct uart_port *port)
 	UDE
 	return tmp;
 }
+
+static void mp2520f_uart_start_tx(struct uart_port *port)
+{
+	/* enable interrupt */
+}
+
+static void mp2520f_uart_stop_tx(struct uart_port *port)
+{
+	/* disable interrupt */
+
+}
+
+static void mp2520f_uart_start_rx(struct uart_port *port)
+{
+	/* enable interrupt */
+}
+
+static void mp25250f_uart_stop_rx(struct uart_port *port)
+{
+	/* disable interrupt */
+
+}
+
+
+
 /*
  * power management
  */
@@ -209,6 +234,8 @@ static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
 static int mmsp2_uart_startup(struct uart_port *port)
 {
 	UDS
+
+	/* register the interrupts */
 	UDE
 }
 

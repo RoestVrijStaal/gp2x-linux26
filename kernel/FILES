@@ -1,0 +1,5 @@
+arch/arm/Kconfig
+arch/arm/Makefile
+arch/arm/mm/Kconfig
+drivers/serial/mmsp2_serial.c
+drivers/mmc/host/mp25250f.c
