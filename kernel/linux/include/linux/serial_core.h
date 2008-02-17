@@ -134,8 +134,8 @@
 
 #define PORT_S3C2412	73
 
-/* MagicEyes MMSP2 SoC */
-#define PORT_MMSP2	74
+/* MagicEyes MP25XXF SoC */
+#define PORT_MP25XXF	74
 
 /* Xilinx uartlite */
 #define PORT_UARTLITE	74

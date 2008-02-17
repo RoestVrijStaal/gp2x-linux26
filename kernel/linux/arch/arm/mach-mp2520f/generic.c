@@ -9,6 +9,7 @@
 
 #include <asm/mach/map.h>
 
+
 /* gpio functions */
 void mmsp2_gpio_mode(unsigned short int group, unsigned short int pin, unsigned short int mode)
 {
@@ -165,7 +166,9 @@ static struct platform_device mmsp2_mmcsd_device = {
 };
 #endif
 
-#ifdef CONFIG_SERIAL_MMSP2
+/*============================================================================*
+ *                                   UART                                     * 
+ *============================================================================*/
 static struct resource mmsp2_uart0_resources[] = 
 {
 	[0] = {
@@ -189,8 +192,8 @@ static struct resource mmsp2_uart0_resources[] =
 		.flags	= IORESOURCE_IRQ,
 	},
 	[4] = {
-		.start	= MMSP2_UART_STARTx(0),
-		.end	= MMSP2_UART_ENDx(0),
+		.start	= MP25XXF_UART0_START,
+		.end	= MP25XXF_UART0_END,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -225,8 +228,8 @@ static struct resource mmsp2_uart1_resources[] =
 		.flags	= IORESOURCE_IRQ,
 	},
 	[4] = {
-		.start	= MMSP2_UART_STARTx(1),
-		.end	= MMSP2_UART_ENDx(1),
+		.start	= MP25XXF_UART1_START,
+		.end	= MP25XXF_UART1_END,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -261,8 +264,8 @@ static struct resource mmsp2_uart2_resources[] =
 		.flags	= IORESOURCE_IRQ,
 	},
 	[4] = {
-		.start	= MMSP2_UART_STARTx(2),
-		.end	= MMSP2_UART_ENDx(2),
+		.start	= MP25XXF_UART2_START,
+		.end	= MP25XXF_UART2_END,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -297,8 +300,8 @@ static struct resource mmsp2_uart3_resources[] =
 		.flags	= IORESOURCE_IRQ,
 	},
 	[4] = {
-		.start	= MMSP2_UART_STARTx(3),
-		.end	= MMSP2_UART_ENDx(3),
+		.start	= MP25XXF_UART3_START,
+		.end	= MP25XXF_UART3_END,
 		.flags	= IORESOURCE_MEM,
 	},
 };
@@ -309,8 +312,6 @@ static struct platform_device mmsp2_uart3_device = {
 	.num_resources	= ARRAY_SIZE(mmsp2_uart3_resources),
 	.resource		= mmsp2_uart3_resources,
 };
-
-#endif
 
 
 static struct resource mmsp2_dma_resources[] = 
@@ -333,12 +334,10 @@ static struct platform_device *mmsp2_devices[] __initdata = {
 #ifdef CONFIG_MMC_MMSP2
 	&mmsp2_mmcsd_device,
 #endif
-#ifdef CONFIG_SERIAL_MMSP2
 	&mmsp2_uart0_device,
 	&mmsp2_uart1_device,
 	&mmsp2_uart2_device,
 	&mmsp2_uart3_device,
-#endif
 	&mmsp2_dma_device,
 };
 
