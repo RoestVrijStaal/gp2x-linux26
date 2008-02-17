@@ -10,6 +10,12 @@
 #include <asm/irq.h>
 #include <asm/mach/time.h>
 
+/**
+ * TODO use new clocksource/event API
+ * 
+ */
+
+
 /* Use timer 1 as system timer */
 
 /*
@@ -19,6 +25,8 @@
 static unsigned long mmsp2_gettimeoffset(void)
 {
 	unsigned long ticks_to_match, elapsed, usec;
+	
+	//printk("gettimeoffset\n");
 	/* Get ticks before next timer match */
 	ticks_to_match = TMATCH0 - TCOUNT;
 
@@ -39,8 +47,10 @@ mmsp2_timer_interrupt(int irq, void *dev_id)
 	int next_match;
 	
 	write_seqlock(&xtime_lock);
+	//printk("timer tick\n");
 	do {
 		timer_tick();
+		//printk("timer tick n\n");
 		/* clear match on timer 0 */
 		TSTATUS = TCNT0;
 		next_match = (TMATCH0 += LATCH);
@@ -56,32 +66,53 @@ static struct irqaction mmsp2_timer_irq = {
 	.handler	= mmsp2_timer_interrupt,
 };
 
+static void __init mmsp2_timer_setup(void)
+{
+	/* set initial match at 0 */
+	TMATCH0 = 100;
+	/* clear status on all timers */
+	TSTATUS = 0xffff;          
+	/* diable all timers */
+	TCONTROL &= ~(TIMER_EN);        
+	
+	/* to reset the TCOUNT register we have to 
+	 * write anything wait a cycle and then write 0 
+	 */
+#if 0
+	printk("TIMER %x\n", TCOUNT);
+	while (TCOUNT != 0)
+	{
+		TCOUNT = 0;
+	}
+#endif
+	TCOUNT = 0;
+	{ int i; for (i = 8; i > 0; i--) ; }
+	TCOUNT = 1;
+#if 0
+	{ int i; for (i = 8; i > 0; i--) ; }
+	TCOUNT = 0;
+#endif
+#if 0
+	{ int i; for (i = 100; i > 0; i--) ; }
+	printk("TIMER %x\n", TCOUNT);
+#endif
+	/* enable all timers */
+	TCONTROL |= TIMER_EN;
+}
 /*
  * Set up timer interrupt, and return the current time in seconds.
  */
 static void __init mmsp2_timer_init(void)
 {
-	/* set initial match at 0 */
-	TMATCH0 = 0x0;            
-	/* clear status on all timers */
-	TSTATUS = 0xffff;          
-	/* diable all timers */
-	TCONTROL &= ~(TIMER_EN);        
-	/* Make irqs happen for the system timer */
+	mmsp2_timer_setup();
 	setup_irq(IRQ_TIMER_0, &mmsp2_timer_irq);
-	/* to reset the TCOUNT register we have to 
-	 * write anything wait a cycle and then write 0 
-	 */
-#if 1
-	TCOUNT = 1;
-	{ int i; for (i = 10; i > 0; i--) ; }
-#endif
-	TCOUNT = 0;
-	/* enable all timers */
-	TCONTROL |= TIMER_EN;   
+	printk("Timer setup\n");
 }
 
 struct sys_timer mmsp2_timer = {
 	.init		= mmsp2_timer_init,
 	.offset		= mmsp2_gettimeoffset,
+#if 0
+	.resume 	= mmsp2_timer_setup,
+#endif
 };

@@ -1,6 +1,7 @@
 #ifndef HARDWARE_H_
 #define HARDWARE_H_
 
+#include "regs-uart.h"
 #include "mmsp2-regs.h"
 
 /* when the shadow pin is set the offset is 0x8000000 */

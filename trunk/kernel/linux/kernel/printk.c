@@ -656,7 +656,7 @@ asmlinkage int vprintk(const char *fmt, va_list args)
 	/* Emit the output into the temporary buffer */
 	printed_len = vscnprintf(printk_buf, sizeof(printk_buf), fmt, args);
 	
-	printascii(printk_buf);
+	//printascii(printk_buf);
 
 	/*
 	 * Copy the output into log_buf.  If the caller didn't provide

@@ -107,8 +107,9 @@ static struct irq_chip mmsp2_timer_chip = {
 	.mask = mmsp2_timer_mask_irq,
 	.unmask = mmsp2_timer_unmask_irq,
 };
-
-/* uart interrupts handling */
+/*============================================================================*
+ *                                   UART                                     * 
+ *============================================================================*/
 static void
 mmsp2_uart_demux_handler(unsigned int irq, struct irq_desc *desc)
 {
@@ -156,19 +157,19 @@ mmsp2_uart_mask_irq(unsigned int irq)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONx(port) &= ~0xC;
+		UCONn(port) &= ~0xC;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONx(port)&= ~0x3;
+		UCONn(port)&= ~0x3;
 		break;
 		/* error interrupt */
 		case 2:
-		UCONx(port) &= ~0x40;
+		UCONn(port) &= ~0x40;
 		break;
 		/* modem interrupt */
 		case 3:
-		UMODx(port) &= ~MCON_MODEM_INT; 
+		MCONn(port) &= ~MCON_MODEM_INT; 
 		break;	
 	}
 }
@@ -185,19 +186,19 @@ mmsp2_uart_unmask_irq(unsigned int irq)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONx(port) |= 0xC;
+		UCONn(port) |= 0xC;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONx(port) |= 0x3;
+		UCONn(port) |= 0x3;
 		break;
 		/* error interrupt */
 		case 2:
-		UCONx(port) |= 0x40;
+		UCONn(port) |= 0x40;
 		break;
 		/* modem interrupt */
 		case 3:
-		UMODx(port) |= MCON_MODEM_INT; 
+		MCONn(port) |= MCON_MODEM_INT; 
 		break;	
 	}
 }

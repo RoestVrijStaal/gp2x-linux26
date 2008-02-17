@@ -1284,23 +1284,23 @@ config SERIAL_OF_PLATFORM
 	  Currently, only 8250 compatible ports are supported, but
 	  others can easily be added.
 
-config SERIAL_MP2520F
-	bool "MP2520F serial port support"
-	depends on ARM && ARCH_MP2520F
+config SERIAL_MP25XXF
+	bool "MP25XXF serial port support"
+	depends on ARM && PLAT_MP25XXF
 	select SERIAL_CORE
 	help
-	  If you have a machine based on a MagicEyes MP2520F SoC you
+	  If you have a machine based on a MagicEyes MP2520F/MP2530F SoC you
 	  can enable its onboard serial port by enabling this option.
 
           To compile this driver as a module, choose M here: the
           module will be called mmsp2_uart.
 
-config SERIAL_MP2520F_CONSOLE
-	bool "Console on MP2520F serial port"
-	depends on SERIAL_MP2520F
+config SERIAL_MP25XXF_CONSOLE
+	bool "Console on MP25XXF serial port"
+	depends on SERIAL_MP25XXF
 	select SERIAL_CORE_CONSOLE
 	help
-	  If you have enabled the serial port on the MagicEyes MP2520F 
+	  If you have enabled the serial port on the MagicEyes MP2520F/MP2530F 
 	  SoC CPU you can make it the console by answering Y to this 
 	  option.
 endmenu

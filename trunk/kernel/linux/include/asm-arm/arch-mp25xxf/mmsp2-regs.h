@@ -44,6 +44,7 @@
 #define WDT_EN			(1 << 1)
 
 /* ==== UART ==== */
+#if 0
 #define MMSP2_UART_STARTx(x)	((0x20 * x) + 0x1200 + MMSP2_NIO_START)
 #define MMSP2_UART_ENDx(x)		((0x20 * x) + 0x121f + MMSP2_NIO_START)
 #define MMSP2_UART_SIZE		(0x20)
@@ -79,7 +80,7 @@
 #define MSTATUS_DSR							(1 << 1)
 #define MSTATUS_CTS							(1 << 0)
 #define THBx(x)								__REGW(x + 0x10) /* Transfer register */
-
+#endif
 
 /* GPIO
  * 189 pin for GPIO divided in 15 groups:
