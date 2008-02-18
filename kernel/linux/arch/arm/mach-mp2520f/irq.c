@@ -119,12 +119,15 @@ mmsp2_uart_demux_handler(unsigned int irq, struct irq_desc *desc)
 	irq = IRQ_UART_TXD0;
 	desc = irq_desc + irq;
 	DEBUG_IRQ("INTSTAT 0x%x INTPEND 0x%x SRCPEND 0x%x\n", mask, INTPEND, SRCPEND);
+	//printk("INTSTAT 0x%x INTPEND 0x%x SRCPEND 0x%x\n", mask, INTPEND, SRCPEND);
 	
 	while (mask) 
 	{
 		if (mask & 1) 
 		{
 			DEBUG_IRQ("handling irq %d\n", irq);
+			/*if (irq == 37)
+				printk("handling irq %d\n", irq);*/
 			desc_handle_irq(irq, desc);
 		}
 		irq++;
@@ -153,6 +156,7 @@ mmsp2_uart_mask_irq(unsigned int irq)
 	port = irq >> 2;
 	type = irq & 0x3;
 	DEBUG_IRQ("uart mask %d %d %d\n", irq, port, type);
+	//printk("uart mask %d %d %d\n", irq, port, type);
 	switch(type)
 	{
 		/* tx interrupt */
@@ -161,7 +165,7 @@ mmsp2_uart_mask_irq(unsigned int irq)
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONn(port)&= ~0x3;
+		UCONn(port) &= ~0x3;
 		break;
 		/* error interrupt */
 		case 2:
@@ -182,6 +186,7 @@ mmsp2_uart_unmask_irq(unsigned int irq)
 	port = irq >> 2;
 	type = irq & 0x3;
 	DEBUG_IRQ("uart unmask %d %d %d\n", irq, port, type);
+	//printk("uart unmask %d %d %d\n", irq, port, type);
 	switch(type)
 	{
 		/* tx interrupt */

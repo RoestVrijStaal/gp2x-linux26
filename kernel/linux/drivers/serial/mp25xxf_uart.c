@@ -173,17 +173,27 @@ static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 {
 	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)dev_id;
 	struct uart_port *port = &mport->port;
-    struct tty_struct *tty = port->info->tty;
-    unsigned int ch;
-    unsigned int flag;
-    int             max_count = 64;
+	struct tty_struct *tty = port->info->tty;
+	unsigned int ch;
+	unsigned int flag;
+	int max_count = 64;
 	unsigned short estatus;
 	
-    while (max_count-- > 0)
+	//printk("handling interrupt %d %x\n", irq, ESTATUSx(port->mapbase));
+	while (max_count-- > 0)
 	{
 		/* check how many characters are on the fifo */
+		//printk("%d \n", FSTATUSx(port->mapbase));
 		if (!(FSTATUSx(port->mapbase) & FSTATUS_RX_FIFO_COUNT))
+		{
+			//printk("quitting\n");
 			break;
+		}
+	        if (port->flags & UPF_CONS_FLOW)
+	        {
+	        	
+	        }
+
 		/*
 		 * insert the character into the buffer 
 		 */
@@ -222,10 +232,10 @@ static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 		}
 		if (uart_handle_sysrq_char(port, ch))
 			goto ignore_char;
-
+		//printk("receiving char %c\n", ch);
 		uart_insert_char(port, estatus, ESTATUS_OVERRUN_ERROR, ch, flag);
-
-		ignore_char: continue;
+ignore_char:
+		continue;
 	}
 	tty_flip_buffer_push(tty);
 	
@@ -546,8 +556,6 @@ static int mp25xxf_uart_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct mp25xxf_uart_port *mport;
 	
-	printk("uart probe with id %d\n", pdev->id);
-	 
 	mport = &mp25xxf_uart_ports[pdev->id];
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (res == NULL) {
@@ -563,7 +571,7 @@ static int mp25xxf_uart_probe(struct platform_device *pdev)
 	/* common values */
 	mport->port.type = PORT_MP25XXF;
 	mport->port.iotype = UPIO_MEM;
-	mport->port.uartclk	= 16000000;
+	mport->port.uartclk = 16000000;
 	mport->port.fifosize = 16;
 	mport->port.flags = UPF_BOOT_AUTOCONF;
 	mport->port.ops = &mp25xxf_uart_ops;
@@ -572,8 +580,15 @@ static int mp25xxf_uart_probe(struct platform_device *pdev)
 	/* register the interrupt hanlders */
 	uart_add_one_port(&mp25xxf_uart_drv, &mport->port);
 	platform_set_drvdata(pdev, mport);
+	printk("(%d) %d %d\n", mport->port.line, mport->rxirq, mport->txirq);
 	
-	printk("exit\n");
+	{
+		unsigned short ucon = UCONx(mport->port.mapbase);
+		printk("ucon = %x\n", ucon);
+		ucon &= UCON_RECEIVE_MODE;
+		ucon |= UCON_RECEIVE_MODE_IRQ;
+	}
+	
 	return 0;
 }
 

@@ -1518,7 +1518,6 @@ static struct uart_state *uart_get(struct uart_driver *drv, int line)
 
 	state->count++;
 	if (!state->port || state->port->flags & UPF_DEAD) {
-		printk("AQUIIII\n");
 		ret = -ENXIO;
 		goto err_unlock;
 	}

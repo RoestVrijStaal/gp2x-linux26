@@ -21,6 +21,16 @@
 /* Control Register */
 #define UCONx(x) 				__REGW(x + 0x2)
 #define UCONn(n) 				__REGW(0xc0001202 + (0x20 * n))
+#define UCON_TX_INT 				(9)				
+#define UCON_RX_INT 				(8)
+#define UCON_RX_TIMEOUT 			(7)
+#define UCON_RX_ERRSTATUS 			(6)
+#define UCON_LOOPBACK_MODE			(5)
+#define UCON_SEND_BREAK 			(4)
+#define UCON_TRANS_MODE				(3 << 2)
+#define UCON_RECEIVE_MODE			(3 << 0)
+#define UCON_RECEIVE_MODE_DMA 			(1)
+#define UCON_RECEIVE_MODE_IRQ 			(2)
 
 /* Fifo Control Register */
 #define FCONx(x) 				__REGW(x + 0x4)
