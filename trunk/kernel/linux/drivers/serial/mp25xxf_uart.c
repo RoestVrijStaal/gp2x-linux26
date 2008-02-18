@@ -20,7 +20,7 @@
 #include <asm/arch/hardware.h>
 #include <asm/arch/uart.h>
 
-#define DRIVER_NAME "mmsp2_uart"
+#define DRIVER_NAME "mp25xxf_uart"
 #define DEVICE_NAME "ttySM"
 #define DRIVER_VERSION "0.1"
 
@@ -28,7 +28,7 @@
 #define UDE printk("%s end\n", __FUNCTION__);
 
 
-struct mmsp2_uart_port {
+struct mp25xxf_uart_port {
 	struct uart_port	port;
 	int 			txirq;
 	int 			rxirq;
@@ -48,12 +48,12 @@ struct mmsp2_uart_port {
 /* ==== console API ==== */
 #ifdef CONFIG_SERIAL_MP25XXF_CONSOLE
 
-static struct uart_driver mmsp2_uart_drv;
-static struct mmsp2_uart_port mmsp2_uart_ports[NR_PORTS];
+static struct uart_driver mp25xxf_uart_drv;
+static struct mp25xxf_uart_port mp25xxf_uart_ports[NR_PORTS];
 
-static void mmsp2_console_putchar(struct uart_port *port, int ch)
+static void mp25xxf_console_putchar(struct uart_port *port, int ch)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	
 	while((FSTATUSx(mport->port.mapbase) & FSTATUS_TX_FIFO_FULL))
 		barrier();
@@ -64,10 +64,10 @@ static void mmsp2_console_putchar(struct uart_port *port, int ch)
  * Interrupts are disabled on entering
  */
 static void
-mmsp2_console_write(struct console *co, const char *s, unsigned int count)
+mp25xxf_console_write(struct console *co, const char *s, unsigned int count)
 {
-	struct mmsp2_uart_port *mport = &mmsp2_uart_ports[co->index];
-	uart_console_write(&mport->port, s, count, mmsp2_console_putchar);
+	struct mp25xxf_uart_port *mport = &mp25xxf_uart_ports[co->index];
+	uart_console_write(&mport->port, s, count, mp25xxf_console_putchar);
 }
 
 /*
@@ -75,16 +75,16 @@ mmsp2_console_write(struct console *co, const char *s, unsigned int count)
  * try to determine the current setup.
  */
 static void __init
-mmsp2_console_get_options(struct mmsp2_uart_port *sport, int *baud,
+mp25xxf_console_get_options(struct mp25xxf_uart_port *sport, int *baud,
 			   int *parity, int *bits)
 {
 
 }
 
 static int __init
-mmsp2_console_setup(struct console *co, char *options)
+mp25xxf_console_setup(struct console *co, char *options)
 {
-	struct mmsp2_uart_port *mport;
+	struct mp25xxf_uart_port *mport;
 	int baud = 115200;
 	int bits = 8;
 	int parity = 'n';
@@ -94,45 +94,45 @@ mmsp2_console_setup(struct console *co, char *options)
 	if (co->index == -1 || co->index >= NR_PORTS)
 		co->index = 0;
 	
-	mport = &mmsp2_uart_ports[co->index];
+	mport = &mp25xxf_uart_ports[co->index];
 	if (options)
 		uart_parse_options(options, &baud, &parity, &bits, &flow);
 #if 0	
 	else
-		mmsp2_console_get_options(port, &baud, &parity, &bits);
+		mp25xxf_console_get_options(port, &baud, &parity, &bits);
 #endif
 	return uart_set_options(&mport->port, co, baud, parity, bits, flow);
 }
 
 
-static struct console mmsp2_console = {
+static struct console mp25xxf_console = {
 	.name		= DEVICE_NAME,
-	.write		= mmsp2_console_write,
+	.write		= mp25xxf_console_write,
 	.device		= uart_console_device,
-	.setup		= mmsp2_console_setup,
+	.setup		= mp25xxf_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
-	.data		= &mmsp2_uart_drv,
+	.data		= &mp25xxf_uart_drv,
 };
 
-static int __init mmsp2_console_init(void)
+static int __init mp25xxf_console_init(void)
 {
 	/* imx_init_ports(); */
 	printk("console init!!!\n");
-	register_console(&mmsp2_console);
+	register_console(&mp25xxf_console);
 	return 0;
 }
 
-console_initcall(mmsp2_console_init);
+console_initcall(mp25xxf_console_init);
 
-#define MP25XXF_CONSOLE	&mmsp2_console
+#define MP25XXF_CONSOLE	&mp25xxf_console
 #else
 #define MP25XXF_CONSOLE	NULL
 #endif /* CONFIG_SERIAL_MP25XXF_CONSOLE */
 
 static void mp25xxf_uart_start_tx(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
 	/* enable interrupt */
 	if (!mport->tx_claimed)
@@ -145,7 +145,7 @@ static void mp25xxf_uart_start_tx(struct uart_port *port)
 
 static void mp25xxf_uart_stop_tx(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	
 	/* disable interrupt */
 	if (mport->tx_claimed)
@@ -158,20 +158,83 @@ static void mp25xxf_uart_stop_tx(struct uart_port *port)
 
 static void mp25xxf_uart_stop_rx(struct uart_port *port)
 {
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
+
 	/* disable interrupt */
-	UDS
-	UDE
+	if (mport->rx_claimed)
+	{
+		disable_irq(mport->rxirq);
+		mport->rx_claimed = 0;
+	}
 }
 
 /* ==== interrupts ==== */
-static irqreturn_t mmsp2_rx_int(int irq, void *dev_id)
+static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 {
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)dev_id;
+	struct uart_port *port = &mport->port;
+    struct tty_struct *tty = port->info->tty;
+    unsigned int ch;
+    unsigned int flag;
+    int             max_count = 64;
+	unsigned short estatus;
+	
+    while (max_count-- > 0)
+	{
+		/* check how many characters are on the fifo */
+		if (!(FSTATUSx(port->mapbase) & FSTATUS_RX_FIFO_COUNT))
+			break;
+		/*
+		 * insert the character into the buffer 
+		 */
+		ch = RHBx(port->mapbase);
+		flag = TTY_NORMAL;
+		port->icount.rx++;
+		estatus = ESTATUSx(port->mapbase);
+
+		if (unlikely(estatus & ESTATUS_ANY))
+		{
+			/*
+			 * check for break 
+			 */
+			if (estatus & ESTATUS_BREAK_DETECT)
+			{
+				port->icount.brk++;
+				if (uart_handle_break(port))
+					goto ignore_char;
+			}
+
+			if (estatus & ESTATUS_FRAME_ERROR)
+				port->icount.frame++;
+			if (estatus & ESTATUS_OVERRUN_ERROR)
+				port->icount.overrun++;
+
+			/* check our flags */
+			/* FIXME also set them */
+			estatus &= port->read_status_mask;
+
+			if (estatus & ESTATUS_BREAK_DETECT)
+				flag = TTY_BREAK;
+			else if (estatus & ESTATUS_PARITY_ERROR)
+				flag = TTY_PARITY;
+			else if (estatus & (ESTATUS_FRAME_ERROR | ESTATUS_OVERRUN_ERROR))
+				flag = TTY_FRAME;
+		}
+		if (uart_handle_sysrq_char(port, ch))
+			goto ignore_char;
+
+		uart_insert_char(port, estatus, ESTATUS_OVERRUN_ERROR, ch, flag);
+
+		ignore_char: continue;
+	}
+	tty_flip_buffer_push(tty);
+	
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t mmsp2_tx_int(int irq, void *dev_id)
+static irqreturn_t mp25xxf_tx_int(int irq, void *dev_id)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)dev_id;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)dev_id;
 	struct uart_port *port = &mport->port;
 	struct circ_buf *xmit = &port->info->xmit;
 	int count = 256;
@@ -199,7 +262,7 @@ static irqreturn_t mmsp2_tx_int(int irq, void *dev_id)
 	 * try and drain the buffer... 
 	 */
 
-	while (!uart_circ_empty(xmit) && count--> 0)
+	while (!uart_circ_empty(xmit) && count-- > 0)
 	{
 		if ((FSTATUSx(port->mapbase)) & FSTATUS_TX_FIFO_FULL)
 			break;
@@ -225,18 +288,18 @@ out:
  * check if the transfer buffer register is empty
  */
 static unsigned int
-mmsp2_uart_tx_empty(struct uart_port *port)
+mp25xxf_uart_tx_empty(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	
 	UDS
 	return (TRSTATUSx(mport->port.mapbase) & TRSTATUS_TRANSMITTER_EMPTY ? TIOCSER_TEMT:0);
 }
 
 static void 
-mmsp2_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
+mp25xxf_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	unsigned short int	mcon;
 	
 	UDS
@@ -258,9 +321,9 @@ mmsp2_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 }
 
 static unsigned int 
-mmsp2_uart_get_mctrl(struct uart_port *port)
+mp25xxf_uart_get_mctrl(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	unsigned short int	mstatus;
 	unsigned int tmp = 0;
 
@@ -281,25 +344,25 @@ mmsp2_uart_get_mctrl(struct uart_port *port)
 /*
  * power management
  */
-static void mmsp2_uart_pm(struct uart_port *port, unsigned int level,
+static void mp25xxf_uart_pm(struct uart_port *port, unsigned int level,
 			      unsigned int old)
 {
 	UDS
 	UDE
 }
 
-static int mmsp2_uart_startup(struct uart_port *port)
+static int mp25xxf_uart_startup(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	int ret = 0;
 	
 	/* register the interrupts */
-	ret = request_irq(mport->txirq, mmsp2_tx_int, 0, DEVICE_NAME, mport);
+	ret = request_irq(mport->txirq, mp25xxf_tx_int, 0, DEVICE_NAME, mport);
 	if (ret != 0) {
 		printk("cannot get irq %d\n", mport->txirq);
 		return ret;
 	}
-	ret = request_irq(mport->rxirq, mmsp2_rx_int, 0, DEVICE_NAME, mport);
+	ret = request_irq(mport->rxirq, mp25xxf_rx_int, 0, DEVICE_NAME, mport);
 	if (ret != 0) {
 		free_irq(mport->txirq, mport);
 		printk("cannot get irq %d\n", mport->rxirq);
@@ -311,14 +374,14 @@ static int mmsp2_uart_startup(struct uart_port *port)
 	return ret;
 }
 
-static void mmsp2_uart_shutdown(struct uart_port *port)
+static void mp25xxf_uart_shutdown(struct uart_port *port)
 {
 	UDS
 	UDE
 }
 
 static void
-mmsp2_uart_set_termios(struct uart_port *port, struct termios *termios,
+mp25xxf_uart_set_termios(struct uart_port *port, struct termios *termios,
 		   struct termios *old)
 {
 	UDS
@@ -327,9 +390,9 @@ mmsp2_uart_set_termios(struct uart_port *port, struct termios *termios,
 
 
 
-static const char *mmsp2_uart_type(struct uart_port *port)
+static const char *mp25xxf_uart_type(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
 	return mport->port.type == PORT_MP25XXF ? "MP25XXF" : NULL;
 }
@@ -337,9 +400,9 @@ static const char *mmsp2_uart_type(struct uart_port *port)
 /*
  * Release the memory region(s) being used by 'port'.
  */
-static void mmsp2_uart_release_port(struct uart_port *port)
+static void mp25xxf_uart_release_port(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
 	release_mem_region(mport->port.mapbase, MP25XXF_UART_SIZE);
 }
@@ -347,55 +410,55 @@ static void mmsp2_uart_release_port(struct uart_port *port)
 /*
  * Request the memory region(s) being used by 'port'.
  */
-static int mmsp2_uart_request_port(struct uart_port *port)
+static int mp25xxf_uart_request_port(struct uart_port *port)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
 	return request_mem_region(mport->port.mapbase, MP25XXF_UART_SIZE,
-			"mmsp2-uart") != NULL ? 0 : -EBUSY;
+			"mp25xxf-uart") != NULL ? 0 : -EBUSY;
 }
 
 /*
  * Configure/autoconfigure the port.
  */
-static void mmsp2_uart_config_port(struct uart_port *port, int flags)
+static void mp25xxf_uart_config_port(struct uart_port *port, int flags)
 {
-	struct mmsp2_uart_port *mport = (struct mmsp2_uart_port *)port;
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
 	if (flags & UART_CONFIG_TYPE &&
-	    mmsp2_uart_request_port(&mport->port) == 0)
+	    mp25xxf_uart_request_port(&mport->port) == 0)
 		mport->port.type = PORT_MP25XXF;
 }
 
-static struct uart_ops mmsp2_uart_ops = 
+static struct uart_ops mp25xxf_uart_ops = 
 {
-	.tx_empty		= mmsp2_uart_tx_empty,
-	.set_mctrl		= mmsp2_uart_set_mctrl,
-	.get_mctrl		= mmsp2_uart_get_mctrl,
+	.tx_empty		= mp25xxf_uart_tx_empty,
+	.set_mctrl		= mp25xxf_uart_set_mctrl,
+	.get_mctrl		= mp25xxf_uart_get_mctrl,
 	.stop_tx		= mp25xxf_uart_stop_tx,
 	.start_tx		= mp25xxf_uart_start_tx,
 	.stop_rx		= mp25xxf_uart_stop_rx,
 #if 0
-	.enable_ms		= mmsp2_uart_enable_ms,
-	.break_ctl		= mmsp2_uart_break_ctl,
+	.enable_ms		= mp25xxf_uart_enable_ms,
+	.break_ctl		= mp25xxf_uart_break_ctl,
 #endif
-	.startup		= mmsp2_uart_startup,
-	.shutdown		= mmsp2_uart_shutdown,
-	.set_termios	= mmsp2_uart_set_termios,
-	.pm				= mmsp2_uart_pm,
-	.type			= mmsp2_uart_type,
-	.release_port	= mmsp2_uart_release_port,
-	.request_port	= mmsp2_uart_request_port,
-	.config_port	= mmsp2_uart_config_port,
+	.startup		= mp25xxf_uart_startup,
+	.shutdown		= mp25xxf_uart_shutdown,
+	.set_termios	= mp25xxf_uart_set_termios,
+	.pm				= mp25xxf_uart_pm,
+	.type			= mp25xxf_uart_type,
+	.release_port	= mp25xxf_uart_release_port,
+	.request_port	= mp25xxf_uart_request_port,
+	.config_port	= mp25xxf_uart_config_port,
 #if 0
-	.verify_port	= mmsp2_uart_verify_port,
+	.verify_port	= mp25xxf_uart_verify_port,
 #endif
 };
 
 /* FIXME change this static declaration with a simpler one, using the platform
  * variables
  */
-static struct mmsp2_uart_port mmsp2_uart_ports[] = 
+static struct mp25xxf_uart_port mp25xxf_uart_ports[] = 
 {
 	[0] =  
 	{
@@ -408,7 +471,7 @@ static struct mmsp2_uart_port mmsp2_uart_ports[] =
 			.uartclk	= 16000000,
 			.fifosize	= 16,
 			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
+			.ops		= &mp25xxf_uart_ops,
 			.line		= 0,
 		},
 		.txirq = IRQ_UART_RXD0, 
@@ -425,7 +488,7 @@ static struct mmsp2_uart_port mmsp2_uart_ports[] =
 			.uartclk	= 16000000,
 			.fifosize	= 16,
 			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
+			.ops		= &mp25xxf_uart_ops,
 			.line		= 0,
 		},
 		.txirq = IRQ_UART_RXD1, 
@@ -442,7 +505,7 @@ static struct mmsp2_uart_port mmsp2_uart_ports[] =
 			.uartclk	= 16000000,
 			.fifosize	= 16,
 			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
+			.ops		= &mp25xxf_uart_ops,
 			.line		= 0,
 		},
 		.txirq = IRQ_UART_RXD2, 
@@ -459,7 +522,7 @@ static struct mmsp2_uart_port mmsp2_uart_ports[] =
 			.uartclk	= 16000000,
 			.fifosize	= 16,
 			.flags		= UPF_BOOT_AUTOCONF,
-			.ops		= &mmsp2_uart_ops,
+			.ops		= &mp25xxf_uart_ops,
 			.line		= 0,
 		},
 		.txirq = IRQ_UART_RXD3, 
@@ -467,7 +530,7 @@ static struct mmsp2_uart_port mmsp2_uart_ports[] =
 	},
 };
 
-static struct uart_driver mmsp2_uart_drv = {
+static struct uart_driver mp25xxf_uart_drv = {
 	.owner          = THIS_MODULE,
 	.driver_name    = DRIVER_NAME,
 	.dev_name       = DEVICE_NAME,
@@ -478,14 +541,14 @@ static struct uart_driver mmsp2_uart_drv = {
 };
 
 /* ==== platform device API ==== */
-static int mmsp2_uart_probe(struct platform_device *pdev)
+static int mp25xxf_uart_probe(struct platform_device *pdev)
 {
 	struct resource *res;
-	struct mmsp2_uart_port *mport;
+	struct mp25xxf_uart_port *mport;
 	
 	printk("uart probe with id %d\n", pdev->id);
 	 
-	mport = &mmsp2_uart_ports[pdev->id];
+	mport = &mp25xxf_uart_ports[pdev->id];
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (res == NULL) {
 		printk(KERN_ERR "failed to find memory resource for uart\n");
@@ -503,61 +566,61 @@ static int mmsp2_uart_probe(struct platform_device *pdev)
 	mport->port.uartclk	= 16000000;
 	mport->port.fifosize = 16;
 	mport->port.flags = UPF_BOOT_AUTOCONF;
-	mport->port.ops = &mmsp2_uart_ops;
+	mport->port.ops = &mp25xxf_uart_ops;
 	mport->port.line = pdev->id;
 	
 	/* register the interrupt hanlders */
-	uart_add_one_port(&mmsp2_uart_drv, &mport->port);
+	uart_add_one_port(&mp25xxf_uart_drv, &mport->port);
 	platform_set_drvdata(pdev, mport);
 	
 	printk("exit\n");
 	return 0;
 }
 
-static int mmsp2_uart_remove(struct platform_device *pdev)
+static int mp25xxf_uart_remove(struct platform_device *pdev)
 {
-	struct mmsp2_uart_port *mport = platform_get_drvdata(pdev);
+	struct mp25xxf_uart_port *mport = platform_get_drvdata(pdev);
 
 	platform_set_drvdata(pdev, NULL);
 
 	if (mport)
-		uart_remove_one_port(&mmsp2_uart_drv, &mport->port);
+		uart_remove_one_port(&mp25xxf_uart_drv, &mport->port);
 	return 0;
 }
 
-static struct platform_driver mmsp2_uart_driver = {
+static struct platform_driver mp25xxf_uart_driver = {
 	.driver		= 
 	{
 		.name	= DRIVER_NAME,
 		.owner	= THIS_MODULE,
 	},
-	.probe		= mmsp2_uart_probe,
-	.remove		= mmsp2_uart_remove,
+	.probe		= mp25xxf_uart_probe,
+	.remove		= mp25xxf_uart_remove,
 };
 
 /* ==== module API ==== */
-static int __init mmsp2_uart_init(void)
+static int __init mp25xxf_uart_init(void)
 {
 	int ret = 0;
 	
 	printk(KERN_INFO "[MP25XXF] Serial driver\n");
-	ret = uart_register_driver(&mmsp2_uart_drv);
+	ret = uart_register_driver(&mp25xxf_uart_drv);
 	if (ret)
 		return ret;
-	ret = platform_driver_register(&mmsp2_uart_driver);
+	ret = platform_driver_register(&mp25xxf_uart_driver);
 	if (ret)
-		uart_unregister_driver(&mmsp2_uart_drv);
+		uart_unregister_driver(&mp25xxf_uart_drv);
 	
 	return ret;
 }
 
-static void __exit mmsp2_uart_exit(void)
+static void __exit mp25xxf_uart_exit(void)
 {
-	platform_driver_unregister(&mmsp2_uart_driver);
+	platform_driver_unregister(&mp25xxf_uart_driver);
 }
 
-module_init(mmsp2_uart_init);
-module_exit(mmsp2_uart_exit);
+module_init(mp25xxf_uart_init);
+module_exit(mp25xxf_uart_exit);
 
 MODULE_DESCRIPTION("")
 MODULE_LICENSE("GPL");
