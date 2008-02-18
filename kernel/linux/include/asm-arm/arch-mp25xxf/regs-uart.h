@@ -41,12 +41,23 @@
 
 /* Error Status */
 #define ESTATUSx(x) 				__REGW(x + 0xa)
+#define ESTATUS_BREAK_DETECT			(1 << 3)
+#define ESTATUS_FRAME_ERROR			(1 << 2)
+#define ESTATUS_PARITY_ERROR			(1 << 1)
+#define ESTATUS_OVERRUN_ERROR			(1 << 0)
+#define ESTATUS_ANY 				(ESTATUS_OVERRUN_ERROR | \
+						ESTATUS_FRAME_ERROR | \
+						ESTATUS_BREAK_DETECT)
+
 
 /* Fifo Status */
 #define FSTATUSx(x) 				__REGW(x + 0xc)
 #define FSTATUS_RX_FIFO_ERROR 			(1 << 10)
 #define FSTATUS_TX_FIFO_FULL 			(1 << 9)
 #define FSTATUS_RX_FIFO_FULL 			(1 << 8)
+#define FSTATUS_TX_FIFO_COUNT 			(0xf << 4)
+#define FSTATUS_RX_FIFO_COUNT 			(0xf << 0)
+
 
 /* Modem Status */
 #define MSTATUSx(x) 				__REGW(x + 0xe)
@@ -61,6 +72,9 @@
 
 /* Transmit Buffer Register */
 #define THBx(x) 				__REGW(x + 0x10)
+
+/* Receive Buffer Register */
+#define RHBx(x) 				__REGW(x + 0x12)
 
  /* Interrupt Status */
 #define INTSTATREG 				__REGW(0xc0001280)

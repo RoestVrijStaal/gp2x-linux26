@@ -169,7 +169,7 @@ static struct platform_device mmsp2_mmcsd_device = {
 /*============================================================================*
  *                                   UART                                     * 
  *============================================================================*/
-static struct resource mmsp2_uart0_resources[] = 
+static struct resource mp25xxf_uart0_resources[] = 
 {
 	[0] = {
 		.start	= IRQ_UART_RXD0,
@@ -198,14 +198,14 @@ static struct resource mmsp2_uart0_resources[] =
 	},
 };
 
-static struct platform_device mmsp2_uart0_device = {
-	.name			= "mmsp2_uart",
+static struct platform_device mp25xxf_uart0_device = {
+	.name			= "mp25xxf_uart",
 	.id				= 0,
-	.num_resources	= ARRAY_SIZE(mmsp2_uart0_resources),
-	.resource		= mmsp2_uart0_resources,
+	.num_resources	= ARRAY_SIZE(mp25xxf_uart0_resources),
+	.resource		= mp25xxf_uart0_resources,
 };
 
-static struct resource mmsp2_uart1_resources[] = 
+static struct resource mp25xxf_uart1_resources[] = 
 {
 	[0] = {
 		.start	= IRQ_UART_RXD1,
@@ -234,14 +234,14 @@ static struct resource mmsp2_uart1_resources[] =
 	},
 };
 
-static struct platform_device mmsp2_uart1_device = {
-	.name			= "mmsp2_uart",
+static struct platform_device mp25xxf_uart1_device = {
+	.name			= "mp25xxf_uart",
 	.id				= 1,
-	.num_resources	= ARRAY_SIZE(mmsp2_uart1_resources),
-	.resource		= mmsp2_uart1_resources,
+	.num_resources	= ARRAY_SIZE(mp25xxf_uart1_resources),
+	.resource		= mp25xxf_uart1_resources,
 };
 
-static struct resource mmsp2_uart2_resources[] = 
+static struct resource mp25xxf_uart2_resources[] = 
 {
 	[0] = {
 		.start	= IRQ_UART_RXD2,
@@ -270,14 +270,14 @@ static struct resource mmsp2_uart2_resources[] =
 	},
 };
 
-static struct platform_device mmsp2_uart2_device = {
-	.name			= "mmsp2_uart",
+static struct platform_device mp25xxf_uart2_device = {
+	.name			= "mp25xxf_uart",
 	.id				= 2,
-	.num_resources	= ARRAY_SIZE(mmsp2_uart2_resources),
-	.resource		= mmsp2_uart2_resources,
+	.num_resources	= ARRAY_SIZE(mp25xxf_uart2_resources),
+	.resource		= mp25xxf_uart2_resources,
 };
 
-static struct resource mmsp2_uart3_resources[] = 
+static struct resource mp25xxf_uart3_resources[] = 
 {
 	[0] = {
 		.start	= IRQ_UART_RXD3,
@@ -306,11 +306,11 @@ static struct resource mmsp2_uart3_resources[] =
 	},
 };
 
-static struct platform_device mmsp2_uart3_device = {
-	.name			= "mmsp2_uart",
+static struct platform_device mp25xxf_uart3_device = {
+	.name			= "mp25xxf_uart",
 	.id				= 3,
-	.num_resources	= ARRAY_SIZE(mmsp2_uart3_resources),
-	.resource		= mmsp2_uart3_resources,
+	.num_resources	= ARRAY_SIZE(mp25xxf_uart3_resources),
+	.resource		= mp25xxf_uart3_resources,
 };
 
 
@@ -334,10 +334,10 @@ static struct platform_device *mmsp2_devices[] __initdata = {
 #ifdef CONFIG_MMC_MMSP2
 	&mmsp2_mmcsd_device,
 #endif
-	&mmsp2_uart0_device,
-	&mmsp2_uart1_device,
-	&mmsp2_uart2_device,
-	&mmsp2_uart3_device,
+	&mp25xxf_uart0_device,
+	&mp25xxf_uart1_device,
+	&mp25xxf_uart2_device,
+	&mp25xxf_uart3_device,
 	&mmsp2_dma_device,
 };
 
