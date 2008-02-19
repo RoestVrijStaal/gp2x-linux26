@@ -168,6 +168,24 @@ static void mp25xxf_uart_stop_rx(struct uart_port *port)
 	}
 }
 
+static void
+mp25xxf_serial_break_ctl(struct uart_port *port, int break_state)
+{
+	unsigned long flags;
+	unsigned short ucon;
+
+	spin_lock_irqsave(&port->lock, flags);
+
+	ucon = UCONx(port->mapbase);
+	if (break_state)
+		ucon |= MP2530_UCON_SBREAK;
+	else
+		ucon &= ~MP2530_UCON_SBREAK;
+
+	UCONx(port->mapbase) = ucon;
+	spin_unlock_irqrestore(&port->lock, flags);
+}
+
 /* ==== interrupts ==== */
 static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 {
@@ -386,8 +404,19 @@ static int mp25xxf_uart_startup(struct uart_port *port)
 
 static void mp25xxf_uart_shutdown(struct uart_port *port)
 {
-	UDS
-	UDE
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
+
+	if (mport->tx_claimed)
+	{
+		free_irq(mport->txirq, mport);
+		mport->tx_claimed = 0;
+	}
+
+	if (mport->rx_claimed)
+	{
+		free_irq(mport->rxirq, mport);
+		mport->rx_claimed = 0;
+	}
 }
 
 static void
@@ -450,8 +479,8 @@ static struct uart_ops mp25xxf_uart_ops =
 	.stop_rx		= mp25xxf_uart_stop_rx,
 #if 0
 	.enable_ms		= mp25xxf_uart_enable_ms,
-	.break_ctl		= mp25xxf_uart_break_ctl,
 #endif
+	.break_ctl		= mp25xxf_uart_break_ctl,
 	.startup		= mp25xxf_uart_startup,
 	.shutdown		= mp25xxf_uart_shutdown,
 	.set_termios	= mp25xxf_uart_set_termios,
