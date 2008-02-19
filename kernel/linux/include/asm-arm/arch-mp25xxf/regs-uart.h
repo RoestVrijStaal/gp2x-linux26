@@ -28,7 +28,11 @@
 #define UCON_LOOPBACK_MODE			(1 << 5)
 #define UCON_SEND_BREAK 			(1 << 4)
 #define UCON_TRANS_MODE				(3 << 2)
+#define UCON_TRANS_MODEx(x)			(x << 2)
+#define UCON_TRANS_MODE_DMA 			(1)
+#define UCON_TRANS_MODE_IRQ 			(2)
 #define UCON_RECEIVE_MODE			(3 << 0)
+#define UCON_RECEIVE_MODEx(x)			(x << 0)
 #define UCON_RECEIVE_MODE_DMA 			(1)
 #define UCON_RECEIVE_MODE_IRQ 			(2)
 
