@@ -161,11 +161,11 @@ mmsp2_uart_mask_irq(unsigned int irq)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONn(port) &= ~0xC;
+		UCONn(port) &= ~UCON_TRANS_MODE;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONn(port) &= ~0x3;
+		UCONn(port) &= ~UCON_RECEIVE_MODE;
 		break;
 		/* error interrupt */
 		case 2:
@@ -191,11 +191,12 @@ mmsp2_uart_unmask_irq(unsigned int irq)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONn(port) |= 0xC;
+		UCONn(port) |= UCON_TRANS_MODEx(UCON_TRANS_MODE_IRQ) | UCON_TX_INT;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONn(port) |= 0x3;
+		UCONn(port) |= UCON_RECEIVE_MODEx(UCON_RECEIVE_MODE_IRQ)
+			| UCON_RX_INT | UCON_RX_TIMEOUT;
 		break;
 		/* error interrupt */
 		case 2:

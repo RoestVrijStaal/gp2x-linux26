@@ -27,14 +27,15 @@
 #define UDS printk("%s start\n", __FUNCTION__);
 #define UDE printk("%s end\n", __FUNCTION__);
 
+/* flag to ignore all characters comming in */ 
+#define RXSTAT_DUMMY_READ (0x10000000)
 
 struct mp25xxf_uart_port {
 	struct uart_port	port;
 	int 			txirq;
 	int 			rxirq;
 	unsigned char 		rx_claimed;
-	unsigned char 		tx_claimed;
-	
+	unsigned char 		tx_claimed;	
 };
 
 #if defined(CONFIG_SERIAL_MP25XXF_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
@@ -67,6 +68,7 @@ static void
 mp25xxf_console_write(struct console *co, const char *s, unsigned int count)
 {
 	struct mp25xxf_uart_port *mport = &mp25xxf_uart_ports[co->index];
+	
 	uart_console_write(&mport->port, s, count, mp25xxf_console_putchar);
 }
 
@@ -78,7 +80,11 @@ static void __init
 mp25xxf_console_get_options(struct mp25xxf_uart_port *sport, int *baud,
 			   int *parity, int *bits)
 {
-
+	UDS
+	*bits = 8;
+	*parity = 'n';
+	*baud = 115200;
+	UDE
 }
 
 static int __init
@@ -90,7 +96,6 @@ mp25xxf_console_setup(struct console *co, char *options)
 	int parity = 'n';
 	int flow = 'n';
 
-	printk("console setup %d!!!\n", co->index);
 	if (co->index == -1 || co->index >= NR_PORTS)
 		co->index = 0;
 	
@@ -107,8 +112,8 @@ mp25xxf_console_setup(struct console *co, char *options)
 
 static struct console mp25xxf_console = {
 	.name		= DEVICE_NAME,
-	.write		= mp25xxf_console_write,
 	.device		= uart_console_device,
+	.write		= mp25xxf_console_write,
 	.setup		= mp25xxf_console_setup,
 	.flags		= CON_PRINTBUFFER,
 	.index		= -1,
@@ -117,8 +122,6 @@ static struct console mp25xxf_console = {
 
 static int __init mp25xxf_console_init(void)
 {
-	/* imx_init_ports(); */
-	printk("console init!!!\n");
 	register_console(&mp25xxf_console);
 	return 0;
 }
@@ -140,7 +143,6 @@ static void mp25xxf_uart_start_tx(struct uart_port *port)
 		enable_irq(mport->txirq);
 		mport->tx_claimed = 1;
 	}
-
 }
 
 static void mp25xxf_uart_stop_tx(struct uart_port *port)
@@ -153,7 +155,6 @@ static void mp25xxf_uart_stop_tx(struct uart_port *port)
 		disable_irq(mport->txirq);
 		mport->tx_claimed = 0;
 	}
-
 }
 
 static void mp25xxf_uart_stop_rx(struct uart_port *port)
@@ -169,7 +170,7 @@ static void mp25xxf_uart_stop_rx(struct uart_port *port)
 }
 
 static void
-mp25xxf_serial_break_ctl(struct uart_port *port, int break_state)
+mp25xxf_uart_break_ctl(struct uart_port *port, int break_state)
 {
 	unsigned long flags;
 	unsigned short ucon;
@@ -178,11 +179,12 @@ mp25xxf_serial_break_ctl(struct uart_port *port, int break_state)
 
 	ucon = UCONx(port->mapbase);
 	if (break_state)
-		ucon |= MP2530_UCON_SBREAK;
+		ucon |= UCON_SEND_BREAK;
 	else
-		ucon &= ~MP2530_UCON_SBREAK;
+		ucon &= ~UCON_SEND_BREAK;
 
 	UCONx(port->mapbase) = ucon;
+	
 	spin_unlock_irqrestore(&port->lock, flags);
 }
 
@@ -194,20 +196,15 @@ static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 	struct tty_struct *tty = port->info->tty;
 	unsigned int ch;
 	unsigned int flag;
-	int max_count = 64;
+	int max_count = port->fifosize;
 	unsigned short estatus;
 	
-	//printk("handling interrupt %d %x\n", irq, ESTATUSx(port->mapbase));
 	while (max_count-- > 0)
 	{
 		/* check how many characters are on the fifo */
-		//printk("%d \n", FSTATUSx(port->mapbase));
 		if (!(FSTATUSx(port->mapbase) & FSTATUS_RX_FIFO_COUNT))
-		{
-			//printk("quitting\n");
 			break;
-		}
-	        if (port->flags & UPF_CONS_FLOW)
+		if (port->flags & UPF_CONS_FLOW)
 	        {
 	        	
 	        }
@@ -250,7 +247,6 @@ static irqreturn_t mp25xxf_rx_int(int irq, void *dev_id)
 		}
 		if (uart_handle_sysrq_char(port, ch))
 			goto ignore_char;
-		//printk("receiving char %c\n", ch);
 		uart_insert_char(port, estatus, ESTATUS_OVERRUN_ERROR, ch, flag);
 ignore_char:
 		continue;
@@ -320,7 +316,6 @@ mp25xxf_uart_tx_empty(struct uart_port *port)
 {
 	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 	
-	UDS
 	return (TRSTATUSx(mport->port.mapbase) & TRSTATUS_TRANSMITTER_EMPTY ? TIOCSER_TEMT:0);
 }
 
@@ -333,7 +328,6 @@ mp25xxf_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 	UDS
 	mcon = MCONx(mport->port.mapbase);
 
-	
 	if(mctrl & TIOCM_RTS)
 		mcon |= MCON_RTS_ACTIVE; 
 	else
@@ -423,7 +417,39 @@ static void
 mp25xxf_uart_set_termios(struct uart_port *port, struct termios *termios,
 		   struct termios *old)
 {
+	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
+	unsigned long flags;
+	
 	UDS
+	spin_lock_irqsave(&port->lock, flags);
+
+	/*
+	 * TODO Update the per-port timeout.
+	 */
+
+	/*
+	 * Which character status flags are we interested in?
+	 */
+	port->read_status_mask = ESTATUS_OVERRUN_ERROR;
+	if (termios->c_iflag & INPCK)
+		port->read_status_mask |= ESTATUS_FRAME_ERROR
+				| ESTATUS_PARITY_ERROR;
+	/*
+	 * Which character status flags should we ignore?
+	 */
+	port->ignore_status_mask = 0;
+	if (termios->c_iflag & IGNPAR)
+		port->ignore_status_mask |= ESTATUS_OVERRUN_ERROR;
+	if (termios->c_iflag & IGNBRK && termios->c_iflag & IGNPAR)
+		port->ignore_status_mask |= ESTATUS_PARITY_ERROR;
+
+	/*
+	 * Ignore all characters if CREAD is not set.
+	 */
+	if ((termios->c_cflag & CREAD) == 0)
+		port->ignore_status_mask |= RXSTAT_DUMMY_READ;
+	
+	spin_unlock_irqrestore(&port->lock, flags);
 	UDE
 }
 
@@ -464,10 +490,28 @@ static void mp25xxf_uart_config_port(struct uart_port *port, int flags)
 {
 	struct mp25xxf_uart_port *mport = (struct mp25xxf_uart_port *)port;
 
-	if (flags & UART_CONFIG_TYPE &&
-	    mp25xxf_uart_request_port(&mport->port) == 0)
+	if ((flags & UART_CONFIG_TYPE) &&
+	    (mp25xxf_uart_request_port(&mport->port) == 0))
 		mport->port.type = PORT_MP25XXF;
 }
+
+
+/*
+ * verify the new serial_struct (for TIOCSSERIAL).
+ */
+static int
+mp25xxf_uart_verify_port(struct uart_port *port, struct serial_struct *ser)
+{
+	if ((ser->type != PORT_UNKNOWN) && (ser->type != PORT_MP25XXF))
+		return -EINVAL;
+	return 0;   
+}
+
+static void
+mp25xxf_uart_enable_ms(struct uart_port *port)
+{
+}
+
 
 static struct uart_ops mp25xxf_uart_ops = 
 {
@@ -477,9 +521,7 @@ static struct uart_ops mp25xxf_uart_ops =
 	.stop_tx		= mp25xxf_uart_stop_tx,
 	.start_tx		= mp25xxf_uart_start_tx,
 	.stop_rx		= mp25xxf_uart_stop_rx,
-#if 0
 	.enable_ms		= mp25xxf_uart_enable_ms,
-#endif
 	.break_ctl		= mp25xxf_uart_break_ctl,
 	.startup		= mp25xxf_uart_startup,
 	.shutdown		= mp25xxf_uart_shutdown,
@@ -489,9 +531,7 @@ static struct uart_ops mp25xxf_uart_ops =
 	.release_port	= mp25xxf_uart_release_port,
 	.request_port	= mp25xxf_uart_request_port,
 	.config_port	= mp25xxf_uart_config_port,
-#if 0
 	.verify_port	= mp25xxf_uart_verify_port,
-#endif
 };
 
 /* FIXME change this static declaration with a simpler one, using the platform
@@ -609,14 +649,6 @@ static int mp25xxf_uart_probe(struct platform_device *pdev)
 	/* register the interrupt hanlders */
 	uart_add_one_port(&mp25xxf_uart_drv, &mport->port);
 	platform_set_drvdata(pdev, mport);
-	printk("(%d) %d %d\n", mport->port.line, mport->rxirq, mport->txirq);
-	
-	{
-		unsigned short ucon = UCONx(mport->port.mapbase);
-		printk("ucon = %x\n", ucon);
-		ucon &= UCON_RECEIVE_MODE;
-		ucon |= UCON_RECEIVE_MODE_IRQ;
-	}
 	
 	return 0;
 }
