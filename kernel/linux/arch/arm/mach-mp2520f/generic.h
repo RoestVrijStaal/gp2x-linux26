@@ -6,6 +6,7 @@ extern void __init mmsp2_map_io(void);
 extern void __init mmsp2_init(void);
 extern void __init mmsp2_init_irq(void);
 extern struct sys_timer mmsp2_timer;
+extern struct sys_timer mp2520f_timer;
 /**
  * Gpio Functions
  */

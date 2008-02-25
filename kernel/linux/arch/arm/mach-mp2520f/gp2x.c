@@ -129,7 +129,11 @@ MACHINE_START(GP2X, "GameparkHoldings GP2X")
 	.boot_params	= 0x00100100,
 	.map_io			= gp2x_map_io,
 	.init_irq		= mmsp2_init_irq,
+#if 0
 	.timer			= &mmsp2_timer,
+#else
+	.timer			= &mp2520f_timer,
+#endif
 	.init_machine	= gp2x_init,
 	.fixup			= gp2x_fixup,
 MACHINE_END
