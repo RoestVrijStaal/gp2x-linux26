@@ -411,6 +411,8 @@ config ARCH_OMAP
 
 config PLAT_MP25XXF
 	bool "MagicEyes MP25XXF"
+	select GENERIC_TIME
+	select GENERIC_CLOCKEVENTS
 	help
 	  Say Y here for systems based on the MagicEyes MP2520F/MP2530F/MP2531F
 	  System on a Chip processors (MMSP2/MMSP2+).

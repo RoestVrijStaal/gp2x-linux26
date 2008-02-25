@@ -25,22 +25,24 @@ mmsp2_main_ack_irq(unsigned int irq)
 	unsigned int ofs = (1 << irq);
 
 	DEBUG_IRQ("irq ack %u\n",irq);
-	SRCPEND = ofs;          // source pending flag clear
-	INTPEND = ofs;          // interrupt pending flag clear
+	SRCPEND = ofs;
+	INTPEND = ofs;
+	//SRCPEND = ofs;          // source pending flag clear
+	//INTPEND = ofs;          // interrupt pending flag clear
 }
 
 static void
 mmsp2_main_mask_irq(unsigned int irq)
 {
 	DEBUG_IRQ("irq mask %u\n",irq);
-	INTMASK |= (1<<irq);
+	INTMASK |= (1 << irq);
 }
 
 static void
 mmsp2_main_unmask_irq(unsigned int irq)
 {
 	DEBUG_IRQ("irq unmask %u\n",irq);
-	INTMASK &= ~(1<<irq);
+	INTMASK &= ~(1 << irq);
 }
 
 
@@ -72,11 +74,11 @@ mmsp2_timer_demux_handler(unsigned int irq, struct irq_desc *desc)
 		desc++;
 		mask >>= 1;
 	}
-	/* FIXME why this? do an aknownledge of the interrupt */
-	/* source pending flag clear */
-	SRCPEND = (1 << IRQ_TIMER);          
-	/* interrupt pending flag clear */
-	INTPEND = (1 << IRQ_TIMER);          
+	if (!mask)
+	{
+		SRCPEND &= (1 << IRQ_TIMER);          
+		INTPEND &= (1 << IRQ_TIMER);          
+	}
 	DEBUG_IRQ("TCOUNT %d INTPEND 0x%x SRCPEND 0x%x\n", TCOUNT, INTPEND, SRCPEND);
 }
 
@@ -84,7 +86,7 @@ static void
 mmsp2_timer_ack_irq(unsigned int irq)
 {
 	DEBUG_IRQ("timer ack %d\n", irq);
-	TSTATUS = (1 << (irq - IRQ_TIMER_0));
+	TSTATUS &= (1 << (irq - IRQ_TIMER_0));
 }
 
 static void
@@ -110,6 +112,7 @@ static struct irq_chip mmsp2_timer_chip = {
 /*============================================================================*
  *                                   UART                                     * 
  *============================================================================*/
+extern int uartok;
 static void
 mmsp2_uart_demux_handler(unsigned int irq, struct irq_desc *desc)
 {
@@ -119,26 +122,30 @@ mmsp2_uart_demux_handler(unsigned int irq, struct irq_desc *desc)
 	irq = IRQ_UART_TXD0;
 	desc = irq_desc + irq;
 	DEBUG_IRQ("INTSTAT 0x%x INTPEND 0x%x SRCPEND 0x%x\n", mask, INTPEND, SRCPEND);
-	//printk("INTSTAT 0x%x INTPEND 0x%x SRCPEND 0x%x\n", mask, INTPEND, SRCPEND);
-	
 	while (mask) 
 	{
 		if (mask & 1) 
 		{
 			DEBUG_IRQ("handling irq %d\n", irq);
-			/*if (irq == 37)
-				printk("handling irq %d\n", irq);*/
 			desc_handle_irq(irq, desc);
+			break;
 		}
 		irq++;
 		desc++;
 		mask >>= 1;
 	}
+	if (!mask)
+	{
+		SRCPEND &= (1 << IRQ_UART);          
+		INTPEND &= (1 << IRQ_UART);
+	}
+#if 0
 	/* do an aknownledge of the interrupt */
 	/* source pending flag clear */
-	SRCPEND = (1 << IRQ_UART);          
+	SRCPEND &= (1 << IRQ_UART);          
 	/* interrupt pending flag clear */
-	INTPEND = (1 << IRQ_UART);          
+	INTPEND &= (1 << IRQ_UART);
+#endif
 }
 
 static void
@@ -153,19 +160,18 @@ mmsp2_uart_mask_irq(unsigned int irq)
 {
 	unsigned short int port, type;
 	
-	port = irq >> 2;
+	port = ((irq & 0xf) >> 2) - 1;
 	type = irq & 0x3;
 	DEBUG_IRQ("uart mask %d %d %d\n", irq, port, type);
-	//printk("uart mask %d %d %d\n", irq, port, type);
-	switch(type)
+	switch (type)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONn(port) &= ~UCON_TRANS_MODE;
+		UCONn(port) &= ~UCON_TX_INT;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONn(port) &= ~UCON_RECEIVE_MODE;
+		UCONn(port) &= ~UCON_RX_INT;
 		break;
 		/* error interrupt */
 		case 2:
@@ -183,20 +189,18 @@ mmsp2_uart_unmask_irq(unsigned int irq)
 {
 	unsigned short int port, type;
 	
-	port = irq >> 2;
+	port = ((irq & 0xf) >> 2) - 1;
 	type = irq & 0x3;
 	DEBUG_IRQ("uart unmask %d %d %d\n", irq, port, type);
-	//printk("uart unmask %d %d %d\n", irq, port, type);
-	switch(type)
+	switch (type)
 	{
 		/* tx interrupt */
 		case 0:
-		UCONn(port) |= UCON_TRANS_MODEx(UCON_TRANS_MODE_IRQ) | UCON_TX_INT;
+		UCONn(port) |= UCON_TX_INT;
 		break;
 		/* rx interrupt */
 		case 1:
-		UCONn(port) |= UCON_RECEIVE_MODEx(UCON_RECEIVE_MODE_IRQ)
-			| UCON_RX_INT | UCON_RX_TIMEOUT;
+		UCONn(port) |= UCON_RX_INT | UCON_RX_TIMEOUT;
 		break;
 		/* error interrupt */
 		case 2:
@@ -231,7 +235,6 @@ mmsp2_init_irq(void)
 	TSTATUS = 0xffff;          
 	/* clear status on UART */
 	INTSTATREG = 0xffff;
-	
 	/* TODO disable all gpio interrupts */
 	
 	SRCPEND = 0xffffffff;

@@ -13,11 +13,12 @@
 #include <asm/irq.h>
 #include <asm/mach/time.h>
 
-/* Use timer 1 as system timer */
-#define TIMER_BASE IMX_TIM1_BASE
+#define DEBUG
 
 static struct clock_event_device clockevent_mp2520f;
 static enum clock_event_mode clockevent_mode = CLOCK_EVT_MODE_UNUSED;
+
+unsigned long mmsp2_get_pclk(void);
 
 /*
  * IRQ handler for the timer
@@ -26,19 +27,10 @@ static irqreturn_t
 mp2520f_timer_interrupt(int irq, void *dev_id)
 {
 	struct clock_event_device *evt = &clockevent_mp2520f;
-	uint32_t tstat;
-	irqreturn_t ret = IRQ_NONE;
 
-	/* clear the interrupt */
-	tstat = IMX_TSTAT(TIMER_BASE);
-	IMX_TSTAT(TIMER_BASE) = 0;
+	evt->event_handler(evt);
 
-	if (tstat & TSTAT_COMP) {
-		evt->event_handler(evt);
-		ret = IRQ_HANDLED;
-	}
-
-	return ret;
+	return IRQ_HANDLED;
 }
 
 static struct irqaction mp2520f_timer_irq = {
@@ -52,12 +44,8 @@ static struct irqaction mp2520f_timer_irq = {
 static int mp2520f_set_next_event(unsigned long evt,
 				  struct clock_event_device *unused)
 {
-	unsigned long tcmp;
-
-	tcmp = IMX_TCN(TIMER_BASE) + evt;
-	IMX_TCMP(TIMER_BASE) = tcmp;
-
-	return (int32_t)(tcmp - IMX_TCN(TIMER_BASE)) < 0 ? -ETIME : 0;
+	TMATCH0 = TCOUNT + evt;
+	return (int32_t)(TMATCH0 - TCOUNT) < 0 ? -ETIME : 0;
 }
 
 #ifdef DEBUG
@@ -79,12 +67,12 @@ static void mp2520f_set_mode(enum clock_event_mode mode, struct clock_event_devi
 	 */
 	local_irq_save(flags);
 	/* Disable interrupt in GPT module */
-	IMX_TCTL(TIMER_BASE) &= ~TCTL_IRQEN;
+	TINTEN &= ~1;
 	if (mode != clockevent_mode) {
 		/* Set event time into far-far future */
-		IMX_TCMP(TIMER_BASE) = IMX_TCN(TIMER_BASE) - 3;
+		TMATCH0 = TCOUNT - 3;
 		/* Clear pending interrupt */
-		IMX_TSTAT(TIMER_BASE) &= ~TSTAT_COMP;
+		TSTATUS &= 1;
 	}
 
 #ifdef DEBUG
@@ -108,7 +96,8 @@ static void mp2520f_set_mode(enum clock_event_mode mode, struct clock_event_devi
 		 * mode switching
 		 */
 		local_irq_save(flags);
-		IMX_TCTL(TIMER_BASE) |= TCTL_IRQEN;
+		TINTEN |= 1;
+		TCONTROL |= TIMER_EN;
 		local_irq_restore(flags);
 		break;
 	case CLOCK_EVT_MODE_SHUTDOWN:
@@ -130,7 +119,7 @@ static struct clock_event_device clockevent_mp2520f = {
 
 static int __init mp2520f_clockevent_init(void)
 {
-	clockevent_mp2520f.mult = div_sc(mp2520f_get_perclk1(), NSEC_PER_SEC,
+	clockevent_mp2520f.mult = div_sc(mmsp2_get_pclk(), NSEC_PER_SEC,
 					clockevent_mp2520f.shift);
 	clockevent_mp2520f.max_delta_ns =
 		clockevent_delta2ns(0xfffffffe, &clockevent_mp2520f);
@@ -149,7 +138,7 @@ static int __init mp2520f_clockevent_init(void)
  */
 cycle_t mp2520f_get_cycles(void)
 {
-	return IMX_TCN(TIMER_BASE);
+	return TCOUNT;
 }
 
 static struct clocksource clocksource_mp2520f = {
@@ -164,7 +153,7 @@ static struct clocksource clocksource_mp2520f = {
 static int __init mp2520f_clocksource_init(void)
 {
 	clocksource_mp2520f.mult =
-		clocksource_hz2mult(mp2520f_get_perclk1(), clocksource_mp2520f.shift);
+		clocksource_hz2mult(mmsp2_get_pclk(), clocksource_mp2520f.shift);
 	clocksource_register(&clocksource_mp2520f);
 
 	return 0;
@@ -179,10 +168,10 @@ static void __init mp2520f_timer_hardware_init(void)
 	/*
 	 * Initialise to a known state (all timers off, and timing reset)
 	 */
-	IMX_TCTL(TIMER_BASE) = 0;
-	IMX_TPRER(TIMER_BASE) = 0;
-
-	IMX_TCTL(TIMER_BASE) = TCTL_FRR | TCTL_CLK_PCLK1 | TCTL_TEN;
+	/* clear status on all timers */
+	TSTATUS = 0xffff;          
+	/* diable all timers */
+	TCONTROL &= ~(TIMER_EN);   
 }
 
 
