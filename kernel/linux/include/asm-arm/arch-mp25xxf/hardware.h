@@ -83,10 +83,7 @@
 
 /* UART */
 /* DMA controller, start: end: */
-/* MMC/SD, start: C000 1500 end: C000 153C */
-#define MMC_START	0xc0001500
-#define MMC_END		0xc000153c
-#define MMC_BASE	io_p2v(MMC_START)
+
 /* Clock and Power, start: C000 0900 end: C000 092C */
 #define CPW_START	0xc0000900
 #define CPW_END		0xc000092c
