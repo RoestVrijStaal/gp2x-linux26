@@ -13,6 +13,10 @@
 #include <asm/arch/hardware.h>
 #include <asm/arch/generic.h>
 
+/* TODO
+ * handle pio and dma cases separated
+ */
+
 #define UDS printk("%s start\n", __FUNCTION__);
 #define UDE printk("%s end\n", __FUNCTION__);
 
@@ -47,43 +51,9 @@ struct mmsp2_mmc_host {
 };
 
 
-/* ==== MMC/SD API ==== */
-static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
+static void mp2520f_start_command(struct mmsp2_mmc_host *mhost, struct mmc_command *cmd)
 {
-	struct mmsp2_mmc_host *host = mmc_priv(mmc);
-	unsigned int sdidatcon = 0;	
-
-	UDS
-	host->req = req;
-	host->cmd = req->cmd;
-	host->data = req->data;
-		
-	/* we have to setup again the bus width, 
-	 * because the trigger of the data transfer 
-	 * must be done at the end, after the command send
-	 */
-	if(host->bus_width == MMC_BUS_WIDTH_4)
-		sdidatcon = SDIDATCON_WIDE;
-	if(req->data)
-	{
-		SDIBSIZE = req->data->blksz;
-		/* TODO use DMA */
-		//sdidatcon |= SDIDATCON_DMAMODE;
-		/* number of blocks, Rx/Tx data, */
-		printk("%d blocks of size %d = %d\n", req->data->blocks, req->data->blksz, req->data->blocks * req->data->blksz);
-		sdidatcon |= (req->data->blocks & 0xff) | SDIDATCON_BLKMODE;
-		if (req->data->flags & MMC_DATA_WRITE)
-		{
-			/* write after response */
-			sdidatcon |= SDIDATCON_TARSP | SDIDATCON_DATMODE_TS;	
-		}
-		if (req->data->flags & MMC_DATA_READ)
-		{
-			/* read after command */
-			sdidatcon |= SDIDATCON_RACMD | SDIDATCON_DATMODE_RS;	
-		}
-		SDIINTENB1 |= SDIINTENB1_DCNT0MSK;
-	}
+#if 0
 	/* set also the 2nd MSB bit to 1 as the datasheet says */	
 	SDICMDCON = (req->cmd->opcode & SDICMDCON_CMDINDEX_MSK) | (1 << 6);
 	/* expects a respnse */
@@ -110,6 +80,57 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	SDICMDCON |= SDICMDCON_CMDOPST;
 	SDIDATCON = sdidatcon;
 	printk("command %x sent with data control %x and interrupts %x %x\n", SDICMDCON, sdidatcon, SDIINTENB0, SDIINTENB1);
+#endif
+}
+
+static void mp2520f_start_data(struct mmsp2_mmc_host *mhost, struct mmc_data *data)
+{
+#if 0
+	unsigned int sdidatcon = 0;
+	/* we have to setup again the bus width, 
+		 * because the trigger of the data transfer 
+		 * must be done at the end, after the command send
+		 */
+		if(host->bus_width == MMC_BUS_WIDTH_4)
+			sdidatcon = SDIDATCON_WIDE;
+	SDIBSIZE = req->data->blksz;
+			/* TODO use DMA */
+			//sdidatcon |= SDIDATCON_DMAMODE;
+			/* number of blocks, Rx/Tx data, */
+			printk("%d blocks of size %d = %d\n", req->data->blocks, req->data->blksz, req->data->blocks * req->data->blksz);
+			sdidatcon |= (req->data->blocks & 0xff) | SDIDATCON_BLKMODE;
+			if (req->data->flags & MMC_DATA_WRITE)
+			{
+				/* write after response */
+				sdidatcon |= SDIDATCON_TARSP | SDIDATCON_DATMODE_TS;	
+			}
+			if (req->data->flags & MMC_DATA_READ)
+			{
+				/* read after command */
+				sdidatcon |= SDIDATCON_RACMD | SDIDATCON_DATMODE_RS;	
+			}
+			SDIINTENB1 |= SDIINTENB1_DCNT0MSK;
+#endif
+}
+
+/* ==== MMC/SD API ==== */
+static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
+{
+	struct mmsp2_mmc_host *host = mmc_priv(mmc);	
+
+	UDS
+	
+	host->req = req;
+	host->cmd = req->cmd;
+	host->data = req->data;
+		
+	
+	if(req->data)
+	{
+		mp2520f_start_data(host, req->data);
+	}
+	mp2520f_start_command(host, req->cmd);
+	
 	UDE
 }
 
