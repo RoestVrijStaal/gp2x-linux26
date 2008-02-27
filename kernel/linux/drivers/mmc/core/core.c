@@ -652,13 +652,14 @@ void mmc_rescan(struct work_struct *work)
 		/*
 		 * First we search for SDIO...
 		 */
+		printk("SDIO\n");
 		err = mmc_send_io_op_cond(host, 0, &ocr);
 		if (!err) {
 			if (mmc_attach_sdio(host, ocr))
 				mmc_power_off(host);
 			return;
 		}
-
+		printk("SD\n");
 		/*
 		 * ...then normal SD...
 		 */
@@ -668,7 +669,7 @@ void mmc_rescan(struct work_struct *work)
 				mmc_power_off(host);
 			return;
 		}
-
+		printk("MMC\n");
 		/*
 		 * ...and finally MMC.
 		 */
