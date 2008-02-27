@@ -11,6 +11,10 @@
 #include <linux/dmaengine.h>
 
 #include <asm/arch/hardware.h>
+#include <asm/arch/generic.h>
+
+#define UDS printk("%s start\n", __FUNCTION__);
+#define UDE printk("%s end\n", __FUNCTION__);
 
 #define DRIVER_NAME "mmsp2_mmcsd"
 #define DRIVER_VERSION "0.1"
@@ -49,6 +53,7 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);
 	unsigned int sdidatcon = 0;	
 
+	UDS
 	host->req = req;
 	host->cmd = req->cmd;
 	host->data = req->data;
@@ -99,18 +104,22 @@ static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 	/* set arguments */
 	SDICMDARG = req->cmd->arg;
 	/* abort command (CMD12,CMD52) */
-	if(req->cmd->opcode == MMC_STOP_TRANSMISSION)
-		SDICMDCON |= SDICMDCON_ABTCMD;
+	/*if(req->cmd->opcode == MMC_STOP_TRANSMISSION)
+		SDICMDCON |= SDICMDCON_ABTCMD;*/
 	/* start sending the command */
 	SDICMDCON |= SDICMDCON_CMDOPST;
 	SDIDATCON = sdidatcon;
 	printk("command %x sent with data control %x and interrupts %x %x\n", SDICMDCON, sdidatcon, SDIINTENB0, SDIINTENB1);
+	UDE
 }
 
 
 static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 {
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);
+	
+	
+	UDS
 	printk("set ios clk: %u vdd: %u bmode: %u chips: %u power: %u bwidth: %u\n", ios->clock, ios->vdd, ios->bus_mode, ios->chip_select, ios->power_mode, ios->bus_width);
 	/* bus width */
 	if(ios->bus_width == MMC_BUS_WIDTH_4) 
@@ -178,6 +187,7 @@ static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		}
 		host->power_mode = ios->power_mode;
 	}
+	UDE
 }
 
 static struct mmc_host_ops mmsp2_mmc_ops = {
@@ -188,6 +198,7 @@ static struct mmc_host_ops mmsp2_mmc_ops = {
 
 static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_request *req)
 {
+	UDS
 	host->req = NULL;
 	host->cmd = NULL;
 	host->data = NULL;
@@ -196,11 +207,12 @@ static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_reques
 	host->data_status = 0;
 	host->fifo_status = 0;
 	mmc_request_done(host->mmc, req);
+	UDE
 }
 
 /* ==== IRQ handling ==== */
 /* just clear the interrupt let the tasklet handle the rest */
-static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
+static irqreturn_t mmsp2_mmc_irq(int irq, void *devid)
 {
 	struct mmsp2_mmc_host *host = devid;
 
@@ -222,6 +234,7 @@ static irqreturn_t mmsp2_mmc_irq(int irq, void *devid, struct pt_regs *regs)
 
 static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 {
+	UDS
 	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
 	host->cmd_status |= SDICMDSTA;
 	
@@ -233,9 +246,9 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 	
 	/* wait for command to complete (just a check it shouldnt happen)*/
 	//while(SDICMDSTA & SDICMDSTA_CMDON);
-	host->cmd->error = MMC_ERR_NONE;
-	if(host->cmd_status & SDICMDSTA_CMDTOUT)
-		host->cmd->error |= MMC_ERR_TIMEOUT;
+	//host->cmd->error = MMC_ERR_NONE;
+	/*if(host->cmd_status & SDICMDSTA_CMDTOUT)
+		host->cmd->error |= MMC_ERR_TIMEOUT;*/
 	/* FIXME my card gives a CRC when reading the OCR */
 	/*if(host->cmd_status & SDICMDSTA_RSPCRC)
 		host->cmd->error |= MMC_ERR_BADCRC;*/
@@ -260,23 +273,25 @@ static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
 	/* clear status bits */
 	SDICMDSTA = SDICMDSTA;
 	printk("TSK mmc irq cmd status %x %x\n", host->cmd_status, SDICMDSTA);
+	UDE
 }
 
 static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
 {
+	UDS
 	printk("TSK mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
 	printk("TSK mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
 	host->data_status = SDIDATSTA;
 	host->fifo_status = SDIFSTA;
 		
 	/* TODO put the above in one function */
-	host->data->error = MMC_ERR_NONE;
+	//host->data->error = MMC_ERR_NONE;
 	/* TODO parse data errors */
 	/* data errors */
-	if(host->data_status & SDIDATSTA_DATTOUT)
-		host->data->error |= MMC_ERR_TIMEOUT;
+	/*if(host->data_status & SDIDATSTA_DATTOUT)
+		host->data->error |= MMC_ERR_TIMEOUT;*/
 		
-	host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
+	//host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
 	if(host->data->flags & MMC_DATA_WRITE)
 	{
 		printk("write data\n");
@@ -319,7 +334,8 @@ static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
 	SDICON |= SDICON_FRESET;
 	/* clear data and fifo status */
 	SDIDATSTA &= SDIDATSTA;
-	SDIFSTA &= SDIFSTA;	
+	SDIFSTA &= SDIFSTA;
+	UDE
 }
 
 static void mmsp2_mmc_tasklet_fnc(unsigned long data)
@@ -327,6 +343,7 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 	struct mmsp2_mmc_host *host = (struct mmsp2_mmc_host *)data;
 	int valid = 0;
 	
+	UDS
 	/* disable interrupts */
 	SDIINTENB1 = 0x0;
 	SDIINTENB0 = 0x0;
@@ -349,13 +366,15 @@ static void mmsp2_mmc_tasklet_fnc(unsigned long data)
 	printk("request end");
 	if(valid)	printk(" OK!!!\n");
 	else		printk(" NOOOO\n");
+	
+	UDE
 }
 /* ==== DMA handling */
-static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
+/*static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
 {
 	
 	
-}
+}*/
 
 /* ==== platform device API ==== */
 static int mmsp2_mmc_probe(struct platform_device *pdev)
@@ -400,14 +419,14 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_irq;
 	/* dma initialization */
-	host->dma_client = dma_async_client_register(mmsp2_mmc_dma_handler);
+	/*host->dma_client = dma_async_client_register(mmsp2_mmc_dma_handler);
 	if(!host->dma_client)
 	{
 		ret = -ENOMEM;
 		goto err_dma;
-	}
+	}*/
 	/* FIXME what channel number? */
-	dma_async_client_chan_request(host->dma_client, 1);
+	//dma_async_client_chan_request(host->dma_client, 1);
 	
 	platform_set_drvdata(pdev, mmc);
 	/* set GPIOL pin 0-5 to alt function 1 */ 
@@ -444,7 +463,7 @@ static int mmsp2_mmc_remove(struct platform_device *pdev)
 		/* irq shutdown */
 		free_irq(host->irq, host);
 		/* dma shutdown */
-		dma_async_client_unregister(host->dma_client);
+		//dma_async_client_unregister(host->dma_client);
 		/* mmc shutdown */
 		mmc_remove_host(mmc);
 		mmc_free_host(mmc);

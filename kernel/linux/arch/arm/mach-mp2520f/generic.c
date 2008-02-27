@@ -143,7 +143,6 @@ static void __init mmsp2_show_clk(void)
 
 /* dynamically mapped devices */
 /* FIXME do we need the first resource? */
-#ifdef CONFIG_MMC_MMSP2
 static struct resource mmsp2_mmcsd_resources[] = 
 {
 	[0] = {
@@ -164,7 +163,7 @@ static struct platform_device mmsp2_mmcsd_device = {
 	.num_resources	= ARRAY_SIZE(mmsp2_mmcsd_resources),
 	.resource		= mmsp2_mmcsd_resources,
 };
-#endif
+
 
 /*============================================================================*
  *                                   UART                                     * 
@@ -331,9 +330,7 @@ static struct platform_device mmsp2_dma_device = {
 };
 
 static struct platform_device *mmsp2_devices[] __initdata = {
-#ifdef CONFIG_MMC_MMSP2
 	&mmsp2_mmcsd_device,
-#endif
 	&mp25xxf_uart0_device,
 	&mp25xxf_uart1_device,
 	&mp25xxf_uart2_device,

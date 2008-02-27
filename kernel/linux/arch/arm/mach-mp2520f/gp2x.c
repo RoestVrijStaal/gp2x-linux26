@@ -11,6 +11,7 @@
 #include <asm/mach/arch.h>
 
 #include <asm/arch/lcd.h>
+#include <asm/arch/generic.h>
 
 #include "generic.h"
 
