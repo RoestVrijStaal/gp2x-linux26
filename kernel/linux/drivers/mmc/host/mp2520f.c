@@ -15,6 +15,7 @@
 
 /* TODO
  * handle pio and dma cases separated
+ * rename all functions
  */
 
 #define UDS printk("%s start\n", __FUNCTION__);
@@ -48,10 +49,90 @@ struct mmsp2_mmc_host {
 	unsigned short int		cmd_status;
 	unsigned short int		fifo_status;
 	/* cpu driven data */
-	u8						*data_ptr;
+	unsigned int		sg_len;
+	int			sg_idx;
+	u8			*buffer;
+	u32			buffer_bytes_left;
+	u32			total_bytes_left;
 };
+/*============================================================================*
+ *                                   DMA                                      * 
+ *============================================================================*/
+/*static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
+{
+	
+	
+}*/
 
+/*============================================================================*
+ *                                  PIO                                       * 
+ *============================================================================*/
+static void mp2520f_mmc_sg_to_buf(struct mmsp2_mmc_host *host)
+{
+	struct scatterlist *sg;
 
+	sg = host->data->sg + host->sg_idx;
+	host->buffer_bytes_left = sg->length;
+	host->buffer = sg_virt(sg);
+	if (host->buffer_bytes_left > host->total_bytes_left)
+		host->buffer_bytes_left = host->total_bytes_left;
+}
+
+static void mp2520f_mmc_pio_read(struct mmsp2_mmc_host *host)
+{
+	unsigned int sdifsta = SDIFSTA;
+	
+	while (sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF))
+	{
+		
+		unsigned int cnt = 0;
+		
+		printk("Pio Read %x remaining block number %u of data %d\n", sdifsta, SDIDATCNT
+						& SDIDATCNT_BLKNUMCNT, SDIDATCNT
+						& SDIDATCNT_BLKCNT);
+		
+		if (host->buffer_bytes_left == 0) {
+			host->sg_idx++;
+			BUG_ON(host->sg_idx == host->sg_len);
+			mp2520f_mmc_sg_to_buf(host);
+		}
+		
+		*(host->buffer + cnt++) = SDIDAT;
+		*(host->buffer + cnt++) = SDIDAT;
+		*(host->buffer + cnt++) = SDIDAT;
+		*(host->buffer + cnt++) = SDIDAT;
+		if (host->bus_width == MMC_BUS_WIDTH_4) {
+			int i;
+			for (i = 0; i < 8; i++) {
+				*(host->buffer + cnt++) = SDIDAT;
+				*(host->buffer + cnt++) = SDIDAT;
+				*(host->buffer + cnt++) = SDIDAT;
+				*(host->buffer + cnt++) = SDIDAT;
+			}
+		}
+		host->buffer_bytes_left -= cnt;
+		
+		/* clear data and fifo status */
+		SDIFSTA &= SDIFSTA;
+		SDIDATSTA &= SDIDATSTA;
+		sdifsta = SDIFSTA;
+	}
+	printk("Pio Read %u %u\n", host->buffer_bytes_left, host->total_bytes_left);
+}
+
+static void mp2520f_mmc_pio_write(struct mmsp2_mmc_host *host)
+{
+	
+}
+
+static void mp2520f_mmc_pio_xfer(struct mmsp2_mmc_host *host, int write)
+{
+	
+}
+
+/*============================================================================*
+ *                                Helpers                                     * 
+ *============================================================================*/
 static void mp2520f_start_command(struct mmsp2_mmc_host *mhost, struct mmc_command *cmd)
 {
 	/* set also the 2nd MSB bit to 1 as the datasheet says */	
@@ -122,9 +203,140 @@ static void mp2520f_start_data(struct mmsp2_mmc_host *mhost, struct mmc_data *da
 			data->blocks,
 			data->blksz,
 			data->blocks * data->blksz);
+	SDIDATCON = sdidatcon;
+	/* TODO set up the buffer */
+	mhost->sg_idx = 0;
+	mhost->total_bytes_left = mhost->data->blocks * mhost->data->blksz;
+	mhost->sg_len = mhost->data->sg_len;
+	mp2520f_mmc_sg_to_buf(mhost);
 }
 
-/* ==== MMC/SD API ==== */
+static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_request *req)
+{
+	UDS
+	host->req = NULL;
+	host->cmd = NULL;
+	host->data = NULL;
+	/* clear previous status */
+	host->cmd_status = 0;
+	host->data_status = 0;
+	host->fifo_status = 0;
+	mmc_request_done(host->mmc, req);
+	/* disable interrupts */
+	SDIINTENB1 = 0x0;
+	SDIINTENB0 = 0x0;
+	UDE
+}
+
+
+static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
+{
+	/* TODO this might be possible ? */
+	host->cmd_status |= SDICMDSTA;
+		
+	if (host->cmd->flags & MMC_RSP_PRESENT)
+	{
+		/* read response */
+		if (host->cmd->flags & MMC_RSP_136)
+		{
+			host->cmd->resp[0] = SDIRSP7 | (SDIRSP6 << 16);
+			host->cmd->resp[1] = SDIRSP5 | (SDIRSP4 << 16);
+			host->cmd->resp[2] = SDIRSP3 | (SDIRSP2 << 16);
+			host->cmd->resp[3] = SDIRSP1 | (SDIRSP0 << 16);
+						
+		}
+		else
+			host->cmd->resp[0] = SDIRSP0 | (SDIRSP1 << 16);
+		
+		/* check errors */
+		if (host->cmd_status & SDICMDSTA_CMDTOUT)
+			host->cmd->error = -ETIMEDOUT;
+		else if (!(host->cmd_status & SDICMDSTA_RSPFIN))
+			host->cmd->error = -EINVAL;
+		else if ((host->cmd->flags & MMC_RSP_CRC) && (host->cmd_status & SDICMDSTA_RSPCRC))
+			host->cmd->error = -EILSEQ;
+	}
+	
+	/* clear status bits */
+	SDICMDSTA = SDICMDSTA;
+	printk("Command End. Error = %d\n", host->cmd->error);
+}
+
+static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
+{
+	UDS
+	printk("Data End. mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
+	printk("Data End. mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
+	host->data_status = SDIDATSTA;
+	host->fifo_status = SDIFSTA;
+		
+	if(host->data->flags & MMC_DATA_WRITE)
+	{
+	}
+	else
+	{
+		mp2520f_mmc_pio_read(host);
+	}
+	/* reset fifo */
+	SDICON |= SDICON_FRESET;
+}
+
+/*============================================================================*
+ *                               Interrupts                                   * 
+ *============================================================================*/
+static void mmsp2_mmc_tasklet_fnc(unsigned long data)
+{
+	struct mmsp2_mmc_host *host = (struct mmsp2_mmc_host *)data;
+	int valid = 0;
+	
+	/* disable interrupts */
+	SDIINTENB1 = 0x0;
+	SDIINTENB0 = 0x0;
+	
+	if(host->data)
+	{
+		valid = 1;
+		mmsp2_mmc_data_end(host);
+	}
+	if(host->cmd)
+	{
+		valid = 1;	
+		mmsp2_mmc_cmd_end(host);	
+	}
+	if(host->req)
+	{
+		valid = 1;
+		mmsp2_mmc_request_end(host, host->req);
+	}
+	printk("request end");
+	if(valid)	printk(" OK!!!\n");
+	else		printk(" NOOOO\n");
+	
+}
+
+/* just clear the interrupt let the tasklet handle the rest */
+static irqreturn_t mmsp2_mmc_irq(int irq, void *devid)
+{
+	struct mmsp2_mmc_host *host = devid;
+
+#if 1
+	printk("IRQ mmc irq cmd status %hx\n", SDICMDSTA);
+	printk("IRQ mmc irq data status %hx\n", SDIDATSTA);
+	printk("IRQ mmc irq fifo status %hx\n", SDIFSTA);
+#endif
+	/* clear interrupt status bit (to not generate more interrupts) */
+	//SDICMDSTA &= SDICMDSTA_CMDSENT;
+	host->cmd_status |= SDICMDSTA;
+	SDICMDSTA &= SDICMDSTA;
+	SDIDATSTA &= SDIDATSTA;
+	SDIFSTA &= SDIFSTA;
+	tasklet_schedule(&host->tasklet);
+	
+	return IRQ_HANDLED;
+}
+/*============================================================================*
+ *                                 SD/MMC                                     * 
+ *============================================================================*/
 static void mmsp2_mmc_request(struct mmc_host *mmc, struct mmc_request *req)
 {
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);	
@@ -150,7 +362,6 @@ static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	struct mmsp2_mmc_host *host = mmc_priv(mmc);
 	
 	
-	UDS
 	printk("set ios clk: %u vdd: %u bmode: %u chips: %u power: %u bwidth: %u\n", ios->clock, ios->vdd, ios->bus_mode, ios->chip_select, ios->power_mode, ios->bus_width);
 	/* bus width */
 	if(ios->bus_width == MMC_BUS_WIDTH_4) 
@@ -218,7 +429,6 @@ static void mmsp2_mmc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		}
 		host->power_mode = ios->power_mode;
 	}
-	UDE
 }
 
 static struct mmc_host_ops mmsp2_mmc_ops = {
@@ -227,191 +437,9 @@ static struct mmc_host_ops mmsp2_mmc_ops = {
 	//int	(*get_ro)(struct mmc_host *host);
 };
 
-static void mmsp2_mmc_request_end(struct mmsp2_mmc_host *host, struct mmc_request *req)
-{
-	UDS
-	host->req = NULL;
-	host->cmd = NULL;
-	host->data = NULL;
-	/* clear previous status */
-	host->cmd_status = 0;
-	host->data_status = 0;
-	host->fifo_status = 0;
-	mmc_request_done(host->mmc, req);
-	/* disable interrupts */
-	SDIINTENB1 = 0x0;
-	SDIINTENB0 = 0x0;
-	UDE
-}
-
-/* ==== IRQ handling ==== */
-/* just clear the interrupt let the tasklet handle the rest */
-static irqreturn_t mmsp2_mmc_irq(int irq, void *devid)
-{
-	struct mmsp2_mmc_host *host = devid;
-
-#if 1
-	printk("IRQ mmc irq cmd status %hx\n", SDICMDSTA);
-	printk("IRQ mmc irq data status %hx\n", SDIDATSTA);
-	printk("IRQ mmc irq fifo status %hx\n", SDIFSTA);
-#endif
-	/* clear interrupt status bit (to not generate more interrupts) */
-	//SDICMDSTA &= SDICMDSTA_CMDSENT;
-	host->cmd_status |= SDICMDSTA;
-	SDICMDSTA &= SDICMDSTA;
-	SDIDATSTA &= SDIDATSTA;
-	SDIFSTA &= SDIFSTA;
-	tasklet_schedule(&host->tasklet);
-	
-	return IRQ_HANDLED;
-}
-
-static void mmsp2_mmc_cmd_end(struct mmsp2_mmc_host *host)
-{
-	/* this might be possible ? */
-	host->cmd_status |= SDICMDSTA;
-	
-	
-	/* wait for command to complete (just a check it shouldnt happen)*/
-	//while(SDICMDSTA & SDICMDSTA_CMDON);
-	//host->cmd->error = MMC_ERR_NONE;
-	/*if(host->cmd_status & SDICMDSTA_CMDTOUT)
-		host->cmd->error |= MMC_ERR_TIMEOUT;*/
-	/* FIXME my card gives a CRC when reading the OCR */
-	/*if(host->cmd_status & SDICMDSTA_RSPCRC)
-		host->cmd->error |= MMC_ERR_BADCRC;*/
-		
-	if (host->cmd->flags & MMC_RSP_PRESENT)
-	{
-		/* read response */
-		if (host->cmd->flags & MMC_RSP_136)
-		{
-			host->cmd->resp[0] = SDIRSP0 | (SDIRSP1 << 16);
-			host->cmd->resp[1] = SDIRSP2 | (SDIRSP3 << 16);
-			host->cmd->resp[2] = SDIRSP4 | (SDIRSP5 << 16);
-			host->cmd->resp[3] = SDIRSP6 | (SDIRSP7 << 16);
-						
-		}
-		else
-		{
-			printk("ok\n");
-			host->cmd->resp[0] = SDIRSP0 | (SDIRSP1 << 16);
-			printk("cmd rsp = %x\n", host->cmd->resp[0]);
-		}
-		
-		/* check errors */
-		if (host->cmd_status & SDICMDSTA_CMDTOUT)
-			host->cmd->error = -ETIMEDOUT;
-		else if (!(host->cmd_status & SDICMDSTA_RSPFIN))
-			host->cmd->error = -EINVAL;
-		else if (host->cmd_status & SDICMDSTA_RSPCRC)
-			host->cmd->error = -EILSEQ;
-	}
-	
-	/* clear status bits */
-	SDICMDSTA = SDICMDSTA;
-	printk("Command End. Error = %d\n", host->cmd->error);
-}
-
-static void mmsp2_mmc_data_end(struct mmsp2_mmc_host *host)
-{
-	UDS
-	printk("Data End. mmc irq data status %x %x\n", host->data_status, SDIDATSTA);
-	printk("Data End. mmc irq fifo status %x %x\n", host->fifo_status, SDIFSTA);
-	host->data_status = SDIDATSTA;
-	host->fifo_status = SDIFSTA;
-		
-	/* TODO put the above in one function */
-	//host->data->error = MMC_ERR_NONE;
-	/* TODO parse data errors */
-	/* data errors */
-	/*if(host->data_status & SDIDATSTA_DATTOUT)
-		host->data->error |= MMC_ERR_TIMEOUT;*/
-		
-	//host->data_ptr = (u8*)(page_address(host->data->sg->page) + host->data->sg->offset);
-	if(host->data->flags & MMC_DATA_WRITE)
-	{
-		printk("write data\n");
-	}
-	else
-	{
-		int cnt = 0;
-		int bytes = host->data->blksz * host->data->blocks;
-		
-		printk("read data\n");
-		#if 0	
-		while(bytes > cnt)
-		{
-			unsigned short int sdifsta = SDIFSTA;
-			if(sdifsta & (SDIFSTA_RFDET | SDIFSTA_RFHALF | SDIFSTA_RFLAST))
-			{
-				printk("remaining block number %d of data %d\n", SDIDATCNT & SDIDATCNT_BLKNUMCNT, SDIDATCNT & SDIDATCNT_BLKCNT);
-				/* TODO needs dma first */
-				*(host->data_ptr + cnt++) = SDIDAT;
-				*(host->data_ptr + cnt++) = SDIDAT;
-				*(host->data_ptr + cnt++) = SDIDAT;
-				*(host->data_ptr + cnt++) = SDIDAT;
-				if(host->bus_width == MMC_BUS_WIDTH_4)
-				{
-					int i;
-					for(i=0; i<8; i++)
-					{
-						*(host->data_ptr + cnt++) = SDIDAT;
-						*(host->data_ptr + cnt++) = SDIDAT;
-						*(host->data_ptr + cnt++) = SDIDAT;
-						*(host->data_ptr + cnt++) = SDIDAT;
-					}						
-				}
-			}
-		}
-		#endif
-		printk("read %d bytes fifo status %x\n", cnt, SDIFSTA);
-	}
-	/* reset fifo */
-	SDICON |= SDICON_FRESET;
-	/* clear data and fifo status */
-	SDIDATSTA &= SDIDATSTA;
-	SDIFSTA &= SDIFSTA;
-	UDE
-}
-
-static void mmsp2_mmc_tasklet_fnc(unsigned long data)
-{
-	struct mmsp2_mmc_host *host = (struct mmsp2_mmc_host *)data;
-	int valid = 0;
-	
-	/* disable interrupts */
-	SDIINTENB1 = 0x0;
-	SDIINTENB0 = 0x0;
-	
-	if(host->data)
-	{
-		valid = 1;
-		mmsp2_mmc_data_end(host);
-	}
-	if(host->cmd)
-	{
-		valid = 1;	
-		mmsp2_mmc_cmd_end(host);	
-	}
-	if(host->req)
-	{
-		valid = 1;
-		mmsp2_mmc_request_end(host, host->req);
-	}
-	printk("request end");
-	if(valid)	printk(" OK!!!\n");
-	else		printk(" NOOOO\n");
-	
-}
-/* ==== DMA handling */
-/*static void mmsp2_mmc_dma_handler(struct dma_client *client, struct dma_chan *chan, enum dma_event event)
-{
-	
-	
-}*/
-
-/* ==== platform device API ==== */
+/*============================================================================*
+ *                                 Platform                                   * 
+ *============================================================================*/
 static int mmsp2_mmc_probe(struct platform_device *pdev)
 {
 	struct mmc_host *mmc;
@@ -533,8 +561,9 @@ static struct platform_driver mmsp2_mmc_driver = {
 	.suspend	= mmsp2_mmc_suspend,
 	.resume		= mmsp2_mmc_resume,
 };
-
-/* ==== module API ==== */
+/*============================================================================*
+ *                                  Module                                    * 
+ *============================================================================*/
 static int __init mmsp2_mmc_init(void)
 {
 	return platform_driver_register(&mmsp2_mmc_driver);
