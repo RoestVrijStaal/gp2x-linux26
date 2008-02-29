@@ -89,7 +89,17 @@
 
 /* Data Status Register */
 #define SDIDATSTA 				__REGW(MMC_START + 0x28)	
+#define SDIDATSTA_RWREQ				(1 << 10)
+#define SDIDATSTA_SDIOINT			(1 << 9)
+#define SDIDATSTA_FFFAIL			(1 << 8)
+#define SDIDATSTA_CRCSTA			(1 << 7)
+#define SDIDATSTA_DATCRC			(1 << 6)
 #define SDIDATSTA_DATTOUT			(1 << 5)
+#define SDIDATSTA_DATFIN 			(1 << 4)
+#define SDIDATSTA_BUSYFIN			(1 << 3)
+#define SDIDATSTA_SBITERR			(1 << 2)
+#define SDIDATSTA_TXDATON			(1 << 1)
+#define SDIDATSTA_RXDATON			(1 << 0)
 
 #define SDIFSTA					__REGW(MMC_START + 0x2A)	
 #define SDIFSTA_RFDET				(1 << 12)
