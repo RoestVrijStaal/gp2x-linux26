@@ -82,6 +82,10 @@
 #define SDIDATCON_STOPMODE			(1 << 14)	/* Determines whether data transfer was stopped by force */
 #define SDIDATCON_DMAMODE			(1 << 15)	/* ERR: Use DMA Mode, this isnt documented */
 
+
+#define SDIDATCONL				__REGW(MMC_START + 0x20)
+#define SDIDATCONH				__REGW(MMC_START + 0x20)
+
 /* Data Remain Counter Register */
 #define SDIDATCNT				__REG(MMC_START + 0x24)
 #define SDIDATCNT_BLKNUMCNT			(0x00fff800)
