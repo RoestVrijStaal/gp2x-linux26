@@ -104,28 +104,25 @@ static void mp2520f_mmc_pio_read(struct mmsp2_mmc_host *host, struct mmc_data *d
 	total_bytes_left = data->blocks * data->blksz;
 	
 	
-	printk("Pio Read %x %x\n", SDIDATSTA, SDIFSTA);
-	while (cnt < len)
+	printk("Pio Read %x %x. %d %d\n", SDIDATSTA, SDIFSTA, sg_len, sg->length);
+	while ((SDIFSTA & SDIFSTA_RFDET) && (cnt < len))
 	{
 		
 	/*	printk("Pio Read %x remaining block number %u of data %d\n", sdifsta, SDIDATCNT
 						& SDIDATCNT_BLKNUMCNT, SDIDATCNT
 						& SDIDATCNT_BLKCNT);
 	*/	
-		/* wait until more data arrives */
-		while (SDIFSTA & SDIFSTA_RFDET)
-		{
-			if (buffer_bytes_left == 0) {
-				sg_idx++;
-				BUG_ON(sg_idx == sg_len);
-				sg = data->sg + sg_idx;
-				buffer_bytes_left = sg->length;
-				buffer = sg_virt(sg);
-			}
-			/* get the data */
-			*(buffer + cnt++) = SDIDAT;
-			buffer_bytes_left -= 1;	
+		if (buffer_bytes_left == 0) {
+			sg_idx++;
+			//printk("%d %d %x\n", sg_idx, buffer_bytes_left, SDIFSTA);
+			BUG_ON(sg_idx == sg_len);
+			sg = data->sg + sg_idx;
+			buffer_bytes_left = sg->length;
+			buffer = sg_virt(sg);
 		}
+		/* get the data */
+		*(buffer + cnt++) = SDIDAT;
+		buffer_bytes_left -= 1;
 		/* TODO check erros on transmission */
 		/* clear fifo status */
 		SDIFSTA &= SDIFSTA;
@@ -492,7 +489,7 @@ static int mmsp2_mmc_probe(struct platform_device *pdev)
 	mmc->ops = &mmsp2_mmc_ops;
 	mmc->f_max = mmsp2_get_pclk();
 	mmc->f_min = mmc->f_max / (256 + 1); /* pclk / (2^8 + 1) */
-	mmc->caps = MMC_CAP_4_BIT_DATA; 
+	//mmc->caps = MMC_CAP_4_BIT_DATA; 
 	mmc->ocr_avail = MMC_VDD_27_28 | MMC_VDD_29_30 | MMC_VDD_31_32 | MMC_VDD_32_33 | MMC_VDD_33_34 | MMC_VDD_34_35 | MMC_VDD_35_36; /* 26_36 mmc, 27_36 sd */
 	
 	host = mmc_priv(mmc);
