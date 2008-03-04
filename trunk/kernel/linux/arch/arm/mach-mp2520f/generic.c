@@ -141,13 +141,16 @@ static void __init mmsp2_show_clk(void)
         printk(KERN_INFO "[mmspw] PCLK: %9lu Hz\n", c);
 }
 
+/*============================================================================*
+ *                                 SD/MMC                                     * 
+ *============================================================================*/
 /* dynamically mapped devices */
 /* FIXME do we need the first resource? */
 static struct resource mmsp2_mmcsd_resources[] = 
 {
 	[0] = {
-		.start	= MMC_START,
-		.end	= MMC_END,
+		.start	= MP25XXF_MMC_START,
+		.end	= MP25XXF_MMC_END,
 		.flags	= IORESOURCE_MEM,
 	},
 	[1] = {
@@ -163,7 +166,6 @@ static struct platform_device mmsp2_mmcsd_device = {
 	.num_resources	= ARRAY_SIZE(mmsp2_mmcsd_resources),
 	.resource		= mmsp2_mmcsd_resources,
 };
-
 
 /*============================================================================*
  *                                   UART                                     * 
@@ -329,12 +331,32 @@ static struct platform_device mmsp2_dma_device = {
 	.resource	= mmsp2_dma_resources,
 };
 
+/*============================================================================*
+ *                        Multi Layer Controller (MLC)                        * 
+ *============================================================================*/
+static struct resource mp25xxf_mlc_resources[] = 
+{
+	[0] = {
+		.start	= MP25XXF_MLC_START,
+		.end	= MP25XXF_MLC_END,
+		.flags	= IORESOURCE_MEM,
+	},
+};
+
+static struct platform_device mp25xxf_mlc_device = {
+	.name		= "mp25xxf_mlc",
+	.id		= -1,
+	.num_resources	= ARRAY_SIZE(mp25xxf_mlc_resources),
+	.resource	= mp25xxf_mlc_resources,
+};
+
 static struct platform_device *mmsp2_devices[] __initdata = {
 	&mmsp2_mmcsd_device,
 	&mp25xxf_uart0_device,
 	&mp25xxf_uart1_device,
 	&mp25xxf_uart2_device,
 	&mp25xxf_uart3_device,
+	&mp25xxf_mlc_device,
 	&mmsp2_dma_device,
 };
 
