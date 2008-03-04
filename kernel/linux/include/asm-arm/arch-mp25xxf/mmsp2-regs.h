@@ -136,35 +136,6 @@
 #define DPC_HS_STR 			__REGW(0xc000281c) 	/* Horizontal Sync Start */
 #define DPC_HS_END 			__REGW(0xc000291e) 	/* Horizontal Sync End */
 
-/**
- * Video Post Processor Registers
- * It has a multilayer controller that handles the following sources:
- * YUV Overlay Layer [drivers/v4l/mmsp2.c]
- * OSD
- * SPU (sub picture unit)
- * RGB Layer [drivers/fb/mmsp2fb.c] with 5 independent regions
- * 
- */
 
-/* RGB Layer (8/16/24 bpp) */
-#define MLC_STL_CNTL 		__REGW(0xc00028da)	/* Still Image Control */
-#define MLC_STL_MIXMUX		__REGW(0xc00028dc) 	/* Mix/Mux Control */
-#define MLC_STL_ALPHAL 		__REGW(0xc00028de) 	/* */ 
-#define MLC_STL_ALPHAH 		__REGW(0xc00028e0) 	/* */ 
-#define MLC_STLn_STX(n) 	__REGW(0xc000) 		/* Horizontal Start */ 
-#define MLC_STLn_ENDX(n) 	__REGW(0xc000) 		/* Horizontal End */ 
-#define MLC_STL_CKEY_GR 	__REGW(0xc0002902) 	/* */ 
-#define MLC_STL_CKEY_B 		__REGW(0xc0002904) 	/* */ 
-#define MLC_STL_HSC 		__REGW(0xc0002906) 	/* Horizontal Scale Factor */ 
-#define MLC_STL_ __REGW(0xc000) /* TODO Scale Factor */ 
-#define MLC_STL_HW 			__REGW(0xc000290c) 	/* Horizontal Width*/ 
-#define MLC_STL_OADRL 		__REGW(0xc000290e) 	/* Source Odd Address Low */ 
-#define MLC_STL_OADRH 		__REGW(0xc0002910) 	/* Source Odd Address High */ 
-#define MLC_STL_EADRL 		__REGW(0xc0002912) 	/* Source Even Address Low */ 
-#define MLC_STL_EADRH 		__REGW(0xc0002914) 	/* Source Even Address High */ 
-#define MLC_STL_PALLTA 		__REGW(0xc0002958) 	/* Palette Table Index */ 
-#define MLC_STL_PALLTD 		__REGW(0xc000295a) 	/* Palette Table Data */ 
-
-/* Cursor Layer (2bpp) */
 
 #endif /*MMSP2REGS_H_*/

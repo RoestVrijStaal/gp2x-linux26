@@ -5,12 +5,12 @@
  *                                 SD/MMC                                     * 
  *============================================================================*/
 /* MMC/SD, start: C000 1500 end: C000 153C */
-#define MMC_START	0xc0001500
-#define MMC_END		0xc000153c
-#define MMC_BASE	io_p2v(MMC_START)
+#define MP25XXF_MMC_START	0xc0001500
+#define MP25XXF_MMC_END		0xc000153c
+#define MMC_BASE		io_p2v(MP25XXF_MMC_START)
 
 /* SDI Control Register */
-#define SDICON					__REGW(MMC_START + 0x00)
+#define SDICON					__REGW(MP25XXF_MMC_START + 0x00)
 #define SDICON_BYTE				(1 << 4) 	/* Byte Order Type */
 #define SDICON_BYTE_LE				(0 << 4)	/* D[7:0],D[15:8],D[23:16],D[31:24] */
 #define SDICON_BYTE_BE				(1 << 4)	/* D[31:24],D[23:16],D[15:8],D[7:0] */
@@ -20,13 +20,13 @@
 #define SDICON_ENCLK				(1 << 0)	/* Clock Out Enable */
 
 /* SDI Prescaler Register */
-#define SDIPRE					__REGW(MMC_START + 0x02)
+#define SDIPRE					__REGW(MP25XXF_MMC_START + 0x02)
 
 /* SDI Command Argument Register */
-#define SDICMDARG				__REG(MMC_START + 0x04)	
+#define SDICMDARG				__REG(MP25XXF_MMC_START + 0x04)	
 
 /* SDI Command Control Register */
-#define SDICMDCON				__REGW(MMC_START + 0x08)
+#define SDICMDCON				__REGW(MP25XXF_MMC_START + 0x08)
 #define SDICMDCON_ABTCMD			(1 << 12) 	/* Command type: Abort(CMD12,CMD52) */
 #define SDICMDCON_CMDDAT			(1 << 11)	/* Command type: with Data */
 #define SDICMDCON_HOSTRCV			(1 << 10)	/* Response is 136-bit long */
@@ -35,7 +35,7 @@
 #define SDICMDCON_CMDINDEX_MSK			(0xff)		/* with start 2bit */
 
 /* SDI Command Status Register */
-#define SDICMDSTA 				__REGW(MMC_START + 0x0A)
+#define SDICMDSTA 				__REGW(MP25XXF_MMC_START + 0x0A)
 #define SDICMDSTA_RSPCRC			(1 << 12)
 #define SDICMDSTA_CMDSENT			(1 << 11)
 #define SDICMDSTA_CMDTOUT			(1 << 10)
@@ -44,34 +44,34 @@
 #define SDICMDSTA_RSPINDEX			(0xff)
 
 /* SDI Response Register 0 */
-#define SDIRSP0					__REGW(MMC_START + 0x0c)
+#define SDIRSP0					__REGW(MP25XXF_MMC_START + 0x0c)
 
 /* SDI Response Register 1 */
-#define SDIRSP1					__REGW(MMC_START + 0x0e)
+#define SDIRSP1					__REGW(MP25XXF_MMC_START + 0x0e)
 
 /* SDI Response Register 2 */
-#define SDIRSP2					__REGW(MMC_START + 0x10)
+#define SDIRSP2					__REGW(MP25XXF_MMC_START + 0x10)
 
 /* SDI Response Register 3 */
-#define SDIRSP3					__REGW(MMC_START + 0x12)
+#define SDIRSP3					__REGW(MP25XXF_MMC_START + 0x12)
 
 /* SDI Response Register 4 */
-#define SDIRSP4					__REGW(MMC_START + 0x14)
+#define SDIRSP4					__REGW(MP25XXF_MMC_START + 0x14)
 
 /* SDI Response Register 5 */
-#define SDIRSP5					__REGW(MMC_START + 0x16)
+#define SDIRSP5					__REGW(MP25XXF_MMC_START + 0x16)
 
 /* SDI Response Register 6 */
-#define SDIRSP6					__REGW(MMC_START + 0x18)
+#define SDIRSP6					__REGW(MP25XXF_MMC_START + 0x18)
 
 /* SDI Response Register 7 */
-#define SDIRSP7					__REGW(MMC_START + 0x1a)
+#define SDIRSP7					__REGW(MP25XXF_MMC_START + 0x1a)
 
 /* SDI Block Size Register */
-#define SDIBSIZE				__REGW(MMC_START + 0x1e)
+#define SDIBSIZE				__REGW(MP25XXF_MMC_START + 0x1e)
 
 /* SDI Data Control Register */
-#define SDIDATCON				__REG(MMC_START + 0x20)
+#define SDIDATCON				__REG(MP25XXF_MMC_START + 0x20)
 #define SDIDATCON_PRDTYPE 			(1 << 21)	
 #define SDIDATCON_TARSP 			(1 << 20)	/* Transmit after response */
 #define SDIDATCON_RACMD 			(1 << 19)	/* Receive after command */
@@ -83,16 +83,16 @@
 #define SDIDATCON_DMAMODE			(1 << 15)	/* ERR: Use DMA Mode, this isnt documented */
 
 
-#define SDIDATCONL				__REGW(MMC_START + 0x20)
-#define SDIDATCONH				__REGW(MMC_START + 0x20)
+#define SDIDATCONL				__REGW(MP25XXF_MMC_START + 0x20)
+#define SDIDATCONH				__REGW(MP25XXF_MMC_START + 0x20)
 
 /* Data Remain Counter Register */
-#define SDIDATCNT				__REG(MMC_START + 0x24)
+#define SDIDATCNT				__REG(MP25XXF_MMC_START + 0x24)
 #define SDIDATCNT_BLKNUMCNT			(0x00fff800)
 #define SDIDATCNT_BLKCNT			(0x000007ff)
 
 /* Data Status Register */
-#define SDIDATSTA 				__REGW(MMC_START + 0x28)	
+#define SDIDATSTA 				__REGW(MP25XXF_MMC_START + 0x28)	
 #define SDIDATSTA_RWREQ				(1 << 10)
 #define SDIDATSTA_SDIOINT			(1 << 9)
 #define SDIDATSTA_FFFAIL			(1 << 8)
@@ -105,17 +105,17 @@
 #define SDIDATSTA_TXDATON			(1 << 1)
 #define SDIDATSTA_RXDATON			(1 << 0)
 
-#define SDIFSTA					__REGW(MMC_START + 0x2A)	
+#define SDIFSTA					__REGW(MP25XXF_MMC_START + 0x2A)	
 #define SDIFSTA_RFDET				(1 << 12)
 #define SDIFSTA_RFLAST				(1 << 9)
 #define SDIFSTA_RFFULL				(1 << 8)
 #define SDIFSTA_RFHALF				(1 << 7)
 
 /* SDI Data Register */
-#define SDIDAT 					__REGB(MMC_START + 0x2C)	
+#define SDIDAT 					__REGB(MP25XXF_MMC_START + 0x2C)	
 
 /* SDI Interrupt Mask Register 1 */
-#define SDIINTENB1 				__REGW(MMC_START + 0x30)	
+#define SDIINTENB1 				__REGW(MP25XXF_MMC_START + 0x30)	
 #define SDIINTENB1_TOUTMSK			(1 << 15)	/* Response timeout occur interrupt mask */
 #define SDIINTENB1_CMDRCVMSK			(1 << 14) 	/* Command response receive interrupt mask */
 #define SDIINTENB1_RWRMSK			(1 << 13) 	/* Read wait request occur interrupt mask */
@@ -134,19 +134,19 @@
 #define SDIINTENB1_RXHFMSK 			(1 << 0) 	/* Rx FIFO half full interrupt mask */
 
 /* SDI Interrupt Mask Register 0 */
-#define SDIINTENB0 				__REGW(MMC_START + 0x32)
+#define SDIINTENB0 				__REGW(MP25XXF_MMC_START + 0x32)
 #define SDIINTENB0_CMDSNTMSK 			(1 << 0)	/* Command Sent */
 #define SDIINTENB0_RESCRCMSK 			(1 << 1)	/* Response CRC check */
 
 /* SDI Data Timer Register */
-#define SDIDTIMERL				__REGW(MMC_START + 0x36)
+#define SDIDTIMERL				__REGW(MP25XXF_MMC_START + 0x36)
 /* SDI Data Timer Register */
-#define SDIDTIMERH				__REGW(MMC_START + 0x38)
+#define SDIDTIMERH				__REGW(MP25XXF_MMC_START + 0x38)
 
 /* SDI Shift Register Low */
-#define SDISFTL					__REGW(MMC_START + 0x3a)
+#define SDISFTL					__REGW(MP25XXF_MMC_START + 0x3a)
 
 /* SDI Shift Register High */
-#define SDISFTH					__REGW(MMC_START + 0x3c)
+#define SDISFTH					__REGW(MP25XXF_MMC_START + 0x3c)
 
 #endif
