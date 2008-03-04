@@ -1,7 +1,10 @@
 #ifndef HARDWARE_H_
 #define HARDWARE_H_
 
+#include "regs-2d.h"
 #include "regs-dma.h"
+#include "regs-dpc.h"
+#include "regs-gpio.h"
 #include "regs-sdi.h"
 #include "regs-mlc.h"
 #include "regs-uart.h"
@@ -90,10 +93,7 @@
 #define CPW_START	0xc0000900
 #define CPW_END		0xc000092c
 #define CPW_BASE	io_p2v(CPW_START)
-/* GPIO */
-#define GPIO_START	0xc0001020
-#define GPIO_END	0xc00011bc
-#define GPIO_BASE	io_p2v(GPIO_START)
+
 
 /* Fast IO space */
 #define FIO_START	0xe0000000
