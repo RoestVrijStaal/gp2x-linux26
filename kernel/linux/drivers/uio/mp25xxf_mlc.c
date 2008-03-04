@@ -14,6 +14,7 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 {
 	struct uio_info *info;
 	struct resource *r;
+	int ret;
 
 	printk(KERN_INFO "[MP25XXF] MLC Driver\n");
 	
@@ -23,7 +24,11 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!r)
-		return -ENXIO;
+	{
+		ret = -ENXIO;
+		goto out_get;
+	}
+		
 
 	r = request_mem_region(r->start, r->end - r->start + 1, pdev->name);
 	
@@ -35,14 +40,20 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	info->name = DRIVER_NAME;
 
 	if (uio_register_device(&pdev->dev, info))
+	{
+		ret = -ENODEV;
 		goto out_unmap;
+	}
 
 	platform_set_drvdata(pdev, info);
 
 	return 0;
+	
 out_unmap:
-	//release_mem_region(r->start, r->end - r->start + 1);
-	return -ENODEV;
+	release_mem_region(r->start, r->end - r->start + 1);
+out_get:
+	free(info);
+	return r;
 }
 
 static int mp25xxf_mlc_remove(struct platform_device *pdev)
