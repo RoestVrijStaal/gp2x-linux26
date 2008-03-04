@@ -1,53 +1,81 @@
 #ifndef MP25XXF_REGS_MLC_H_
 #define MP25XXF_REGS_MLC_H_
+/*============================================================================*
+ *                        Multi Layer Controller (MLC)                        * 
+ *============================================================================*/
+/* MMC/SD, start: C000 1500 end: C000 153C */
+#define MP25XXF_MLC_START	0xc0002880
+#define MP25XXF_MLC_END		0xc00029c0
+#define MP25XXF_MLC_BASE	io_p2v(MLC_START)
 
-/* Overlay Control Register (MLC_OVLAY_CNTR)
-Address : C000 2880h */
-[15:14] R/W Reserved Must be 0 2’b0
-[13] R/W DISP_FLD_POL When Field Mode, Select Polarity of Field Signal from Display Sync. Generation
-Block.
-0 : Normal 1 : Inversion
-0
-[12] R/W DISP_GAMM_BYPATH Select Bypath of RGB Gamma Table
-0 : Gamma On 1 : By path
-0
-[11] R/W DISP_SWAP Select Priority of OSD and Sub-Picture
-0 : OSD Priority 1 : Sub Picture Priority
-0
-[10] R/W Reserved Must be 0 0
-[9] R/W DISP_CURSOR Cursor Enable / Disable
-0 : Cursor Disable 1 : Cursor Enable
-0
-[8] R/W DISP_SUBPICTURE Sub-Picture Enable/ Disable
-0 : Sub-Picture Disable 1 : Sub-Picture Enable
-0
-[7] R/W DISP_OSD OSD Enable/ Disable
-0 : OSD Disable 1 : OSD Enable
-0
-[6] R/W DISP_STL5EN Region 5 Enable/Disable at Still Image (RGB) Layer
-0 : Disable 1 : Enable
-0
-[5] R/W DISP_STL4EN Region 4 Enable/Disable at Still Image (RGB) Layer
-0 : Disable 1 : Enable
-0
-[4] R/W DISP_STL3EN Region 3 Enable/Disable at Still Image (RGB) Layer
-0 : Disable 1 : Enable
-0
-[3] R/W DISP_STL2EN Region 2 Enable/Disable at Still Image(RGB) Layer
-0 : Disable 1 : Enable
-0
-[2] R/W DISP_STL1EN Region 1 Enable/Disable at Still Image (RGB) Layer
-0 : Disable 1 : Enable
-0
-[1] R/W DISP_VLBON Video Plane B Enable/Disable at Video(Y/Cb/Cr) Layer.
-Video Plane B is from External Memory or Frame Dimension Converter.
-0 : Disable 1 : Enable
-0
-[0] R/W DISP_ VIAON Video Plane A Enable/Disable at Video(Y/Cb/Cr) Layer.
-Video Plane A is from External Memory or Scale Processor.
-0 : Disable 1 : Enable
-0
+/**
+ * Video Post Processor Registers
+ * It has a multilayer controller that handles the following sources:
+ * YUV Overlay Layer [drivers/v4l/mmsp2.c]
+ * OSD
+ * SPU (sub picture unit)
+ * RGB Layer [drivers/fb/mmsp2fb.c] with 5 independent regions
+ * 
+ */
 
+/* old code */
+#if 0
+#define MLC_STL_CNTL 		__REGW(0xc00028da)	/* Still Image Control */
+#define MLC_STL_MIXMUX		__REGW(0xc00028dc) 	/* Mix/Mux Control */
+#define MLC_STL_ALPHAL 		__REGW(0xc00028de) 	/* */ 
+#define MLC_STL_ALPHAH 		__REGW(0xc00028e0) 	/* */ 
+#define MLC_STLn_STX(n) 	__REGW(0xc000) 		/* Horizontal Start */ 
+#define MLC_STLn_ENDX(n) 	__REGW(0xc000) 		/* Horizontal End */ 
+#define MLC_STL_CKEY_GR 	__REGW(0xc0002902) 	/* */ 
+#define MLC_STL_CKEY_B 		__REGW(0xc0002904) 	/* */ 
+#define MLC_STL_HSC 		__REGW(0xc0002906) 	/* Horizontal Scale Factor */ 
+#define MLC_STL_ __REGW(0xc000) /* TODO Scale Factor */ 
+#define MLC_STL_HW 			__REGW(0xc000290c) 	/* Horizontal Width*/ 
+#define MLC_STL_OADRL 		__REGW(0xc000290e) 	/* Source Odd Address Low */ 
+#define MLC_STL_OADRH 		__REGW(0xc0002910) 	/* Source Odd Address High */ 
+#define MLC_STL_EADRL 		__REGW(0xc0002912) 	/* Source Even Address Low */ 
+#define MLC_STL_EADRH 		__REGW(0xc0002914) 	/* Source Even Address High */ 
+#define MLC_STL_PALLTA 		__REGW(0xc0002958) 	/* Palette Table Index */ 
+#define MLC_STL_PALLTD 		__REGW(0xc000295a) 	/* Palette Table Data */ 
+#endif
+/* Cursor Layer (2bpp) */
+
+
+/* YUV */
+/* Overlay Control Register */
+#define MLC_OVLAY_CNTR 				__REGW(MLC_START + 0x0)
+//[15:14] R/W Reserved Must be 0 2’b0
+#define MLC_OVLAY_CNTR_DISP_FLD_POL		(1 << 13) 	/* When Field Mode, Select Polarity of Field Signal from Display Sync. Generation */ 
+#define MLC_OVLAY_CNTR_DISP_GAMM_BYPATH 	(1 << 12) 	/* Select Bypath of RGB Gamma Table */
+#define MLC_OVLAY_CNTR_DISP_SWAP 		(1 << 11) 	/* Select Priority of OSD and Sub-Picture */ 
+//[10] R/W Reserved Must be 0 0
+#define MLC_OVLAY_CNTR_DISP_CURSOR 		(1 << 9) 	/* Cursor Enable / Disable */
+#define MLC_OVLAY_CNTR_DISP_SUBPICTURE 		(1 << 8) 	/* Sub-Picture Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_OSD 		(1 << 7) 	/* OSD Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_SDL5EN 		(1 << 6) 	/* Region 5 Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_SDL4EN 		(1 << 5) 	/* Region 4 Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_SDL3EN 		(1 << 4) 	/* Region 3 Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_SDL2EN 		(1 << 3) 	/* Region 2 Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_SDL1EN 		(1 << 2) 	/* Region 1 Enable/ Disable */
+#define MLC_OVLAY_CNTR_DISP_VLBON 		(1 << 1) 	/* Video Plane B Enable/Disable at Video(Y/Cb/Cr) Layer */
+#define MLC_OVLAY_CNTR_DISP_VLAON 		(1 << 1) 	/* Video Plane A Enable/Disable at Video(Y/Cb/Cr) Layer */
+
+
+#define MLC_YUV_EFECT 				__REGW(MLC_START + 0x2)
+
+/* SPU (Sub Picture Unit) */
+#define MLC_SPU_CTRL
+//Address : C000 2974h
+/* RGB Layer (8/16/24 bpp) */
+#define MLC_STL_CNTL
+//Address : C000 28DAh
+/* OSD */
+/* Cursor */
+#define MLC_HWC_CNTR
+//Address : C000 291Eh
+#endif /*MP25XXF_REGS_MLC_H_*/
+
+#if 0
 /* Effect of Video Image (MLC_YUV_EFECT) */
 Address : C000 2882h
 [15:10] - Reserved -
@@ -729,5 +757,5 @@ C000 2980 / 2984 / 2988 / 298C / 2990 / 2994 / 2998 / 299C / 29A0 / 29A4 / 29A8 
 C000 2982 / 2986 / 298A / 298E / 2992 / 2996 / 299A / 299E / 29A2 / 29A6 / 29AA / 29AE / 29B2 / 29B6 / 29BA / 29BE h
 [15:8] - Reserved -
 [7:0] R/W MLC_SPU_PALn_Y Y of Palette table[n] of SPU, n = 0 ~ 15 8’b0
-
+#endif
 #endif /*MP25XXF_REGS_MLC_H_*/
