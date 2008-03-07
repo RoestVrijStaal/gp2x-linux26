@@ -18,29 +18,8 @@
  * 
  */
 
-/* old code */
-#if 0
-#define MLC_STL_CNTL 		__REGW(0xc00028da)	/* Still Image Control */
-#define MLC_STL_MIXMUX		__REGW(0xc00028dc) 	/* Mix/Mux Control */
-#define MLC_STL_ALPHAL 		__REGW(0xc00028de) 	/* */ 
-#define MLC_STL_ALPHAH 		__REGW(0xc00028e0) 	/* */ 
-#define MLC_STLn_STX(n) 	__REGW(0xc000) 		/* Horizontal Start */ 
-#define MLC_STLn_ENDX(n) 	__REGW(0xc000) 		/* Horizontal End */ 
-#define MLC_STL_CKEY_GR 	__REGW(0xc0002902) 	/* */ 
-#define MLC_STL_CKEY_B 		__REGW(0xc0002904) 	/* */ 
-#define MLC_STL_HSC 		__REGW(0xc0002906) 	/* Horizontal Scale Factor */ 
-#define MLC_STL_ __REGW(0xc000) /* TODO Scale Factor */ 
-#define MLC_STL_HW 			__REGW(0xc000290c) 	/* Horizontal Width*/ 
-#define MLC_STL_OADRL 		__REGW(0xc000290e) 	/* Source Odd Address Low */ 
-#define MLC_STL_OADRH 		__REGW(0xc0002910) 	/* Source Odd Address High */ 
-#define MLC_STL_EADRL 		__REGW(0xc0002912) 	/* Source Even Address Low */ 
-#define MLC_STL_EADRH 		__REGW(0xc0002914) 	/* Source Even Address High */ 
-#define MLC_STL_PALLTA 		__REGW(0xc0002958) 	/* Palette Table Index */ 
-#define MLC_STL_PALLTD 		__REGW(0xc000295a) 	/* Palette Table Data */ 
-#endif
+
 /* Cursor Layer (2bpp) */
-
-
 /* YUV */
 /* Overlay Control Register */
 #define MLC_OVLAY_CNTR 				__REGW(MLC_START + 0x0)
@@ -60,7 +39,7 @@
 #define MLC_OVLAY_CNTR_DISP_VLBON 		(1 << 1) 	/* Video Plane B Enable/Disable at Video(Y/Cb/Cr) Layer */
 #define MLC_OVLAY_CNTR_DISP_VLAON 		(1 << 1) 	/* Video Plane A Enable/Disable at Video(Y/Cb/Cr) Layer */
 
-
+/* Effect of Video Image */
 #define MLC_YUV_EFECT 				__REGW(MLC_START + 0x2)
 
 /* SPU (Sub Picture Unit) */
@@ -76,8 +55,8 @@
 #endif /*MP25XXF_REGS_MLC_H_*/
 
 #if 0
-/* Effect of Video Image (MLC_YUV_EFECT) */
-Address : C000 2882h
+
+
 [15:10] - Reserved -
 [9] R/W MLC_VLB_BT Divide Region B of Video (Y/Cb/Cr) Layer with Top and Bottom Region.
 0 : Disable 1 : Enable
@@ -110,8 +89,8 @@ Address : C000 2882h
 0 : Disable 1 : Enable
 0
 
-/* Video Image Control Register (MLC_YUV_CNTL) */
-Address : C000 2884h
+/* Video Image Control Register */
+#define  MLC_YUV_CNTL 				__REGW(MLC_START + 0x4)
 [15:13] W Reserved Must be 0 -
 [12] R/W MLC_SC2DP_A Input Data Path of Video (Y/Cb/Cr) Layer Region A
 It must be 0 when Region A is not used.
@@ -143,238 +122,139 @@ word(32bit) from memory. Valid when MLC_SC2DP_A is ‘0’
 0 : No skip 1 : Skip 1 WORD 2 : Skip 2 WORDs 3 : skip 3 WORDs
 2’b0
 
-/* Scale Factor Register of Region A (MLC_YUVA_TP_HSC) */
-Address : C000 2886h
+/* Scale Factor Register of Region A */
+#define MLC_YUVA_TP_HSC 			__REGW(MLC_START + 0x6)
 [15:12] W Reserved Must be 0 4’b0
 [11:0] R/W MLC_VLA_TP_HSC Horizontal Scale Factor of Top Region A at Video (Y/Cb/Cr) Layer.
 MLC_VLA_TP_HSC = Ratio x 1024
 Scale Down = Ratio > 1
 12’b0
 
-/* Scale Factor Register of Region A (MLC_YUVA_BT_HSC) */
-Address : C000 2888h
-[15:12] W Reserved Must be 0 4’b0
-[11:0] R/W MLC_VLA_BT_HSC Horizontal Scale Factor of Bottom Region A at Video (Y/Cb/Cr) Layer.
-MLC_VLA_BT_HSC = Ratio x 1024
-Scale Down = Ratio > 1
-12’b0
+/* Scale Factor Register of Region A */
+#define  MLC_YUVA_BT_HSC			__REGW(MLC_START + 0x8)
 
-/* Scale Factor Register of Region A (MLC_YUVA_TP_VSCL, MLC_YUVA_TP_VSCH) */
-Address : C000 288Ah / C000 288Ch
-[15:9] - Reserved -
-[8:0] R/W MLC_VLA_TP_VSCH 9’b0
-[15:0] R/W MLC_VLA_TP_VSCL
-Vertical Scale Factor of Top Region A at Video (Y/Cb/Cr) Layer.
-MLC_VLA_TP_VSC = Ratio x MLC_VLA_TP_PXW
-Scale Down = Ratio > 1 16’b0
+/* Scale Factor Register of Region A */
+#define MLC_YUVA_TP_VSCL 			__REGW(MLC_START + 0xa)
+#define MLC_YUVA_TP_VSCH 			__REGW(MLC_START + 0xc)
 
-/* Scale Factor Register of Region A (MLC_YUVA_BT_VSCL, MLC_YUVA_BT_VSCH) */
-Address : C000 288Eh / C000 2890h
-[15:9] - Reserved -
-[8:0] R/W MLC_VLA_BP_VSCH 9’b0
-[15:0] R/W MLC_VLA_BP_VSCL
-Vertical Scale Factor of Bottom Region A at Video (Y/Cb/Cr) Layer.
-MLC_VLA_BT_VSC = Ratio x MLC_VLA_BT_PXW
-Scale Down = Ratio > 1 16’b0
+/* Scale Factor Register of Region A */
+#define MLC_YUVA_BT_VSCL 			__REGW(MLC_START + 0xe)
+#define MLC_YUVA_BT_VSCH 			__REGW(MLC_START + 0x10)
 
-/* Horizontal Pixel Width Register of Region A (MLC_YUVA_TP_PXW) */
-Address : C000 2892h
-[15] - Reserved -
-[14:0] R/W MLC_VLA_TP_PXW Horizontal Pixel Width of Top Region A at Video (Y/Cb/Cr) Layer. 15’b0
+/* Horizontal Pixel Width Register of Region A */
+#define MLC_YUVA_TP_PXW 			__REGW(MLC_START + 0x12)
 
-/* Horizontal Pixel Width Register of Region A (MLC_YUVA_BT_PXW) */
-Address : C000 2894h
-[15] - Reserved -
-[14:0] R/W MLC_VLA_BT_PXW Horizontal Pixel Width of Bottom Region A at Video (Y/Cb/Cr) Layer. 15’b0
+/* Horizontal Pixel Width Register of Region A */
+#define MLC_YUVA_BT_PXW 			__REGW(MLC_START + 0x14)
 
-/* Coordinate Register of Region A (MLC_YUVA_STX) */
-Address : C000 2896h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLA_STX Horizontal Starting Point of Top/Bottom Region A at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region A */
+#define MLC_YUVA_STX				__REGW(MLC_START + 0x16)
 
-/* Coordinate Register of Region A (MLC_YUVA_ENDX) */
-Address : C000 2898h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLA_ENDX Horizontal Ending Point of Top/Bottom Region A at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region A */
+#define MLC_YUVA_ENDX 				__REGW(MLC_START + 0x18)
 
-/* Coordinate Register of Region A (MLC_YUVA_TP_STY) */
-Address : C000 289Ah
-[15:12] - Reserved -
-[11:0] R/W MLC_VLA_TP_STY Vertical Starting Point of Top Region A at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region A */
+#define MLC_YUVA_TP_STY				__REGW(MLC_START + 0x1a)
 
-/* Coordinate Register of Region A (MLC_YUVA_TP_ENDY) */
-Address : C000 289Ch
-[15:12] - Reserved -
-[11:0] R/W MLC_VLA_TP_ENDY Vertical Ending Point of Top Region A and Vertical Starting Point of Bottom
-Region A at Video (Y/Cb/Cr) Layer.
-12’b0
+/* Coordinate Register of Region A */
+#define MLC_YUVA_TP_ENDY			__REGW(MLC_START + 0x1c)
 
-/* Coordinate Register of Region A (MLC_YUVA_BT_ENDY) */
-Address : C000 289Eh
-[15:12] - Reserved -
-[11:0] R/W MLC_VLA_BT_ENDY Vertical Ending Point of Bottom Region A at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region A */
+#define MLC_YUVA_BT_ENDY 			__REGW(MLC_START + 0x1e)
 
-/* Source Address of Region A (MLC_YUVA_TP_OADRL, MLC_YUVA_TP_OADRH) */
-Address : C000 28A0h / C000 28A2h
-[15:0] R/W MLC_VLA_TP_OADRL 16’b0
-[15:0] R/W MLC_VLA_TP_OADRH
-Odd Field Source Address of Top Region A at Video (Y/Cb/Cr) Layer.
-16’b0
+/* Source Address of Region A */
+#define MLC_YUVA_TP_OADRL			__REGW(MLC_START + 0x20)
+#define MLC_YUVA_TP_OADRH 			__REGW(MLC_START + 0x22)
 
-/* Source Address of Region A (MLC_YUVA_TP_EADRL, MLC_YUVA_TP_EADRH) */
-Address : C000 28A4h / C000 28A6h
-[15:0] R/W MLC_VLA_TP_EADRL 16’b0
-[15:0] R/W MLC_VLA_TP_EADRH
-Even Field Source Address of Top Region A at Video (Y/Cb/Cr) Layer.
-16’b0
+/* Source Address of Region A */
+#define MLC_YUVA_TP_EADRL			__REGW(MLC_START + 0x24)
+#define MLC_YUVA_TP_EADRH 			__REGW(MLC_START + 0x26)
 
-/* Source Address of Region A (MLC_YUVA_BT_OADRL, MLC_YUVA_BT_OADRH) */
-Address : C000 28A8h / C000 28AAh
-[15:0] R/W MLC_VLA_BT_OADRL 16’b0
-[15:0] R/W MLC_VLA_BT_OADRH
-Odd Field Source Address of Bottom Region A at Video (Y/Cb/Cr) Layer.
-16’b0
+/* Source Address of Region A */
+#define MLC_YUVA_BT_OADRL			__REGW(MLC_START + 0x28)
+#define MLC_YUVA_BT_OADRH 			__REGW(MLC_START + 0x2a)
 
-/* Source Address of Region A (MLC_YUVA_BT_EADRL, MLC_YUVA_BT_EADRH) */
-Address : C000 28ACh / C000 28AEh
-[15:0] R/W MLC_VLA_BT_EADRL 16’b0
-[15:0] R/W MLC_VLA_BT_EADRH
-Even Field Source Address of Bottom Region A at Video (Y/Cb/Cr) Layer.
-16’b0
+/* Source Address of Region A */
+#define MLC_YUVA_BT_EADRL			__REGW(MLC_START + 0x2c)
+#define MLC_YUVA_BT_EADRH 			__REGW(MLC_START + 0x2e)
 
-/* Scale Factor Register of Region B (MLC_YUVB_TP_HSC) */
-Address : C000 28B0h
-[15:12] W Reserved Must be 0 4’b0
-[11:0] R/W MLC_VLB_TP_HSC Horizontal Scale Factor of Top Region B at Video (Y/Cb/Cr) Layer.
-MLC_VLB_TP_HSC = Ratio x 1024
-Scale Down = Ratio > 1
-12’b0
+/* Scale Factor Register of Region B */
+#define MLC_YUVB_TP_HSC 			__REGW(MLC_START + 0x30) 
 
-/* Scale Factor Register of Region B (MLC_YUVB_BT_HSC) */
-Address : C000 28B2h
-[15:12] W Reserved Must be 0 4’b0
-[11:0] R/W MLC_VLB_BT_HSC Horizontal Scale Factor of Bottom Region B at Video(Y/Cb/Cr) Layer.
-MLC_VLB_BT_HSC = Ratio x 1024
-Scale Down = Ratio > 1
-12’b0
+/* Scale Factor Register of Region B */
+#define MLC_YUVB_BT_HSC 			__REGW(MLC_START + 0x32)
 
-/* Scale Factor Register of Region B (MLC_YUVB_TP_VSCL, MLC_YUVB_TP_VSCH) */
-Address : C000 28B4h / C000 28B6h
-[15:9] - Reserved -
-[8:0] R/W MLC_VLB_TP_VSCH 9’b0
-[15:0] R/W MLC_VLB_TP_VSCL
-Vertical Scale Factor of Top Region B at Video (Y/Cb/Cr) Layer.
-MLC_VLB_TP_VSC = Ratio x MLC_VLB_TP_PXW
-Scale Down = Ratio > 1 16’b0
+/* Scale Factor Register of Region B */
+#define MLC_YUVB_TP_VSCL 			__REGW(MLC_START + 0x34)
+#define MLC_YUVB_TP_VSCH 			__REGW(MLC_START + 0x36)
 
-/* Scale Factor Register of Region B (MLC_YUVB_BT_VSCL, MLC_YUVB_BT_VSCH) */
-Address : C000 28B8h / C000 28BAh
-[15:9] - Reserved -
-[8:0] R/W MLC_VLB_BT_VSCH 9’b0
-[15:0] R/W MLC_VLB_BT_VSCL
-Vertical Scale Factor of Bottom Region B at Video (Y/Cb/Cr) Layer.
-MLC_VLB_BT_VSC = Ratio x MLC_VLB_BT_PXW
-Scale Down = Ratio > 1 16’b0
+/* Scale Factor Register of Region B */
+#define MLC_YUVB_BT_VSCL 			__REGW(MLC_START + 0x38)
+#define MLC_YUVB_BT_VSCH 			__REGW(MLC_START + 0x3a)
 
-/* Horizontal Pixel Width Register of Region B (MLC_YUVB_TP_PXW) */
-Address : C000 28BCh
-[15] - Reserved -
-[14:0] R/W MLC_VLB_TP_PXW Horizontal Pixel Width of Top Region B at Video (Y/Cb/Cr) Layer. 15’b0
+/* Horizontal Pixel Width Register of Region B */
+#define MLC_YUVB_TP_PXW 			__REGW(MLC_START + 0x3c)
 
-/* Horizontal Pixel Width Register of Region B (MLC_YUVB_BT_PXW) */
-Address : C000 28BEh
-[15] - Reserved -
-[14:0] R/W MLC_VLB_BT_PXW Horizontal Pixel Width of Bottom Region B at Video (Y/Cb/Cr) Layer. 15’b0
+/* Horizontal Pixel Width Register of Region B */
+#define MLC_YUVB_BT_PXW 			__REGW(MLC_START + 0x3e)
 
-/* Coordinate Register of Region B (MLC_YUVB_STX) */
-Address : C000 28C0h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLB_STX Horizontal Starting Point of Top/Bottom Region B at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region B */
+#define MLC_YUVB_STX				__REGW(MLC_START + 0x40)
 
-/* Coordinate Register of Region B (MLC_YUVB_ENDX) */
-Address : C000 28C2h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLB_ENDX Horizontal Ending Point of Top/Bottom Region B at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region B */
+#define MLC_YUVB_ENDX 				__REGW(MLC_START + 0x42)
 
-/* Coordinate Register of Region B (MLC_YUVB_TP_STY) */
-Address : C000 28C4h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLB_TP_STY Vertical Starting Point of Top Region B at Video (Y/Cb/Cr) Layer 12’b0
-Coordinate register of Region B (MLC_YUVB_TP_ENDY)
-Address : C000 28C6h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLB_TP_ENDY Vertical Ending Point of Top Region A and Vertical Starting Point of Bottom
-Region B at Video (Y/Cb/Cr) Layer.
-12’b0
-/* Coordinate Register of Region B (MLC_YUVB_BT_ENDY) */
-Address : C000 28C8h
-[15:12] - Reserved -
-[11:0] R/W MLC_VLB_BT_ENDY Vertical Ending Point of Bottom Region B at Video (Y/Cb/Cr) Layer. 12’b0
+/* Coordinate Register of Region B */
+#define MLC_YUVB_TP_STY				__REGW(MLC_START + 0x44)
 
-/* Source Address of Region B (MLC_YUVB_TP_OADRL, MLC_YUVB_TP_OADRH) */
-Address : C000 28CAh / C000 28CCh
-[15:0] R/W MLC_VLB_TP_OADRL 16’b0
-[15:0] R/W MLC_VLB_TP_OADRH
-Odd Field Source Address of Top Region B at Video (Y/Cb/Cr) Layer.
-16’b0
+/* Coordinate Register of Region B */
+#define MLC_YUVB_TP_ENDY			__REGW(MLC_START + 0x46)
+
+/* Coordinate Register of Region B */
+#define MLC_YUVB_BT_ENDY 			__REGW(MLC_START + 0x48)
+
+/* Source Address of Region B */
+#define MLC_YUVB_TP_OADRL			__REGW(MLC_START + 0x4a)
+#define MLC_YUVB_TP_OADRH 			__REGW(MLC_START + 0x4c)
 
 /* Source Address of Region B (MLC_YUVB_TP_EADRL, MLC_YUVB_TP_EADRH) */
-Address : C000 28CEh / C000 28D0h
-[15:0] R/W MLC_VLB_TP_EADRL 16’b0
-[15:0] R/W MLC_VLB_TP_EADRH
-Even Field Source Address of Top Region B at Video (Y/Cb/Cr) Layer.
-16’b0
+#define MLC_YUVA_TP_EADRL			__REGW(MLC_START + 0x4e)
+#define MLC_YUVA_TP_EADRH 			__REGW(MLC_START + 0x50)
 
 /* Source Address of Region B (MLC_YUVB_BT_OADRL, MLC_YUVB_BT_OADRH) */
-Address : C000 28D2h / C000 28D4h
-[15:0] R/W MLC_VLB_BT_OADRL 16’b0
-[15:0] R/W MLC_VLB_BT_OADRH
-Odd Field Source Address of Bottom Region B at Video (Y/Cb/Cr) Layer.
-16’b0
+#define MLC_YUVB_BT_OADRL			__REGW(MLC_START + 0x52)
+#define MLC_YUVB_BT_OADRH 			__REGW(MLC_START + 0x54)
 
 /* Source Address of Region B (MLC_YUVB_BT_EADRL, MLC_YUVB_BT_EADRH) */
-Address : C000 28D6h / C000 28D8h
-[15:0] R/W MLC_VLB_BT_EADRL 16’b0
-[15:0] R/W MLC_VLB_BT_EADRH
-Even Field Source Address of Bottom Region B at Video (Y/Cb/Cr) Layer.
-16’b0
+#define MLC_YUVB_BT_EADRL			__REGW(MLC_START + 0x56)
+#define MLC_YUVB_BT_EADRH 			__REGW(MLC_START + 0x58)
 
-/* Still Image Control Register (MLC_STL_CNTL) */
-Address : C000 28DAh
-[15:11] - Reserved -
-[10:9] R/W MLC_STL_BPP Bit Per Pixel of Still Image(RGB) Layer
-0 : 4bpp 1 : 8bpp 2 : 16bpp 3 : 24bpp
-2’b0
-[8] R/W MLC_STL5ACT Activate Region 5 of Still Image (RGB) Layer. 0
-[7] R/W Reserved Fix ”1” -
-[6] R/W MLC_STL4ACT Activate Region 4 of Still Image (RGB) Layer. 0
-[5] R/W Reserved Fix “1” -
-[4] R/W MLC_STL3ACT Activate Region 3 of Still Image (RGB) Layer. 0
-[3] R/W Reserved Fix “1” -
-[2] R/W MLC_STL2ACT Activate Region 2 of Still Image (RGB) Layer. 0
-[1] R/W Reserved Fix “1” -
-[0] R/W MLC_STL1ACT Activate Region 1 of Still Image (RGB) Layer. 0
-Mix/ Mux Control Register (MLC_STL_MIXMUX)
-Address : C000 28DCh
-[15:10] - Reserved -
-[9:8] R/W MLC_STL5_MIXMUX Mix/Mux of Region 5 at Still Image(RGB) Layer
-0 : STL 1 : Color Key 2 : Alpha Blending 3 : Reserved
-2’b0
-[7:6] R/W MLC_STL4_MIXMUX Mix/Mux of Region 4 at Still Image(RGB) Layer
-0 : STL 1 : Color Key 2 : Alpha Blending 3 : Reserved
-2’b0
-[5:4] R/W MLC_STL3_MIXMUX Mix/Mux of Region 3 at Still Image(RGB) Layer
-0 : STL 1 : Color Key 2 : Alpha Blending 3 : Reserved
-2’b0
-[3:2] R/W MLC_STL2_MIXMUX Mix/Mux of Region 2 at Still Image(RGB) Layer
-0 : STL 1 : Color Key 2 : Alpha Blending 3 : Reserved
-2’b0
-[1:0] R/W MLC_STL1_MIXMUX Mix/Mux of Region 1 at Still Image(RGB) Layer
-0 : STL 1 : Color Key 2 : Alpha Blending 3 : Reserved
-2’b0
+/* Still Image Control Register */
+#define MLC_STL_CNTL 				__REGW(MLC_START + 0x5a)
+#define MLC_STL_CNTL_BPP 			(3 << 9)
+#define MLC_STL_CNTL_BPP_4 			(0)
+#define MLC_STL_CNTL_BPP_8 			(1)
+#define MLC_STL_CNTL_BPP_16 			(2)
+#define MLC_STL_CNTL_BPP_24 			(3)
+#define MLC_STL_CNTL_5ACT 			(1 << 8)
+#define MLC_STL_CNTL_4ACT 			(1 << 6)
+#define MLC_STL_CNTL_3ACT 			(1 << 4)
+#define MLC_STL_CNTL_2ACT 			(1 << 2)
+#define MLC_STL_CNTL_1ACT 			(1 << 0)
 
-/* Alpha Blending Value Register (MLC_STL_ALPHAL) */
-Address : C000 28DEh
+/* Mix/ Mux Control Register */
+#define MLC_STL_MIXMUX 				__REGW(MLC_START + 0x5c)
+#define MLC_STL_MIXMUX_5			(3 << 8)
+#define MLC_STL_MIXMUX_4			(3 << 6)
+#define MLC_STL_MIXMUX_3			(3 << 4)
+#define MLC_STL_MIXMUX_2			(3 << 2)
+#define MLC_STL_MIXMUX_1			(3 << 0)
+#define MLC_STL_MIXMUX_STL			(0)
+#define MLC_STL_MIXMUX_CKEY			(1)
+#define MLC_STL_MIXMUX_ABLEND			(2)
+
+/* Alpha Blending Value Register */
+#define MLC_STL_ALPHAL 				__REGW(MLC_START + 0x5e)
 [15:12] - Reserved -
 [11:8] R/W MLC_STL3_ALPHA Alpha Value of Region 3 at Still Image (RGB) Layer.
 Must be 15 when MLC_STL3_MIXMUX = 1.
@@ -388,7 +268,7 @@ Must be 15 when MLC_STL1_MIXMUX = 1.
 
 
 /* Alpha Blending Value Register (MLC_STL_ALPHAH) */
-Address : C000 28E0h
+#define MLC_STL_ALPHAH 				__REGW(MLC_START + 0x60)
 [15:8] - Reserved -
 [7:4] R/W MLC_STL5_ALPHA Alpha Value of Region 5 at Still Image (RGB) Layer.
 Must be 15 when MLC_STL5_MIXMUX = 1.
@@ -396,114 +276,55 @@ Must be 15 when MLC_STL5_MIXMUX = 1.
 [3:0] R/W MLC_STL4_ALPHA Alpha Value of Region 4 at Still Image (RGB) Layer.
 Must be 15 when MLC_STL4_MIXMUX = 1.
 4’b0
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL1_STX) */
-Address : C000 28E2h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL1_STX Horizontal Starting Point of Region 1 at Still Image (RGB) Layer. 12’b0
 
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL1_ENDX) */
-Address : C000 28E4h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL1_ENDX Horizontal Ending Point of Region 1 at Still Image (RGB) Layer. 12’b0
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL1_STX 				__REGW(MLC_START + 0x62)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL1_ENDX 				__REGW(MLC_START + 0x64)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL1_STY 				__REGW(MLC_START + 0x66)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL1_ENDY 				__REGW(MLC_START + 0x68)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL2_STX 				__REGW(MLC_START + 0x6a)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL2_ENDX 				__REGW(MLC_START + 0x6c)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL2_STY 				__REGW(MLC_START + 0x6e)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL2_ENDY 				__REGW(MLC_START + 0x70)
+/* Coordinate Register of Still Image(RGB) Layer 3*/
+#define MLC_STL3_STX 				__REGW(MLC_START + 0x72)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL3_ENDX 				__REGW(MLC_START + 0x74)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL3_STY 				__REGW(MLC_START + 0x76)
+/* Coordinate Register of Still Image(RGB) Layer 1 */
+#define MLC_STL3_ENDY 				__REGW(MLC_START + 0x78)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL4_STX 				__REGW(MLC_START + 0x7a)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL4_ENDX 				__REGW(MLC_START + 0x7c)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL4_STY 				__REGW(MLC_START + 0x7e)
+/* Coordinate Register of Still Image(RGB) Layer 2 */
+#define MLC_STL4_ENDY 				__REGW(MLC_START + 0x80)
 
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL1_STY) */
-Address : C000 28E6h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL1_STY Vertical Starting Point of Region 1 at Still Image (RGB) Layer. 12’b0
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL1_ENDY) */
-Address : C000 28E8h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL1_ENDY Vertical Ending Point of Region 1 at Still Image (RGB) Layer. 12’b0
+/* Color Key Register of Still Image (RGB) Layer */
+#define MLC_STL_CKEY_GR 			__REGW(MLC_START + 0x82) 
+#define MLC_STL_CKEY_GR_G 			(0xff << 8)
+#define MLC_STL_CKEY_GR_R 			(0xff << 0)
 
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL2_STX) */
-Address : C000 28EAh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL2_STX Horizontal Starting Point of Region 2 at Still Image (RGB) Layer. 12’b0
+/* Color Key Register of Still Image (RGB) Layer */
+#define MLC_STL_CKEY_B 				__REGW(MLC_START + 0x84) 
+#define MLC_STL_CKEY_B_B 			(0xff << 0)
 
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL2_ENDX) */
-Address : C000 28ECh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL2_ENDX Horizontal Ending Point of Region 2 at Still Image (RGB) Layer. 12’b0
+/* Scale Factor Register of Still Image (RGB) Layer */
+#define MLC_STL_HSC 				__REGW(MLC_START + 0x86) 
 
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL2_STY) */
-Address : C000 28EEh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL2_STY Vertical Starting Point of Region 2 at Still Image (RGB) Layer. 12’b0
-Chapter 13 : VIDEO POST PROCESSOR
-13-70 MP2520F Application Processor
-Bit R/W Symbol Description Reset Value
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL2_ENDY) */
-Address : C000 28F0h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL2_ENDY Vertical Ending Point of Region 2 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL3_STX) */
-Address : C000 28F2h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL3_STX Horizontal Starting Point of Region 3 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL3_ENDX) */
-Address : C000 28F4h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL3_ENDX Horizontal Ending Point of Region 3 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL3_STY) */
-Address : C000 28F6h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL3_STY Vertical Starting Point of Region 3 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL3_ENDY) */
-Address : C000 28F8h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL3_ENDY Vertical Ending Point of Region 3 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL4_STX) */
-Address : C000 28FAh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL4_STX Horizontal Starting Point of Region 4 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL4_ENDX) */
-Address : C000 28FCh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL4_ENDX Horizontal Ending Point of Region 4 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL4_STY) */
-Address : C000 28FEh
-[15:12] - Reserved -
-[11:0] R/W MLC_STL4_STY Vertical Starting Point of Region 4 at Still Image (RGB) Layer. 12’b0
-
-/* Coordinate Register of Still Image(RGB) Layer (MLC_STL4_ENDY) */
-Address : C000 2900h
-[15:12] - Reserved -
-[11:0] R/W MLC_STL4_ENDY Vertical Ending Point of Region 4 at Still Image (RGB) Layer. 12’b0
-
-/* Color Key Register of Still Image (RGB) Layer (MLC_STL_CKEY_GR) */
-Address : C000 2902h
-[15:8] R/W MLC_STL_CKEYG Color Key of G Color 8’b0
-[7:0] R/W MLC_STL_CKEYR Color Key of R Color 8’b0
-
-/* Color Key Register of Still Image (RGB) Layer (MLC_STL_CKEY_B) */
-Address : C000 2904h
-[15:8] - Reserved -
-[7:0] R/W MLC_STL_CKEYB Color Key of B Color 8’b0
-
-/* Scale Factor Register of Still Image (RGB) Layer (MLC_STL_HSC) */
-Address : C000 2906h
-[15:14] - Reserved -
-[13:0] R/W MLC_STL_HSC Horizontal Scale Factor of Still Image (RGB) Layer
-MLC_STL_HSC = Ratio x 1024
-Scale Down = Ratio > 1
-14’b0
-
-/* Scale Factor Register of Still Image (RGB) Layer (MLC_STL_VSCL, MLC_STL_VSCH) */
-Address : C000 2908h / C000 290Ah
-[15:9] - Reserved -
-[8:0] W MLC_STL_VSCH 9’b0
-[15:0] R/W MLC_STL_VSCL
-Vertical Scale Factor of Still Image (RGB) Layer
-ISP_STL_VSC = Ratio x MLC_STL_HW
-Scale Down = Ratio > 1 16’b0
+/* Scale Factor Register of Still Image (RGB) Layer */
+#define MLC_STL_VSCL 				__REGW(MLC_START + 0x88)
+#define MLC_STL_VSCH 				__REGW(MLC_START + 0x8a) 
 
 /* Horizontal Width Register of Still Image(RGB) Layer (MLC_STL_HW) */
 Address : C000 290Ch
