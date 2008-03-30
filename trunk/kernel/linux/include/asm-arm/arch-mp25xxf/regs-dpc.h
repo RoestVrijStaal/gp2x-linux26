@@ -17,6 +17,7 @@
 #define DPC_HS_STR 			__REGW(0xc000281c) 	/* Horizontal Sync Start */
 #define DPC_HS_END 			__REGW(0xc000291e) 	/* Horizontal Sync End */
 
+#if 0
 /* DPC Control Register */
 #define DPC_CNTL 		__REGW(MP25XXF_DPC_START + 0x0)
 [15:13] W Reserved Must be 0 3’b0
@@ -310,5 +311,5 @@ Address : C000 2846h
 [1] R/W CLK1SEL CLK1 Selection ( 0: 1 CLK, 1:1/2 CLK ) 0
 [0] R/W CLK1POL CLK1 polarity control. (0: Normal, 1: Inversion) 0
 
-
+#endif
 #endif /*MP25XXF_REGS_DPC_H_*/
