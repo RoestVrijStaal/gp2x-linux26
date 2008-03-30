@@ -348,6 +348,9 @@ static struct platform_device mp25xxf_mlc_device = {
 	.id		= -1,
 	.num_resources	= ARRAY_SIZE(mp25xxf_mlc_resources),
 	.resource	= mp25xxf_mlc_resources,
+	.dev = {
+		.coherent_dma_mask	=  0xffffffffUL,
+	}
 };
 
 static struct platform_device *mmsp2_devices[] __initdata = {

@@ -52,7 +52,6 @@
 /* Cursor */
 #define MLC_HWC_CNTR
 //Address : C000 291Eh
-#endif /*MP25XXF_REGS_MLC_H_*/
 
 #if 0
 
@@ -579,4 +578,5 @@ C000 2982 / 2986 / 298A / 298E / 2992 / 2996 / 299A / 299E / 29A2 / 29A6 / 29AA 
 [15:8] - Reserved -
 [7:0] R/W MLC_SPU_PALn_Y Y of Palette table[n] of SPU, n = 0 ~ 15 8’b0
 #endif
+
 #endif /*MP25XXF_REGS_MLC_H_*/
