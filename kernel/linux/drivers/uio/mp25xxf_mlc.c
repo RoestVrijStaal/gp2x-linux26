@@ -34,6 +34,7 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	int ret;
 	unsigned int size;
 	dma_addr_t map_dma;
+	unsigned long addr;
 
 	printk(KERN_INFO "[MP25XXF] MLC Driver\n");
 	
@@ -61,8 +62,9 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	/* osd */
 	/* rgb */
 	size = 320 * 240 * 3; // 320x240@24bpp
-	info->mem[1].addr = dma_alloc_writecombine(&pdev->dev, size,
+	addr = dma_alloc_writecombine(&pdev->dev, size,
 	                &map_dma, GFP_KERNEL);
+	info->mem[1].addr = mpa_dma;
 	info->mem[1].size = size;
 	info->mem[1].memtype = UIO_MEM_VIRTUAL;
 	printk("MAPPED %x %x\n", map_dma, info->mem[1].addr);
