@@ -34,7 +34,6 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	int ret;
 	unsigned int size;
 	dma_addr_t map_dma;
-	unsigned long addr;
 
 	printk(KERN_INFO "[MP25XXF] MLC Driver\n");
 	
@@ -50,25 +49,36 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	}
 	
 	/* MLC registers */ 
-	r = request_mem_region(r->start, r->end - r->start + 1, pdev->name);
+	if (!request_mem_region(r->start, r->end - r->start + 1, pdev->name))
+	{
+		ret = -ENXIO;
+		goto out_get;
+	}	 
 	info->mem[0].addr = r->start;
 	info->mem[0].size = r->end - r->start + 1;
 	info->mem[0].memtype = UIO_MEM_PHYS;
-	
+	info->mem[0].internal_addr = ioremap(info->mem[0].addr, info->mem[0].size);
+
+	if (!info->mem[0].internal_addr)
+	{
+	                printk(KERN_ERR "Failed to remap mem 0\n");
+	                ret = -ENOMEM;
+	                goto out_get;
+	}
 	/* Map the layers */
 	/* TODO check what mach are we using to guess the size */
 	/* video plane 0 */
 	/* video plane 1 */
 	/* osd */
 	/* rgb */
+
 	size = 320 * 240 * 3; // 320x240@24bpp
-	addr = dma_alloc_writecombine(&pdev->dev, size,
+	info->mem[1].internal_addr = dma_alloc_writecombine(&pdev->dev, size,
 	                &map_dma, GFP_KERNEL);
-	info->mem[1].addr = mpa_dma;
+	info->mem[1].addr = map_dma;
 	info->mem[1].size = size;
-	info->mem[1].memtype = UIO_MEM_VIRTUAL;
-	printk("MAPPED %x %x\n", map_dma, info->mem[1].addr);
-	
+	info->mem[1].memtype = UIO_MEM_PHYS;
+	printk("MAPPED %x %x %x\n", map_dma, info->mem[1].addr, info->mem[1].internal_addr);
 	/* low address */
 	__REGW(0xc000290e) = map_dma & 0xffff;
 	__REGW(0xc0002912) = map_dma & 0xffff;
@@ -76,8 +86,10 @@ static int mp25xxf_mlc_probe(struct platform_device *pdev)
 	__REGW(0xc0002910) = map_dma >> 16;
 	__REGW(0xc0002914) = map_dma >> 16;
 	
-	msleep(100);
-	memset(info->mem[1].addr, 0, size);
+	printk("VALUE = %x %x\n", *(unsigned int *)(info->mem[0].internal_addr + 0x8e),
+				*(unsigned int *)(info->mem[0].internal_addr + 0x92));
+	//msleep(100);
+	//memset(addr, 0, size);
 	
 	info->version = DRIVER_VERSION;
 	info->name = DRIVER_NAME;

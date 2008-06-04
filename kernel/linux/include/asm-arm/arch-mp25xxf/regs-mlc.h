@@ -3,10 +3,9 @@
 /*============================================================================*
  *                        Multi Layer Controller (MLC)                        * 
  *============================================================================*/
-/* MMC/SD, start: C000 1500 end: C000 153C */
 #define MP25XXF_MLC_START	0xc0002880
 #define MP25XXF_MLC_END		0xc00029c0
-#define MP25XXF_MLC_BASE	io_p2v(MLC_START)
+#define MP25XXF_MLC_BASE	io_p2v(MP25XXF_MLC_START)
 
 /* Overlay Control Register */
 #define MLC_OVLAY_CNTR 				__REGW(MLC_START + 0x0)
@@ -153,8 +152,8 @@
 #define MLC_YUVB_TP_OADRH 			__REGW(MLC_START + 0x4c)
 
 /* Source Address of Region B (MLC_YUVB_TP_EADRL, MLC_YUVB_TP_EADRH) */
-#define MLC_YUVA_TP_EADRL			__REGW(MLC_START + 0x4e)
-#define MLC_YUVA_TP_EADRH 			__REGW(MLC_START + 0x50)
+#define MLC_YUVB_TP_EADRL			__REGW(MLC_START + 0x4e)
+#define MLC_YUVB_TP_EADRH 			__REGW(MLC_START + 0x50)
 
 /* Source Address of Region B (MLC_YUVB_BT_OADRL, MLC_YUVB_BT_OADRH) */
 #define MLC_YUVB_BT_OADRL			__REGW(MLC_START + 0x52)
@@ -257,7 +256,7 @@
 /* [7] Reserved */
 #define MLC_HWC_CNTR_SZ 			(63 << 0) /* Cursor Size */
 #define MLC_HWC_CNTR_SZ_32 			(0x20) /* 32x32 */
-#define MLC_HWC_CNTR_SZ_32 			(0x40) /* 64x64 */
+#define MLC_HWC_CNTR_SZ_64 			(0x40) /* 64x64 */
 
 /* Hardware Cursor Horizontal Starting Position Register */
 #define MLC_HWC_STX 				__REGW(MLC_START + 0xa0) /* [11:0] */
