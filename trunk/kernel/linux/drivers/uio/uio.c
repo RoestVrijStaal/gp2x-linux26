@@ -23,6 +23,8 @@
 #include <linux/kobject.h>
 #include <linux/uio_driver.h>
 
+#include <asm/pgtable.h>
+
 #define UIO_MAX_DEVICES 255
 
 struct uio_device {
@@ -446,7 +448,8 @@ static int uio_mmap_physical(struct vm_area_struct *vma)
 		return -EINVAL;
 
 	vma->vm_flags |= VM_IO | VM_RESERVED;
-
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	//vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
 	return remap_pfn_range(vma,
 			       vma->vm_start,
 			       idev->info->mem[mi].addr >> PAGE_SHIFT,
