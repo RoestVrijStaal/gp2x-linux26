@@ -1,0 +1,1 @@
+Port of the **2.4.25** GamePark Holdings GP2x kernel to the **2.6** series. The current version under developing is the 2.6.18, once the support is finished, the project will try to stay with the **current** kernel version.

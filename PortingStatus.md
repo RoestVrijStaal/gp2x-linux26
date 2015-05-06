@@ -1,0 +1,10 @@
+| Feature | Status |
+|:--------|:-------|
+| CPU (ARM920T) |	100% |
+| CPU (ARM940T) | 0% |
+| MMC/SD | 50% |
+| NAND Flash | 70% |
+| Serial Ports	| 60% |
+| Framebuffer | 10% |
+| Video Overlay | 0%	 |
+| Input | 0% |

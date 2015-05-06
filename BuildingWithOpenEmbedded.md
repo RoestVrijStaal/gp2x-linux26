@@ -1,0 +1,32 @@
+# Introduction #
+
+This page describes how you can use the popular [OpenEmbedded](http://www.openembedded.org) meta-distribution to build your toolchain and kernel.
+
+**Note** This page is not yet ready. I will complete it as time permits.
+
+## OE Documentation at GP2X Wiki ##
+A while back I wrote a similar OpenEmbedded introduction in the [GP2X Wiki](http://wiki.gp2x.org) which you can find [here](http://wiki.gp2x.org/wiki/OpenEmbedded_GP2X_development_environment). The difference to this guide is that it focusses on kernel or toolchain creation. OpenEmbedded is just great in that respect because it allows developers with whatever development machine setup (architecture, operating system, GNU/Linux distribution, ...) share a common build environment. This leads to predictable and equal results on every participants systems.
+
+**Note** however that the gp2x-linux26 project does not mandate the use of OpenEmbedded. You are free to create your toolchain with whatever you like.
+
+# Toolchain building #
+## Preface ##
+Compilation for a system that has a different hardware architecture as your desktop machine is called cross-compilation. A lot of build tools can be configured to run on your development machine but generate code or are able to handle and modify binaries for a different architecture. A set of such tools is called cross-compilation toolchain. Since the GP2X is an ARM-based computer system you need such a toolchain for kernel development. Traditionally those toolchains where handcrafted and took a lot of skill to create and maintain one.
+
+With Linux-based operating system taking over more and more devices in embedded computing projects have been founded to support developers wanting to provide applications for these systems or simply debug them. Some of those projects focus on a single kind of hardware (e.g. OpenWRT) others try to reach each and every device independent of hardware architecture and purpose. Such a project is OpenEmbedded.
+
+## Getting started ##
+At first you are required to read and follow the [Getting Started](http://www.openembedded.org/wiki/GettingStarted) guide of OE. When you have bitbake and a current development snapshot of the meta-distribution on your machine come back and follow the instructions here.
+
+## Preparing local.conf ##
+TBD
+
+## Compiling ##
+TBD
+
+# Toolchain using #
+## Casual compilation ##
+TBD
+
+## Linux kernel ##
+TBD
